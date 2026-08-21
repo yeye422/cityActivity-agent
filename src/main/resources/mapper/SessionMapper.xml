@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.city.mapper.SessionMapper">
+
+    <resultMap id="SessionRowMap" type="com.city.model.SessionRow">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="phase" column="phase"/>
+        <result property="slots" column="slots"/>
+        <result property="lastRecommendedActivityIds" column="last_recommended_activity_ids"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <resultMap id="SessionMessageRowMap" type="com.city.model.SessionMessageRow">
+        <id property="id" column="id"/>
+        <result property="sessionId" column="session_id"/>
+        <result property="role" column="role"/>
+        <result property="content" column="content"/>
+        <result property="intent" column="intent"/>
+        <result property="agentTraceId" column="agent_trace_id"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.city.model.SessionRow">
+        INSERT INTO city_sessions (
+        id, user_id, phase, slots, last_recommended_activity_ids, created_at, updated_at
+        ) VALUES (
+        #{id}, #{userId}, #{phase}, #{slots}, #{lastRecommendedActivityIds}, NOW(), NOW()
+        )
+    </insert>
+
+    <select id="findById" resultMap="SessionRowMap">
+        SELECT id,
+        user_id,
+        phase,
+        slots,
+        last_recommended_activity_ids,
+        created_at,
+        updated_at
+        FROM city_sessions
+        WHERE id = #{sessionId}
+        AND user_id = #{userId}
+    </select>
+
+    <update id="update" parameterType="com.city.model.SessionRow">
+        UPDATE city_sessions
+        SET phase = #{phase},
+        slots = #{slots},
+        last_recommended_activity_ids = #{lastRecommendedActivityIds},
+        updated_at = NOW()
+        WHERE id = #{id}
+        AND user_id = #{userId}
+    </update>
+
+    <insert id="insertMessage">
+        INSERT INTO city_messages (session_id, role, content, intent, agent_trace_id, created_at)
+        VALUES (#{sessionId}, #{role}, #{content}, #{intent}, #{traceId}, NOW())
+    </insert>
+
+    <select id="listRecentMessages" resultMap="SessionMessageRowMap">
+        SELECT m.id,
+        m.session_id,
+        m.role,
+        m.content,
+        m.intent,
+        m.agent_trace_id,
+        m.created_at
+        FROM city_messages m
+        INNER JOIN city_sessions s
+        ON s.id = m.session_id
+        AND s.user_id = #{userId}
+        WHERE m.session_id = #{sessionId}
+        ORDER BY m.created_at DESC,
+        m.id DESC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

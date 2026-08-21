@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.city.mapper.ActivityMapper">
+
+    <resultMap id="ActivityItemRowMap" type="com.city.model.ActivityItemRow">
+        <id property="id" column="id"/>
+        <result property="sourceType" column="source_type"/>
+        <result property="ownerUserId" column="owner_user_id"/>
+        <result property="name" column="name"/>
+        <result property="city" column="city"/>
+        <result property="location" column="location"/>
+        <result property="activityTime" column="activity_time"/>
+        <result property="mood" column="mood"/>
+        <result property="scene" column="scene"/>
+        <result property="budget" column="budget"/>
+        <result property="activityType" column="activity_type"/>
+        <result property="style" column="style"/>
+        <result property="duration" column="duration"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="ActivityColumns">
+        id,
+        source_type,
+        owner_user_id,
+        name,
+        city,
+        location,
+        activity_time,
+        mood,
+        scene,
+        budget,
+        activity_type,
+        style,
+        duration,
+        created_at,
+        updated_at
+    </sql>
+
+    <insert id="insert"
+            parameterType="com.city.model.ActivityItemRow"
+            useGeneratedKeys="true"
+            keyProperty="id">
+        INSERT INTO activity_item (
+        source_type, owner_user_id, name,
+        city, location, activity_time, mood, scene, budget, activity_type, style, duration,
+        created_at, updated_at
+        ) VALUES (
+        #{sourceType}, #{ownerUserId}, #{name},
+        #{city}, #{location}, #{activityTime}, #{mood}, #{scene}, #{budget}, #{activityType}, #{style}, #{duration},
+        NOW(), NOW()
+        )
+    </insert>
+
+    <update id="updatePersonal" parameterType="com.city.model.ActivityItemRow">
+        UPDATE activity_item
+        SET name = #{name},
+        city = #{city},
+        location = #{location},
+        activity_time = #{activityTime},
+        mood = #{mood},
+        scene = #{scene},
+        budget = #{budget},
+        activity_type = #{activityType},
+        style = #{style},
+        duration = #{duration},
+        updated_at = NOW()
+        WHERE id = #{id}
+        AND source_type = 'PERSONAL'
+        AND owner_user_id = #{ownerUserId}
+    </update>
+
+    <delete id="deletePersonal">
+        DELETE FROM activity_item
+        WHERE id = #{id}
+        AND source_type = 'PERSONAL'
+        AND owner_user_id = #{userId}
+    </delete>
+
+    <select id="findPersonalById" resultMap="ActivityItemRowMap">
+        SELECT <include refid="ActivityColumns"/>
+        FROM activity_item
+        WHERE id = #{id}
+        AND source_type = 'PERSONAL'
+        AND owner_user_id = #{userId}
+    </select>
+
+    <select id="findPersonalActivities" resultMap="ActivityItemRowMap">
+        SELECT <include refid="ActivityColumns"/>
+        FROM activity_item
+        WHERE source_type = 'PERSONAL'
+        AND owner_user_id = #{userId}
+        ORDER BY updated_at DESC
+    </select>
+
+    <select id="findPublicActivities" resultMap="ActivityItemRowMap">
+        SELECT <include refid="ActivityColumns"/>
+        FROM activity_item
+        WHERE source_type = 'PUBLIC'
+        AND owner_user_id IS NULL
+        ORDER BY updated_at DESC
+    </select>
+
+    <select id="countPersonalActivities" resultType="int">
+        SELECT COUNT(1)
+        FROM activity_item
+        WHERE source_type = 'PERSONAL'
+        AND owner_user_id = #{userId}
+    </select>
+
+    <select id="search" resultMap="ActivityItemRowMap">
+        SELECT <include refid="ActivityColumns"/>
+        FROM activity_item
+        <where>
+            <choose>
+                <when test="sourceMode != null and sourceMode.name() == 'PERSONAL'">
+                    source_type = 'PERSONAL'
+                    AND owner_user_id = #{userId}
+                </when>
+                <otherwise>
+                    source_type = 'PUBLIC'
+                    AND owner_user_id IS NULL
+                </otherwise>
+            </choose>
+            AND (#{cityJson} = '[]' OR JSON_OVERLAPS(city, #{cityJson}))
+            AND (#{locationJson} = '[]' OR JSON_OVERLAPS(location, #{locationJson}))
+            AND (#{activityTimeJson} = '[]' OR JSON_OVERLAPS(activity_time, #{activityTimeJson}))
+            AND (#{moodJson} = '[]' OR JSON_OVERLAPS(mood, #{moodJson}))
+            AND (#{sceneJson} = '[]' OR JSON_OVERLAPS(scene, #{sceneJson}))
+            AND (#{budgetJson} = '[]' OR JSON_OVERLAPS(budget, #{budgetJson}))
+            AND (#{activityTypeJson} = '[]' OR JSON_OVERLAPS(activity_type, #{activityTypeJson}))
+            AND (#{styleJson} = '[]' OR JSON_OVERLAPS(style, #{styleJson}))
+            AND (#{durationJson} = '[]' OR JSON_OVERLAPS(duration, #{durationJson}))
+        </where>
+        ORDER BY updated_at DESC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

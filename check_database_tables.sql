@@ -1,0 +1,8 @@
+-- 检查数据库中实际存在的表
+SHOW TABLES;
+
+-- 查看所有表的详细信息
+SELECT TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_ROWS
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = 'diet_db'
+ORDER BY TABLE_NAME;
