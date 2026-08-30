@@ -15,6 +15,7 @@ import com.city.model.ChatResponse;
 import com.city.model.ClarifyResult;
 import com.city.model.IntentResult;
 import com.city.model.RecommendResult;
+import com.city.model.RelaxationContext;
 import com.city.model.RelaxationOption;
 import com.city.model.RelaxationRequest;
 import com.city.model.ResponseResult;
@@ -158,25 +159,49 @@ public class CityOrchestratorService {
     }
 
     public ChatResponse showRelaxedRecommendation(Long userId, RelaxationRequest request) {
-        if (request == null || request.sessionId() == null || request.sessionId().isBlank() || request.sourceMode() == null) {
+        if (request == null || request.sessionId() == null || request.sessionId().isBlank() || request.level() == null) {
             throw new CityException("相近活动请求参数不完整");
         }
         String traceId = "trace_" + UUID.randomUUID().toString().replace("-", "");
-        SessionState state = sessionStateService.loadOrCreate(request.sessionId(), userId, request.sourceMode());
-        try (AgentTraceService.TraceScope ignored = agentTraceService.openTrace(traceId, state.sessionId(), userId)) {
-            RelaxationSearchService.SearchResult result = relaxationSearchService.find(
-                    state.sourceMode(), userId, state.slots(), state.excludedSlots(),
-                    List.of(), state.timeConstraint(), request.level());
-            agentTraceService.recordEvent("RELAXATION_SELECTED", "SEARCH", request,
-                    traceMap("level", result.level(),
-                            "relaxedSlots", result.relaxedSlots(),
-                            "querySlots", result.querySlots(),
-                            "excludedSlots", state.excludedSlots(),
-                            "candidateCount", result.ranked().size()));
-            if (result.ranked().isEmpty()) {
-                throw new CityException("该相近活动方案暂时没有结果，请调整条件");
+        SessionState loadedState = sessionStateService.loadExisting(request.sessionId(), userId);
+        try (AgentTraceService.TraceScope ignored = agentTraceService.openTrace(traceId, loadedState.sessionId(), userId)) {
+            Object lock = sessionLocks.computeIfAbsent(loadedState.sessionId(), key -> new Object());
+            synchronized (lock) {
+                RelaxationContext context = loadedState.pendingRelaxationContext();
+                if (context == null || context.sourceMode() == null) {
+                    throw new CityException("相近活动方案已失效，请重新发起推荐");
+                }
+                if (!context.availableLevels().contains(request.level())) {
+                    throw new CityException("无效的相近活动方案，请重新获取可选方案");
+                }
+
+                SessionState effectiveState = loadedState.withSourceMode(context.sourceMode());
+                String currentQueryKey = recommendationQueryKey(effectiveState);
+                if (!context.queryKey().equals(currentQueryKey)) {
+                    throw new CityException("推荐条件已变化，请重新获取相近活动方案");
+                }
+
+                RelaxationSearchService.SearchResult result = relaxationSearchService.find(
+                        context.sourceMode(), userId, effectiveState.slots(), effectiveState.excludedSlots(),
+                        context.excludeActivityIds(), effectiveState.timeConstraint(), request.level());
+                agentTraceService.recordEvent("RELAXATION_SELECTED", "SEARCH", request,
+                        traceMap("level", result.level(),
+                                "sourceMode", context.sourceMode(),
+                                "queryKey", context.queryKey(),
+                                "excludeActivityIds", context.excludeActivityIds(),
+                                "relaxedSlots", result.relaxedSlots(),
+                                "querySlots", result.querySlots(),
+                                "excludedSlots", effectiveState.excludedSlots(),
+                                "candidateCount", result.ranked().size()));
+                if (result.ranked().isEmpty()) {
+                    throw new CityException("该相近活动方案暂时没有结果，请重新获取相近活动方案");
+                }
+
+                SessionState selectedState = effectiveState.withPendingRelaxationContext(null);
+                return completeRecommendation(
+                        selectedState.sessionId(), userId, "查看相近活动：" + result.label(), traceId,
+                        selectedState, context.excludeActivityIds(), result);
             }
-            return completeRecommendation(state.sessionId(), userId, "查看相近活动：" + result.label(), traceId, state, List.of(), result);
         }
     }
 
@@ -315,7 +340,8 @@ public class CityOrchestratorService {
     }
 
     private ChatResponse completeAsk(String sessionId, String traceId, SessionState workingState, ClarifyResult clarify) {
-        SessionState clarifyState = workingState.withPhase(SessionPhase.CLARIFY);
+        SessionState clarifyState = workingState.withPhase(SessionPhase.CLARIFY)
+                .withPendingRelaxationContext(null);
         sessionStateService.save(clarifyState);
         sessionService.appendMessage(sessionId, "assistant", clarify.questionToAsk(), Intent.CLARIFY_NEEDED.name(), traceId);
         ChatResponse response = withConversationContext(
@@ -476,7 +502,8 @@ public class CityOrchestratorService {
         SessionState savedState = queryKey.equals(state.recommendationQueryKey())
                 ? state.appendLastRecommendations(lastIds)
                 : state.withLastRecommendations(lastIds);
-        savedState = savedState.withRecommendationQueryKey(queryKey);
+        savedState = savedState.withRecommendationQueryKey(queryKey)
+                .withPendingRelaxationContext(null);
         sessionStateService.save(savedState);
         sessionService.appendMessage(sessionId, "assistant", response.speechText(), Intent.ACTIVITY_PLAN.name(), traceId);
         ChatResponse chatResponse = withConversationContext(ChatResponse.answer(
@@ -545,6 +572,7 @@ public class CityOrchestratorService {
                         "querySlots", selectedRelaxation.querySlots(),
                         "excludedSlots", state.excludedSlots(),
                         "sourceMode", state.sourceMode(),
+                        "excludeActivityIds", excludeActivityIds,
                         "timeConstraint", state.timeConstraint());
         agentTraceService.recordEvent("ACTIVITY_SEARCHED", "SEARCH", searchTraceInput,
                 Map.of("candidateCount", candidates.size(), "candidates", candidates));
@@ -592,8 +620,16 @@ public class CityOrchestratorService {
                         excludeActivityIds, state.timeConstraint());
                 if (!options.isEmpty()) {
                     String message = "没有完全匹配的活动。你可以选择查看放宽部分偏好后的相近活动，或保持当前严格条件。";
-                    agentTraceService.recordEvent("RELAXATION_OPTIONS_READY", "RECOMMEND", state.slots(), options);
-                    return completeRelaxationChoice(sessionId, traceId, state, message, options);
+                    RelaxationContext relaxationContext = new RelaxationContext(
+                            state.sourceMode(),
+                            recommendationQueryKey(state),
+                            excludeActivityIds,
+                            options.stream().map(RelaxationOption::level).toList()
+                    );
+                    agentTraceService.recordEvent("RELAXATION_OPTIONS_READY", "RECOMMEND", state.slots(),
+                            traceMap("options", options, "context", relaxationContext));
+                    return completeRelaxationChoice(
+                            sessionId, traceId, state, message, options, relaxationContext);
                 }
                 ResponseResult empty = ResponseResult.textOnly(
                         "当前城市暂时没有符合核心条件的活动。你可以切换城市，或调整时间和活动类型后再试。");
@@ -639,7 +675,8 @@ public class CityOrchestratorService {
         SessionState savedState = queryKey.equals(state.recommendationQueryKey())
                 ? state.appendLastRecommendations(lastIds)
                 : state.withLastRecommendations(lastIds);
-        savedState = savedState.withRecommendationQueryKey(queryKey);
+        savedState = savedState.withRecommendationQueryKey(queryKey)
+                .withPendingRelaxationContext(null);
         sessionStateService.save(savedState);
         sessionService.appendMessage(sessionId, "assistant", response.speechText(), state.currentIntent().name(), traceId);
         ChatResponse chatResponse = withConversationContext(
@@ -688,12 +725,18 @@ public class CityOrchestratorService {
         return new ResponseResult(speechText, response.displayBlocks(), response.nextAction());
     }
 
-    private ChatResponse completeRelaxationChoice(String sessionId, String traceId, SessionState state,
-                                                   String message, List<RelaxationOption> options) {
-        SessionState savedState = state.withIntent(Intent.MEAL_RECOMMENDATION);
+    private ChatResponse completeRelaxationChoice(String sessionId,
+                                                   String traceId,
+                                                   SessionState state,
+                                                   String message,
+                                                   List<RelaxationOption> options,
+                                                   RelaxationContext relaxationContext) {
+        SessionState savedState = state.withIntent(Intent.MEAL_RECOMMENDATION)
+                .withPendingRelaxationContext(relaxationContext);
         sessionStateService.save(savedState);
         sessionService.appendMessage(sessionId, "assistant", message, Intent.MEAL_RECOMMENDATION.name(), traceId);
-        ChatResponse response = withConversationContext(ChatResponse.relaxation(sessionId, traceId, message, options), savedState);
+        ChatResponse response = withConversationContext(
+                ChatResponse.relaxation(sessionId, traceId, message, options), savedState);
         agentTraceService.recordEvent("RESPONSE_READY", "RESPONSE", savedState, response);
         return response;
     }
@@ -707,7 +750,8 @@ public class CityOrchestratorService {
     }
 
     private ChatResponse completeTextOnly(String sessionId, String traceId, SessionState state, Intent intent, ResponseResult response) {
-        SessionState savedState = state.withIntent(intent);
+        SessionState savedState = state.withIntent(intent)
+                .withPendingRelaxationContext(null);
         sessionStateService.save(savedState);
         sessionService.appendMessage(sessionId, "assistant", response.speechText(), intent.name(), traceId);
         ChatResponse chatResponse = ChatResponse.answer(sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction());
