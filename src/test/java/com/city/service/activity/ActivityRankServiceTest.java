@@ -94,6 +94,29 @@ class ActivityRankServiceTest {
         assertEquals(List.of(2L), result.ranked().stream().map(ActivityItem::id).toList());
     }
 
+    @Test
+    void cheaperActivityShouldFullySatisfyHigherBudgetUpperBound() {
+        SlotBundle query = new SlotBundle(
+                List.of("西安"), List.of(), List.of(), List.of(),
+                List.of("200元内"), List.of(), List.of(), List.of());
+        SlotBundle cheapSlots = new SlotBundle(
+                List.of("西安"), List.of(), List.of(), List.of(),
+                List.of("100元内"), List.of(), List.of(), List.of());
+        SlotBundle expensiveSlots = new SlotBundle(
+                List.of("西安"), List.of(), List.of(), List.of(),
+                List.of("300元内"), List.of(), List.of(), List.of());
+
+        ActivityItem cheap = activity(1L, "100元活动", cheapSlots, null, null);
+        ActivityItem expensive = activity(2L, "300元活动", expensiveSlots, null, null);
+
+        ActivityRankResult result = service.rank(new ActivityRankRequest(
+                List.of(expensive, cheap), query, TimeConstraint.empty(), List.of()));
+
+        assertEquals(List.of(1L, 2L), result.ranked().stream().map(ActivityItem::id).toList());
+        assertEquals(1.0, result.scores().get(0).slotScore(), 0.0001);
+        assertTrue(result.scores().get(0).slotScore() > result.scores().get(1).slotScore());
+    }
+
     private ActivityItem activity(Long id, String name, SlotBundle slots, LocalTime start, LocalTime end) {
         return new ActivityItem(id, SourceMode.PUBLIC, null, name, slots,
                 null, null, start, end, 0.0);
