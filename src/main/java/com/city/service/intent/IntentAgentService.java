@@ -133,9 +133,9 @@ public class IntentAgentService {
                 只输出一个合法 JSON 对象。顶层只能包含 intent、slots、operations、temporal、confidence。
 
                 ## intent 枚举
-                - MEAL_RECOMMENDATION：首次请求推荐、继续补充条件，或仍在询问活动。
+                - MEAL_RECOMMENDATION：首次请求推荐、继续补充条件，或仍在询问单个/多个活动。
                 - MEAL_ADJUST：修改、追加、删除、清除条件，或“换一批”。
-                - ACTIVITY_PLAN：要求半天、一天、行程或活动安排。
+                - ACTIVITY_PLAN：明确要求系统安排/规划多时段行程，例如“帮我安排周六一天”“做个一日行程”“从上午到晚上排一下”；不要仅因为出现“半天/一天/全天”就判断为规划。
                 - HEALTH_RISK：深夜独行、偏远地点、极端天气等安全风险。
                 - OTHER：与城市活动无关。
                 - CLARIFY_NEEDED：无法判断是否在请求活动推荐。
@@ -144,6 +144,9 @@ public class IntentAgentService {
                 slots 只处理 city、location、mood、scene、budget、activityType、style、duration。
                 slots 只填写当前用户消息里明确出现的正向标准标签；历史已生效值不要抄入本轮 slots。
                 未提及字段输出 []；时间绝不能写入 slots。
+                - “想找个半天的展览”中的“半天”描述活动自身时长，可写 duration=["半天"]，intent 仍是 MEAL_RECOMMENDATION。
+                - “想找个全天活动”中的“全天”描述活动自身时长，可写 duration=["全天"]，intent 仍是 MEAL_RECOMMENDATION。
+                - “周六全天都行 / 一整天都有空”描述用户可用时间，不要写 duration，应交给 temporal。
 
                 ## operations
                 operations 只处理普通属性槽位：
@@ -167,7 +170,7 @@ public class IntentAgentService {
                 - 完全没提时间：dateMode=KEEP，timeMode=KEEP，raw=""。
                 - “改晚上”：dateMode=KEEP，timeMode=SET。
                 - “改周日”：dateMode=SET，timeMode=KEEP。
-                - “几点都行”：dateMode=KEEP，timeMode=CLEAR。
+                - “几点都行 / 全天都行 / 一整天都有空”：如果日期仍需保留，则 dateMode 按本轮日期表达处理，timeMode=CLEAR；不要把“全天”写入 duration。
                 - “哪天都行”：dateMode=CLEAR，timeMode=KEEP。
                 - “时间不限/随时都行”：dateMode=CLEAR，timeMode=CLEAR。
                 - “还是之前那个时间”：dateMode=KEEP，timeMode=KEEP；不要重新计算历史时间。
@@ -332,10 +335,37 @@ public class IntentAgentService {
         if (userInput == null || userInput.isBlank()) return Intent.CLARIFY_NEEDED;
         if (containsAny(userInput, "危险", "偏远", "深夜独自", "违法", "未成年人进入")) return Intent.HEALTH_RISK;
         if (containsAny(userInput, "换一批", "换个", "不要户外", "室内", "便宜点", "近一点", "安静点")) return Intent.MEAL_ADJUST;
-        if (containsAny(userInput, "半天", "一天", "行程", "安排一下")) return Intent.ACTIVITY_PLAN;
+        if (containsActivityPlanSignal(userInput)) return Intent.ACTIVITY_PLAN;
         if (containsAny(userInput, "你是谁", "你是 AI", "你好")) return Intent.OTHER;
-        if (containsAny(userInput, "去哪", "去哪里", "玩什么", "活动", "展览", "电影", "演出", "推荐")) return Intent.MEAL_RECOMMENDATION;
+        if (containsAny(userInput,
+                "去哪", "去哪里", "玩什么", "活动", "展览", "电影", "演出", "运动", "探店", "推荐",
+                "半天", "一天", "一日", "全天", "一整天", "有空", "都行", "都可以")) {
+            return Intent.MEAL_RECOMMENDATION;
+        }
         return Intent.CLARIFY_NEEDED;
+    }
+
+    /** LLM 失败时也只用明确规划动作兜底，时长词本身不代表多时段规划。 */
+    private boolean containsActivityPlanSignal(String userInput) {
+        if (userInput == null || userInput.isBlank()) return false;
+        String text = userInput.replaceAll("\\s+", "");
+        return containsAny(text,
+                "活动规划",
+                "一日行程",
+                "半日行程",
+                "行程",
+                "帮我安排",
+                "给我安排",
+                "帮我规划",
+                "给我规划",
+                "安排一下",
+                "规划一下",
+                "排一下",
+                "怎么安排",
+                "如何安排",
+                "周末安排",
+                "从上午到晚上",
+                "从早到晚");
     }
 
     private boolean containsAny(String text, String... keywords) {
