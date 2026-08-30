@@ -11,36 +11,43 @@
 【intent】
 - MEAL_RECOMMENDATION：寻找一个或多个活动，补充推荐条件，或继续普通活动推荐。
 - MEAL_ADJUST：修改已有推荐条件，或要求“换一批”等结果刷新。
-- ACTIVITY_PLAN：明确要求系统规划/安排半天或一天的多时段行程，例如“帮我安排周六一天”“做个一日行程”“从上午到晚上排一下”。
+- ACTIVITY_PLAN：明确要求系统规划/安排多时段行程，例如“帮我安排周六一天”“做个一日行程”“从上午到晚上排一下”。
 - CLARIFY_NEEDED：有活动意向，但无法可靠判断用户想要什么。
 - HEALTH_RISK：涉及深夜独行、偏远地点、极端天气或其他明显安全风险。
 - OTHER：与城市活动无关。
 
 【规划与普通推荐的边界】
-不要仅因为出现“半天 / 一天 / 全天”就判断为 ACTIVITY_PLAN，要判断这些词描述的是“活动时长/用户可用时间”，还是“要求系统组织多时段行程”。
+不要仅因为出现“半天 / 一天 / 全天”就判断为 ACTIVITY_PLAN，要判断这些词描述的是“活动自身时长/用户可用时间”，还是“要求系统组织多时段行程”。
 - “帮我安排周六一天” → ACTIVITY_PLAN。
 - “周六从上午到晚上帮我排一下” → ACTIVITY_PLAN。
 - “给我做个一日行程” → ACTIVITY_PLAN。
 - “想找个半天的展览” → MEAL_RECOMMENDATION，duration 可取“半天”。
 - “想找个能玩一天的活动 / 想找全天项目” → MEAL_RECOMMENDATION；只有当“全天”明确描述活动自身持续时长时，duration 才可取“全天”。
-- “周六全天都行 / 周六一整天都有空 / 全天都可以”描述的是用户可用时间，不是活动 duration，不要把“全天”写入 slots.duration。
+- “周六全天都行 / 周六一整天都有空 / 全天都可以”描述用户可用时间，不写 duration，交给 temporal。
 
-【slots】
-只处理以下普通属性：
-- city：活动所在城市，如西安、北京、上海、成都。
-- location：区域或交通偏好，如曲江、小寨、高新、钟楼、近地铁。
-- experienceGoal：放松、社交、解压、治愈、刺激等。
-- companion：独处、情侣、朋友、亲子等。
-- budget：免费、100元内、200元内等。
+【九维 slots】
+只处理以下九个普通属性：
+- city：城市，如西安、北京、上海、成都。
+- location：纯地理区域，如曲江、小寨、高新、钟楼。不要把“近地铁/交通方便”写 location。
+- experienceGoal：用户希望获得的体验/目的，如放松、社交、解压、治愈、刺激。
+- companion：同行关系，如独处、情侣、朋友、亲子。
+- budget：预算，如免费、100元内、200元内等。
 - activityType：电影、展览、演出、桌游、运动、探店等。
-- style：安静、文艺、热闹、刺激等。
-- duration：活动自身时长或活动属性，如半天、全天、室内、近距离、少排队、交通方便等。
+- style：活动氛围/风格，如安静、文艺、热闹、刺激。
+- duration：只表示活动自身持续时间，如1小时内、1-2小时、2-4小时、半天、全天。
+- feature：活动客观特征/便利性，如室内、户外、近地铁、少排队、交通方便。
 
-注意：duration 中的“半天/全天”只有在用户明确描述“活动本身持续多久”时才填写；如果用户表达的是自己“半天有空/全天有空/全天都行”，应交给 temporal，不要写 duration。
-未提及的 slots 字段输出 []。
+【字段边界】
+- “最近压力大，想安静一点” → experienceGoal 可取“解压”，style 可取“安静”。
+- “和朋友出去热闹一点” → companion 可取“朋友”，experienceGoal 可取“社交”，style 可取“热闹”。
+- “曲江附近、最好近地铁” → location 可取“曲江”，feature 可取“近地铁”。
+- “想找室内展览” → activityType 可取“展览”，feature 可取“室内”；绝不能把“室内”写 duration。
+- “交通方便、少排队” → feature；绝不能写 duration。
+- duration 中的“半天/全天”只有在用户明确描述活动本身持续多久时才填写；用户自己的空闲时间交给 temporal。
+- 未提及的九维 slots 字段输出 []。
 
 【operations】
-operations 只处理普通属性槽位：
+operations 只处理上述九维普通属性槽位：
 {"field":"字段名","op":"SET|ADD|REMOVE|CLEAR","values":["标准标签"],"raw":"用户原始片段"}
 - SET：替换该字段约束。
 - ADD：在原约束上追加。
@@ -69,9 +76,9 @@ temporal 必须完整输出：
 【全天三种语义必须区分】
 1. “周六全天都行” = 用户周六没有具体时段限制：不要写 duration；date 设置周六，timeMode=CLEAR。
 2. “想找个全天活动” = 活动自身时长偏好：可写 slots.duration=["全天"]，temporal 不因为“全天”而设置具体时段。
-3. “帮我安排周六一天 / 一整天行程” = 要求多时段规划：intent=ACTIVITY_PLAN，日期写 temporal；不要仅用 duration=["全天"] 代替规划意图。
+3. “帮我安排周六一天 / 一整天行程” = 多时段规划：intent=ACTIVITY_PLAN，日期写 temporal；不要仅用 duration=["全天"] 代替规划意图。
 
 【输出格式】
 只输出一个合法 JSON 对象，顶层只能包含：intent、slots、operations、temporal、confidence。
 示例结构：
-{"intent":"MEAL_RECOMMENDATION","slots":{"city":[],"location":[],"experienceGoal":[],"companion":[],"budget":[],"activityType":[],"style":[],"duration":[]},"operations":[],"temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},"confidence":0.95}
+{"intent":"MEAL_RECOMMENDATION","slots":{"city":[],"location":[],"experienceGoal":[],"companion":[],"budget":[],"activityType":[],"style":[],"duration":[],"feature":[]},"operations":[],"temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},"confidence":0.95}
