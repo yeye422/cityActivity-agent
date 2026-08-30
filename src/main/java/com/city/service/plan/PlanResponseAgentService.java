@@ -37,7 +37,7 @@ public class PlanResponseAgentService {
             AgentFactory agentFactory,
             LlmJsonService llmJsonService,
             AgentTraceService agentTraceService,
-            @Value("${diet.llm.main-model:qwen-max}") String modelName
+            @Value("${diet.llm.response-model:qwen-turbo}") String modelName
     ) {
         this.agentFactory = agentFactory;
         this.llmJsonService = llmJsonService;
