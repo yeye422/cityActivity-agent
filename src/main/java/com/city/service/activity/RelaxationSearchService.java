@@ -28,10 +28,6 @@ public class RelaxationSearchService {
         this.activityRankService = activityRankService;
     }
 
-    /**
-     * 放宽偏好时仍保留用户指定的日期/时段和 excludedSlots。
-     * negative constraint 永远不能因为“相近活动”而被悄悄放宽。
-     */
     public List<RelaxationOption> options(SourceMode sourceMode,
                                           Long userId,
                                           SlotBundle originalSlots,
@@ -63,30 +59,38 @@ public class RelaxationSearchService {
         List<ActivityItem> candidates = activitySearchService.search(
                 new ActivitySearchRequest(
                         sourceMode, userId, query, excludeActivityIds, timeConstraint, excluded));
-        // 用原始正向条件和原始时间评分，使最接近原需求的活动排在前面；负向条件已在 Search 阶段严格排除。
         ActivityRankResult rankResult = activityRankService.rank(
                 new ActivityRankRequest(candidates, original, timeConstraint, excludeActivityIds));
         return new SearchResult(level, labelFor(level), relaxedSlotsFor(level), query, rankResult.ranked());
     }
 
+    /**
+     * feature 默认作为客观偏好保留，不因普通 Relaxation 被悄悄丢掉；
+     * level1 放宽体验目标/风格，level2 再放宽 companion/duration。
+     */
     private SlotBundle queryFor(SlotBundle slots, int level) {
         boolean broad = level >= 2;
         return new SlotBundle(
-                slots.city(), slots.location(),
+                slots.city(),
+                slots.location(),
                 List.of(),
                 broad ? List.of() : slots.companion(),
-                slots.budget(), slots.activityType(),
+                slots.budget(),
+                slots.activityType(),
                 List.of(),
-                broad ? List.of() : slots.duration()
+                broad ? List.of() : slots.duration(),
+                slots.feature()
         );
     }
 
     private String labelFor(int level) {
-        return level == 1 ? "仅放宽氛围和风格" : "进一步放宽同行场景和时长";
+        return level == 1 ? "仅放宽体验目标和风格" : "进一步放宽同行关系和活动时长";
     }
 
     private List<String> relaxedSlotsFor(int level) {
-        return level == 1 ? List.of("experienceGoal", "style") : List.of("experienceGoal", "style", "companion", "duration");
+        return level == 1
+                ? List.of("experienceGoal", "style")
+                : List.of("experienceGoal", "style", "companion", "duration");
     }
 
     public record SearchResult(int level, String label, List<String> relaxedSlots,
