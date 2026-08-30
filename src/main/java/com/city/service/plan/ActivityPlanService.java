@@ -4,33 +4,36 @@ import com.city.enums.SourceMode;
 import com.city.model.ActivityItem;
 import com.city.model.ActivityRankRequest;
 import com.city.model.ActivitySearchRequest;
+import com.city.model.ActivitySessionResponse;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
 import com.city.model.WeatherRecommendationContext;
 import com.city.service.activity.ActivityRankService;
 import com.city.service.activity.ActivitySearchService;
+import com.city.service.activity.ActivitySessionService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
- * 多时段规划服务：把用户可用时间拆成较细的候选发现窗口，
+ * 多时段规划服务：把用户可用时间拆成细粒度候选发现窗口，
  * 再按窗口独立检索/排序后保留 TopK 候选。
  * Java 负责合法候选空间；真正选几个、选哪些、哪些窗口留空由 PlanResponseAgent 决定。
  */
 @Service
 public class ActivityPlanService {
 
-    /**
-     * 细粒度候选发现窗口。窗口只是召回锚点，不代表活动本身只能占用这两个小时；
-     * Agent 会同时看到活动真实有效时段和明确/预计活动耗时。
-     */
+    /** 细粒度候选发现窗口；窗口不是活动耗时。 */
     private static final List<PlanWindow> PLAN_WINDOWS = List.of(
             new PlanWindow("08:00-10:00", LocalTime.of(8, 0), LocalTime.of(10, 0)),
             new PlanWindow("10:00-12:00", LocalTime.of(10, 0), LocalTime.of(12, 0)),
@@ -41,19 +44,28 @@ public class ActivityPlanService {
             new PlanWindow("20:00-23:00", LocalTime.of(20, 0), LocalTime.of(23, 0))
     );
 
-    /** 个人项目保持小候选空间：每个细窗口 Top3。 */
     private static final int PLAN_CANDIDATE_LIMIT = 3;
 
     private final ActivitySearchService activitySearchService;
     private final ActivityRankService activityRankService;
+    private final ActivitySessionService activitySessionService;
 
-    public ActivityPlanService(ActivitySearchService activitySearchService, ActivityRankService activityRankService) {
+    @Autowired
+    public ActivityPlanService(ActivitySearchService activitySearchService,
+                               ActivityRankService activityRankService,
+                               ActivitySessionService activitySessionService) {
         this.activitySearchService = activitySearchService;
         this.activityRankService = activityRankService;
+        this.activitySessionService = activitySessionService;
+    }
+
+    /** 兼容旧单元测试/手工构造；无 SessionService 时只是不做场次明细增强。 */
+    public ActivityPlanService(ActivitySearchService activitySearchService,
+                               ActivityRankService activityRankService) {
+        this(activitySearchService, activityRankService, null);
     }
 
     /**
-     * 从规范化 TimeConstraint 推导候选发现窗口。
      * 例如 12:00~23:00 会拆成 12-14、14-16、16-18、18-20、20-23，
      * 给 PlanResponseAgent 更大的合法组合空间。
      */
@@ -65,20 +77,15 @@ public class ActivityPlanService {
         List<PlanWindow> windows;
         if (timeConstraint != null && timeConstraint.hasTime()) {
             windows = windowsCoveredByTimeRange(timeConstraint.startTime(), timeConstraint.endTime());
-            if (windows.isEmpty()) {
-                windows = PLAN_WINDOWS;
-            }
+            if (windows.isEmpty()) windows = PLAN_WINDOWS;
         } else {
             windows = PLAN_WINDOWS;
         }
         return decorateWindowsWithDate(windows, timeConstraint);
     }
 
-    /** 按真实时间范围挑出所有发生重叠的细粒度窗口，区间按 [start,end) 处理。 */
     private List<PlanWindow> windowsCoveredByTimeRange(LocalTime start, LocalTime end) {
-        if (start == null || end == null || !start.isBefore(end)) {
-            return List.of();
-        }
+        if (start == null || end == null || !start.isBefore(end)) return List.of();
         return PLAN_WINDOWS.stream()
                 .filter(window -> overlaps(start, end, window.start(), window.end()))
                 .toList();
@@ -97,14 +104,13 @@ public class ActivityPlanService {
                 default -> "";
             };
         } else if (timeConstraint == null || !timeConstraint.hasDate()) {
-            // 沿用城市周末规划的默认语义：没有日期时默认按周六生成候选空间。
             prefix = "周六 ";
         }
         String safePrefix = prefix;
         return windows.stream().map(window -> safePrefix + window.label()).toList();
     }
 
-    /** 复制共享正向槽位；规划窗口通过 TimeConstraint 处理，不写回 SlotBundle。 */
+    /** 复制完整九维共享槽位；规划窗口通过 TimeConstraint 单独处理。 */
     public SlotBundle slotsForActivityTime(SlotBundle base, String activityTime) {
         SlotBundle safe = base == null ? SlotBundle.empty() : base;
         return new SlotBundle(
@@ -115,14 +121,14 @@ public class ActivityPlanService {
                 safe.budget(),
                 safe.activityType(),
                 safe.style(),
-                safe.duration()
+                safe.duration(),
+                safe.feature()
         );
     }
 
     /**
      * 按细窗口独立检索、排序并保留 Top3 候选。
-     * 同一个跨窗口活动可能出现在多个候选池中，这是有意保留的组合空间；
-     * 最终重复 ID、时间冲突由 PlanResponseAgentService 的 Java 校验层处理。
+     * 有明确日期时，同时加载候选在该窗口内的具体 OPEN 场次，交给 PlanResponseAgent 参与组合。
      */
     public List<PlannedActivity> planActivities(SourceMode sourceMode,
                                                  Long userId,
@@ -163,19 +169,76 @@ public class ActivityPlanService {
                     .limit(PLAN_CANDIDATE_LIMIT)
                     .toList();
 
+            Map<Long, List<ActivitySessionResponse>> sessionsByActivityId = loadPlanningSessions(
+                    topCandidates, targetTimeConstraint);
+
             ActivityItem fallback = topCandidates.stream()
                     .filter(item -> !fallbackUsedIds.contains(item.id()))
                     .findFirst()
                     .orElse(null);
-            if (fallback != null) {
-                fallbackUsedIds.add(fallback.id());
-            }
-            planned.add(new PlannedActivity(activityTime, fallback, querySlots, topCandidates));
+            if (fallback != null) fallbackUsedIds.add(fallback.id());
+
+            ActivitySessionResponse fallbackSession = firstSessionFor(fallback, sessionsByActivityId);
+            planned.add(new PlannedActivity(
+                    activityTime,
+                    fallback,
+                    querySlots,
+                    topCandidates,
+                    sessionsByActivityId,
+                    fallbackSession));
         }
         return planned;
     }
 
-    /** 为一个细粒度候选发现窗口生成对应检索时间范围。 */
+    /** 只有日期明确时，具体场次才具有可执行含义；没有日期时不向 Agent 虚构/泛化场次。 */
+    private Map<Long, List<ActivitySessionResponse>> loadPlanningSessions(
+            List<ActivityItem> candidates,
+            TimeConstraint targetTimeConstraint) {
+        if (activitySessionService == null
+                || candidates == null || candidates.isEmpty()
+                || targetTimeConstraint == null || !targetTimeConstraint.hasDate()
+                || targetTimeConstraint.dateStart() == null) {
+            return Map.of();
+        }
+
+        LocalDate date = targetTimeConstraint.dateStart();
+        LocalTime windowStart = targetTimeConstraint.startTime();
+        LocalTime windowEnd = targetTimeConstraint.endTime();
+        Map<Long, List<ActivitySessionResponse>> result = new LinkedHashMap<>();
+
+        for (ActivityItem candidate : candidates) {
+            if (candidate == null || candidate.id() == null) continue;
+            List<ActivitySessionResponse> sessions;
+            try {
+                sessions = activitySessionService.findAvailable(candidate.id(), date).stream()
+                        .filter(session -> "OPEN".equalsIgnoreCase(session.status()))
+                        .filter(session -> session.remainingSeats() == null || session.remainingSeats() > 0)
+                        .filter(session -> sessionOverlapsWindow(session, windowStart, windowEnd))
+                        .toList();
+            } catch (Exception ignored) {
+                sessions = List.of();
+            }
+            if (!sessions.isEmpty()) result.put(candidate.id(), sessions);
+        }
+        return Map.copyOf(result);
+    }
+
+    private boolean sessionOverlapsWindow(ActivitySessionResponse session, LocalTime start, LocalTime end) {
+        if (session == null || session.startAt() == null || session.endAt() == null) return false;
+        if (start == null || end == null) return true;
+        LocalDateTime windowStart = session.startAt().toLocalDate().atTime(start);
+        LocalDateTime windowEnd = session.startAt().toLocalDate().atTime(end);
+        return session.startAt().isBefore(windowEnd) && session.endAt().isAfter(windowStart);
+    }
+
+    private ActivitySessionResponse firstSessionFor(
+            ActivityItem activity,
+            Map<Long, List<ActivitySessionResponse>> sessionsByActivityId) {
+        if (activity == null || activity.id() == null || sessionsByActivityId == null) return null;
+        List<ActivitySessionResponse> sessions = sessionsByActivityId.getOrDefault(activity.id(), List.of());
+        return sessions.isEmpty() ? null : sessions.getFirst();
+    }
+
     private TimeConstraint timeConstraintForActivityTime(TimeConstraint original, String activityTime) {
         LocalDate date = original != null && original.hasDate()
                 ? dateForActivityTime(original.dateStart(), original.dateEnd(), activityTime)
@@ -184,48 +247,33 @@ public class ActivityPlanService {
         if (window != null) {
             return new TimeConstraint(
                     original == null ? activityTime : original.raw(),
-                    date,
-                    date,
-                    window.start(),
-                    window.end(),
-                    original == null ? null : original.resolvedAt()
-            );
+                    date, date, window.start(), window.end(),
+                    original == null ? null : original.resolvedAt());
         }
 
-        // 兼容旧测试/旧调用传入“上午/下午/晚上”。
         LocalTime startTime = original != null ? original.startTime() : null;
         LocalTime endTime = original != null ? original.endTime() : null;
         if (activityTime != null && activityTime.contains("上午")) {
-            startTime = LocalTime.of(8, 0);
-            endTime = LocalTime.of(12, 0);
+            startTime = LocalTime.of(8, 0); endTime = LocalTime.of(12, 0);
         } else if (activityTime != null && activityTime.contains("下午")) {
-            startTime = LocalTime.of(12, 0);
-            endTime = LocalTime.of(18, 0);
+            startTime = LocalTime.of(12, 0); endTime = LocalTime.of(18, 0);
         } else if (activityTime != null && activityTime.contains("晚上")) {
-            startTime = LocalTime.of(18, 0);
-            endTime = LocalTime.of(23, 0);
+            startTime = LocalTime.of(18, 0); endTime = LocalTime.of(23, 0);
         }
         return new TimeConstraint(
                 original == null ? activityTime : original.raw(),
-                date,
-                date,
-                startTime,
-                endTime,
-                original == null ? null : original.resolvedAt()
-        );
+                date, date, startTime, endTime,
+                original == null ? null : original.resolvedAt());
     }
 
     private PlanWindow findWindow(String activityTime) {
-        if (activityTime == null || activityTime.isBlank()) {
-            return null;
-        }
+        if (activityTime == null || activityTime.isBlank()) return null;
         return PLAN_WINDOWS.stream()
                 .filter(window -> activityTime.endsWith(window.label()))
                 .findFirst()
                 .orElse(null);
     }
 
-    /** 周日标签命中日期范围内的周日；其他窗口默认使用范围首日。 */
     private LocalDate dateForActivityTime(LocalDate start, LocalDate end, String activityTime) {
         if (start == null) return null;
         if (activityTime == null || !activityTime.startsWith("周日") || end == null) return start;
@@ -235,26 +283,35 @@ public class ActivityPlanService {
         return start;
     }
 
-    private record PlanWindow(String label, LocalTime start, LocalTime end) {
-    }
+    private record PlanWindow(String label, LocalTime start, LocalTime end) {}
 
     /**
-     * 单窗口规划结果：period = 候选发现窗口；activity = Java fallback；
-     * candidates = 交给 PlanResponseAgent 做全局组合选择的 TopK 候选。
+     * 单窗口规划结果：
+     * candidates 是合法 TopK；sessionsByActivityId 是具体可参加场次；selectedSession 是 Java fallback/最终选择使用的场次。
      */
     public record PlannedActivity(
             String period,
             ActivityItem activity,
             SlotBundle querySlots,
-            List<ActivityItem> candidates
+            List<ActivityItem> candidates,
+            Map<Long, List<ActivitySessionResponse>> sessionsByActivityId,
+            ActivitySessionResponse selectedSession
     ) {
         public PlannedActivity {
             candidates = candidates == null ? List.of() : List.copyOf(candidates);
+            sessionsByActivityId = sessionsByActivityId == null ? Map.of() : Map.copyOf(sessionsByActivityId);
         }
 
-        /** 保留旧调用兼容：已选活动同时作为唯一候选。 */
+        public PlannedActivity(String period,
+                               ActivityItem activity,
+                               SlotBundle querySlots,
+                               List<ActivityItem> candidates) {
+            this(period, activity, querySlots, candidates, Map.of(), null);
+        }
+
         public PlannedActivity(String period, ActivityItem activity, SlotBundle querySlots) {
-            this(period, activity, querySlots, activity == null ? List.of() : List.of(activity));
+            this(period, activity, querySlots,
+                    activity == null ? List.of() : List.of(activity), Map.of(), null);
         }
 
         public boolean matched() {
