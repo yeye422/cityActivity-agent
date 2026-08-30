@@ -35,6 +35,11 @@ public class TimeResolutionService {
         TimeConstraint base = historical == null ? TimeConstraint.empty() : historical;
         TemporalMutation safeTemporal = temporal == null ? TemporalMutation.keep() : temporal;
 
+        // LLM 明确理解为“时间保持不变”时直接保留历史状态，不再错误进入 fallback/澄清。
+        if (isReliableKeepReference(safeTemporal)) {
+            return new TimeResolutionResult(TimeResolutionResult.Status.UNCHANGED, base, safeTemporal.raw());
+        }
+
         if (isReliableLlmTemporal(safeTemporal)) {
             TimeConstraint merged = timeMutationService.apply(base, safeTemporal);
             TimeResolutionResult.Status status = merged.hasConstraint()
@@ -87,6 +92,19 @@ public class TimeResolutionService {
         return temporal.changesAnything()
                 && temporal.confidence() >= MIN_LLM_TEMPORAL_CONFIDENCE
                 && temporalValidator.isValid(temporal);
+    }
+
+    private boolean isReliableKeepReference(TemporalMutation temporal) {
+        if (temporal.dateMode() != TemporalMode.KEEP
+                || temporal.timeMode() != TemporalMode.KEEP
+                || temporal.confidence() < MIN_LLM_TEMPORAL_CONFIDENCE
+                || !temporalValidator.isValid(temporal)) {
+            return false;
+        }
+        String raw = temporal.raw() == null ? "" : temporal.raw().replaceAll("\\s+", "");
+        return containsAny(raw,
+                "还是之前那个时间", "还是之前的时间", "按之前的时间", "照之前的时间",
+                "时间不变", "时间照旧", "时间保持不变", "还是原来的时间", "时间还是原来");
     }
 
     private TimeConstraint safeJavaParse(String text) {
