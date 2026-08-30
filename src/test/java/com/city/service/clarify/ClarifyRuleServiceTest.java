@@ -1,5 +1,6 @@
 package com.city.service.clarify;
 
+import com.city.enums.ClarifyField;
 import com.city.enums.Intent;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
@@ -21,7 +22,7 @@ class ClarifyRuleServiceTest {
                 List.of("西安"), List.of(), List.of(), List.of(),
                 List.of(), List.of(), List.of(), List.of(), List.of());
 
-        List<String> missing = service.missingRequiredFields(
+        List<ClarifyField> missing = service.missingRequiredFields(
                 Intent.MEAL_RECOMMENDATION, slots, TimeConstraint.empty());
 
         assertTrue(missing.isEmpty());
@@ -39,19 +40,19 @@ class ClarifyRuleServiceTest {
 
     @Test
     void recommendationWithoutCityShouldAskCity() {
-        List<String> missing = service.missingRequiredFields(
+        List<ClarifyField> missing = service.missingRequiredFields(
                 Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), TimeConstraint.empty());
 
-        assertEquals(List.of("city"), missing);
-        assertEquals("你想看哪个城市的活动？", service.questionFor(missing));
+        assertEquals(List.of(ClarifyField.CITY), missing);
+        assertEquals("你想看哪个城市的活动？", service.questionFor(ClarifyField.CITY));
     }
 
     @Test
     void planShouldRequireCityAndDate() {
-        List<String> missing = service.missingRequiredFields(
+        List<ClarifyField> missing = service.missingRequiredFields(
                 Intent.ACTIVITY_PLAN, SlotBundle.empty(), TimeConstraint.empty());
 
-        assertEquals(List.of("city", "date"), missing);
+        assertEquals(List.of(ClarifyField.CITY, ClarifyField.DATE), missing);
     }
 
     @Test
