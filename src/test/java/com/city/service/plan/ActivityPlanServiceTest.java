@@ -13,6 +13,7 @@ import com.city.service.activity.ActivitySearchService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
 
@@ -24,6 +25,47 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ActivityPlanServiceTest {
+
+    @Test
+    void shouldResolveAfternoonToEveningAsTwoPlanPeriods() {
+        ActivityPlanService service = new ActivityPlanService(
+                mock(ActivitySearchService.class),
+                mock(ActivityRankService.class));
+        TimeConstraint timeConstraint = new TimeConstraint(
+                "下午到晚上",
+                null,
+                null,
+                LocalTime.of(12, 0),
+                LocalTime.of(23, 0),
+                null
+        );
+
+        assertEquals(
+                List.of("下午", "晚上"),
+                service.resolveActivityTimes(SlotBundle.empty(), timeConstraint)
+        );
+    }
+
+    @Test
+    void shouldPreserveWeekendPrefixWhenTimeRangeCoversMultiplePeriods() {
+        ActivityPlanService service = new ActivityPlanService(
+                mock(ActivitySearchService.class),
+                mock(ActivityRankService.class));
+        LocalDate saturday = LocalDate.of(2026, 9, 5);
+        TimeConstraint timeConstraint = new TimeConstraint(
+                "周六下午到晚上",
+                saturday,
+                saturday,
+                LocalTime.of(12, 0),
+                LocalTime.of(23, 0),
+                null
+        );
+
+        assertEquals(
+                List.of("周六下午", "周六晚上"),
+                service.resolveActivityTimes(SlotBundle.empty(), timeConstraint)
+        );
+    }
 
     @Test
     void planSearchShouldPreserveExcludedSlotsAndReuseWeatherRanking() {
