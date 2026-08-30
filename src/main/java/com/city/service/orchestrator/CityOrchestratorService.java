@@ -165,9 +165,14 @@ public class CityOrchestratorService {
         SessionState state = sessionStateService.loadOrCreate(request.sessionId(), userId, request.sourceMode());
         try (AgentTraceService.TraceScope ignored = agentTraceService.openTrace(traceId, state.sessionId(), userId)) {
             RelaxationSearchService.SearchResult result = relaxationSearchService.find(
-                    state.sourceMode(), userId, state.slots(), List.of(), state.timeConstraint(), request.level());
+                    state.sourceMode(), userId, state.slots(), state.excludedSlots(),
+                    List.of(), state.timeConstraint(), request.level());
             agentTraceService.recordEvent("RELAXATION_SELECTED", "SEARCH", request,
-                    traceMap("level", result.level(), "relaxedSlots", result.relaxedSlots(), "querySlots", result.querySlots(), "candidateCount", result.ranked().size()));
+                    traceMap("level", result.level(),
+                            "relaxedSlots", result.relaxedSlots(),
+                            "querySlots", result.querySlots(),
+                            "excludedSlots", state.excludedSlots(),
+                            "candidateCount", result.ranked().size()));
             if (result.ranked().isEmpty()) {
                 throw new CityException("该相近活动方案暂时没有结果，请调整条件");
             }
@@ -370,6 +375,7 @@ public class CityOrchestratorService {
         agentTraceService.recordEvent(
                 "PLAN_CONTEXT_RESOLVED", "PLAN", intent,
                 traceMap("mergedSlots", mergedSlots,
+                        "excludedSlots", planContextState.excludedSlots(),
                         "unconstrainedSlots", planContextState.unconstrainedSlots(),
                         "planActivityTimes", planActivityTimes,
                         "planSlots", planSlots)
@@ -385,8 +391,24 @@ public class CityOrchestratorService {
                                       SessionState state,
                                       List<String> planActivityTimes,
                                       boolean publicFallbackUsed) {
+        WeatherRecommendationContext weather = weatherRecommendationService.resolve(
+                state.slots(), state.timeConstraint());
+        agentTraceService.recordEvent(
+                "PLAN_WEATHER_CONTEXT_RESOLVED",
+                "RANK",
+                traceMap("slots", state.slots(), "timeConstraint", state.timeConstraint()),
+                weather
+        );
+
         List<ActivityPlanService.PlannedActivity> plannedMeals = activityPlanService.planActivities(
-                state.sourceMode(), userId, state.slots(), planActivityTimes, state.timeConstraint());
+                state.sourceMode(),
+                userId,
+                state.slots(),
+                state.excludedSlots(),
+                planActivityTimes,
+                state.timeConstraint(),
+                weather
+        );
 
         List<Map<String, Object>> planTrace = new ArrayList<>();
         for (ActivityPlanService.PlannedActivity planned : plannedMeals) {
@@ -394,12 +416,16 @@ public class CityOrchestratorService {
                     "period", planned.period(),
                     "matched", planned.matched(),
                     "activityId", planned.matched() ? planned.activity().id() : null,
-                    "mealName", planned.matched() ? planned.activity().name() : null
+                    "mealName", planned.matched() ? planned.activity().name() : null,
+                    "matchScore", planned.matched() ? planned.activity().matchScore() : null
             ));
         }
         agentTraceService.recordEvent(
                 "ACTIVITY_PLAN_SEARCHED", "PLAN",
-                Map.of("planActivityTimes", planActivityTimes, "slots", state.slots()),
+                traceMap("planActivityTimes", planActivityTimes,
+                        "slots", state.slots(),
+                        "excludedSlots", state.excludedSlots(),
+                        "weather", weather),
                 Map.of("plannedCount", plannedMeals.size(), "plannedMeals", planTrace)
         );
 
@@ -413,13 +439,20 @@ public class CityOrchestratorService {
         }
 
         RecommendResponseAgentService.Result merged = planResponseAgentService.planAndRespond(
-                sessionId, userInput, state.sourceMode(), state.slots(), plannedMeals);
+                sessionId, userInput, state.sourceMode(), state.slots(), plannedMeals, weather);
         RecommendResult recommend = merged.recommend();
         agentTraceService.recordEvent(
                 "PLAN_RESULT_BUILT", "PLAN",
                 Map.of("strategy", Intent.ACTIVITY_PLAN.name(), "plannedMeals", planTrace), recommend);
 
         ResponseResult response = merged.response();
+        if (weather.active()) {
+            response = new ResponseResult(
+                    weather.summary() + "\n" + response.speechText(),
+                    response.displayBlocks(),
+                    response.nextAction()
+            );
+        }
         if (publicFallbackUsed) {
             response = prependPublicFallbackNotice(response);
             agentTraceService.recordEvent("PUBLIC_FALLBACK_NOTICE_APPLIED", "RESPONSE",
@@ -510,6 +543,7 @@ public class CityOrchestratorService {
                 ? searchRequest
                 : traceMap("selectedRelaxationLevel", selectedRelaxation.level(),
                         "querySlots", selectedRelaxation.querySlots(),
+                        "excludedSlots", state.excludedSlots(),
                         "sourceMode", state.sourceMode(),
                         "timeConstraint", state.timeConstraint());
         agentTraceService.recordEvent("ACTIVITY_SEARCHED", "SEARCH", searchTraceInput,
@@ -554,7 +588,8 @@ public class CityOrchestratorService {
                 }
             } else {
                 List<RelaxationOption> options = relaxationSearchService.options(
-                        state.sourceMode(), userId, state.slots(), excludeActivityIds, state.timeConstraint());
+                        state.sourceMode(), userId, state.slots(), state.excludedSlots(),
+                        excludeActivityIds, state.timeConstraint());
                 if (!options.isEmpty()) {
                     String message = "没有完全匹配的活动。你可以选择查看放宽部分偏好后的相近活动，或保持当前严格条件。";
                     agentTraceService.recordEvent("RELAXATION_OPTIONS_READY", "RECOMMEND", state.slots(), options);
