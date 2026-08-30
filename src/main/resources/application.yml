@@ -29,7 +29,7 @@ qweather:
 
 diet:
   prompt:
-    version: v9
+    version: v10
   rule:
     version: v10
   llm:
