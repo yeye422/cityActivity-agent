@@ -5,8 +5,10 @@ import com.city.enums.Intent;
 import com.city.enums.SessionPhase;
 import com.city.enums.SourceMode;
 import com.city.exception.CityException;
+import com.city.model.ActivityDiversityResult;
 import com.city.model.ActivityItem;
 import com.city.model.ActivityRankRequest;
+import com.city.model.ActivityRankResult;
 import com.city.model.ActivitySearchRequest;
 import com.city.model.ChatRequest;
 import com.city.model.ChatResponse;
@@ -23,6 +25,7 @@ import com.city.model.SlotMutation;
 import com.city.model.TimeConstraint;
 import com.city.model.TimeResolutionResult;
 import com.city.model.WeatherRecommendationContext;
+import com.city.service.activity.ActivityDiversityService;
 import com.city.service.activity.ActivityRankService;
 import com.city.service.activity.ActivitySearchService;
 import com.city.service.activity.ActivityService;
@@ -71,6 +74,7 @@ public class CityOrchestratorService {
     private final ClarifyAgentService clarifyAgentService;
     private final ActivitySearchService activitySearchService;
     private final ActivityRankService activityRankService;
+    private final ActivityDiversityService activityDiversityService;
     private final RecommendResponseAgentService recommendResponseAgentService;
     private final ActivityPlanService activityPlanService;
     private final PlanResponseAgentService planResponseAgentService;
@@ -93,6 +97,7 @@ public class CityOrchestratorService {
             ClarifyAgentService clarifyAgentService,
             ActivitySearchService activitySearchService,
             ActivityRankService activityRankService,
+            ActivityDiversityService activityDiversityService,
             RecommendResponseAgentService recommendResponseAgentService,
             ActivityPlanService activityPlanService,
             PlanResponseAgentService planResponseAgentService,
@@ -113,6 +118,7 @@ public class CityOrchestratorService {
         this.clarifyAgentService = clarifyAgentService;
         this.activitySearchService = activitySearchService;
         this.activityRankService = activityRankService;
+        this.activityDiversityService = activityDiversityService;
         this.recommendResponseAgentService = recommendResponseAgentService;
         this.activityPlanService = activityPlanService;
         this.planResponseAgentService = planResponseAgentService;
@@ -509,8 +515,11 @@ public class CityOrchestratorService {
         agentTraceService.recordEvent("ACTIVITY_SEARCHED", "SEARCH", searchTraceInput,
                 Map.of("candidateCount", candidates.size(), "candidates", candidates));
 
-        List<ActivityItem> ranked = activityRankService.rank(new ActivityRankRequest(candidates, state.slots(), excludeActivityIds), weather);
-        agentTraceService.recordEvent("ACTIVITY_RANKED", "RANK", Map.of("excludeActivityIds", excludeActivityIds), Map.of("rankedCount", ranked.size(), "ranked", ranked));
+        ActivityRankRequest rankRequest = new ActivityRankRequest(
+                candidates, state.slots(), state.timeConstraint(), excludeActivityIds);
+        ActivityDiversityResult rankedResult = rankAndDiversify(
+                "ACTIVITY_RANKED", "ACTIVITY_DIVERSIFIED", rankRequest, weather);
+        List<ActivityItem> ranked = rankedResult.ranked();
 
         if (ranked.isEmpty()) {
             if (state.sourceMode() == SourceMode.PERSONAL) {
@@ -522,11 +531,15 @@ public class CityOrchestratorService {
                 List<ActivityItem> publicCandidates = activitySearchService.search(publicSearchRequest);
                 agentTraceService.recordEvent("ACTIVITY_SEARCHED_PUBLIC_FALLBACK", "SEARCH", publicSearchRequest,
                         Map.of("candidateCount", publicCandidates.size(), "candidates", publicCandidates));
-                List<ActivityItem> publicRanked = activityRankService.rank(
-                        new ActivityRankRequest(publicCandidates, state.slots(), excludeActivityIds), weather);
-                agentTraceService.recordEvent("ACTIVITY_RANKED_PUBLIC_FALLBACK", "RANK",
-                        Map.of("excludeActivityIds", excludeActivityIds),
-                        Map.of("rankedCount", publicRanked.size(), "ranked", publicRanked));
+
+                ActivityRankRequest publicRankRequest = new ActivityRankRequest(
+                        publicCandidates, state.slots(), state.timeConstraint(), excludeActivityIds);
+                ActivityDiversityResult publicRankedResult = rankAndDiversify(
+                        "ACTIVITY_RANKED_PUBLIC_FALLBACK",
+                        "ACTIVITY_DIVERSIFIED_PUBLIC_FALLBACK",
+                        publicRankRequest,
+                        weather);
+                List<ActivityItem> publicRanked = publicRankedResult.ranked();
                 if (!publicRanked.isEmpty()) {
                     ranked = publicRanked;
                     state = state.withSourceMode(SourceMode.PUBLIC);
@@ -598,6 +611,36 @@ public class CityOrchestratorService {
                 ChatResponse.answer(sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction()), savedState);
         agentTraceService.recordEvent("RESPONSE_READY", "RESPONSE", savedState, chatResponse);
         return chatResponse;
+    }
+
+    private ActivityDiversityResult rankAndDiversify(String rankEvent,
+                                                     String diversityEvent,
+                                                     ActivityRankRequest rankRequest,
+                                                     WeatherRecommendationContext weather) {
+        ActivityRankResult rankResult = activityRankService.rank(rankRequest, weather);
+        agentTraceService.recordEvent(
+                rankEvent,
+                "RANK",
+                rankRequest,
+                traceMap(
+                        "rankedCount", rankResult.ranked().size(),
+                        "scores", rankResult.scores(),
+                        "ranked", rankResult.ranked()
+                )
+        );
+
+        ActivityDiversityResult diversityResult = activityDiversityService.rerank(rankResult.ranked());
+        agentTraceService.recordEvent(
+                diversityEvent,
+                "RANK",
+                traceMap("nearTieThreshold", 0.03, "relevanceRanked", rankResult.ranked()),
+                traceMap(
+                        "rankedCount", diversityResult.ranked().size(),
+                        "decisions", diversityResult.decisions(),
+                        "ranked", diversityResult.ranked()
+                )
+        );
+        return diversityResult;
     }
 
     static ResponseResult prependPublicFallbackNotice(ResponseResult response) {
