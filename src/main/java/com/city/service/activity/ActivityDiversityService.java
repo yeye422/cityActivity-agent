@@ -29,8 +29,8 @@ public class ActivityDiversityService {
         List<ActivityItem> remaining = relevanceRanked.stream()
                 .filter(item -> item != null)
                 .sorted(Comparator
-                        .comparingDouble(ActivityItem::matchScore).reversed()
-                        .thenComparing(ActivityItem::id, Comparator.nullsLast(Long::compareTo)))
+                        .comparingDouble((ActivityItem item) -> item.matchScore()).reversed()
+                        .thenComparing((ActivityItem item) -> item.id(), Comparator.nullsLast(Long::compareTo)))
                 .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
         List<ActivityItem> selected = new ArrayList<>();
         List<ActivityDiversityDecision> decisions = new ArrayList<>();
