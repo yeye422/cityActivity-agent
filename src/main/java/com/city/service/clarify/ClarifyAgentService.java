@@ -10,7 +10,6 @@ import io.agentscope.core.message.Msg;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -43,11 +42,7 @@ public class ClarifyAgentService {
                                 SlotBundle slots,
                                 TimeConstraint timeConstraint,
                                 Set<String> unconstrainedSlots) {
-        Set<String> effectiveUnconstrained = new LinkedHashSet<>(
-                unconstrainedSlots == null ? Set.of() : unconstrainedSlots);
-        effectiveUnconstrained.addAll(inferCurrentTurnUnconstrained(userInput, slots, timeConstraint));
-
-        List<String> missingSlots = clarifyRuleService.missingSlots(slots, timeConstraint, effectiveUnconstrained);
+        List<String> missingSlots = clarifyRuleService.missingSlots(slots, timeConstraint, unconstrainedSlots);
         if (missingSlots.isEmpty()) {
             return ClarifyResult.ready();
         }
@@ -72,37 +67,6 @@ public class ClarifyAgentService {
         } catch (Exception ignored) {
             return ClarifyResult.ask(clarifyRuleService.fallbackQuestion(missingSlots, timeConstraint), missingSlots);
         }
-    }
-
-    public ClarifyResult decide(String sessionId, String userInput, SlotBundle slots, TimeConstraint timeConstraint) {
-        return decide(sessionId, userInput, slots, timeConstraint, Set.of());
-    }
-
-    public ClarifyResult decide(String sessionId, String userInput, SlotBundle slots) {
-        return decide(sessionId, userInput, slots, TimeConstraint.empty(), Set.of());
-    }
-
-    /**
-     * 兼容尚未把 unconstrainedSlots 传入的调用链：
-     * 当预算是当前唯一自然缺失项时，“不限”可确定地解释为预算不限。
-     */
-    private Set<String> inferCurrentTurnUnconstrained(String userInput,
-                                                      SlotBundle slots,
-                                                      TimeConstraint timeConstraint) {
-        String text = userInput == null ? "" : userInput.replaceAll("\\s+", "");
-        if (text.isBlank()) return Set.of();
-
-        if (text.contains("预算不限") || text.contains("不限制预算")) {
-            return Set.of("budget");
-        }
-
-        if (text.equals("不限") || text.equals("都行") || text.equals("无所谓")) {
-            List<String> withoutExplicitClear = clarifyRuleService.missingSlots(slots, timeConstraint, Set.of());
-            if (withoutExplicitClear.size() == 1 && withoutExplicitClear.contains("budget")) {
-                return Set.of("budget");
-            }
-        }
-        return Set.of();
     }
 
     private String buildUserPrompt(String userInput, SlotBundle slots, List<String> missingSlots) {
