@@ -92,7 +92,7 @@ class CityOrchestratorServiceTest {
     private SessionState state(TimeConstraint timeConstraint, Set<String> unconstrainedSlots) {
         SlotBundle slots = new SlotBundle(
                 List.of("西安"), List.of(), List.of(), List.of(),
-                List.of(), List.of(), List.of(), List.of());
+                List.of(), List.of(), List.of(), List.of(), List.of("室内"));
         return new SessionState(
                 "sess_test",
                 1L,
@@ -104,6 +104,7 @@ class CityOrchestratorServiceTest {
                 unconstrainedSlots,
                 timeConstraint,
                 "",
+                null,
                 List.of(14L, 15L)
         );
     }

@@ -80,32 +80,4 @@ class SessionStateServiceTest {
         assertEquals("独处", persisted.path("companion").get(0).asText());
     }
 
-    @Test
-    void loadShouldReadLegacyMoodAndSceneIntoNewSlotNames() {
-        SessionMapper mapper = mock(SessionMapper.class);
-        ObjectMapper objectMapper = JsonMapper.builder().findAndAddModules().build();
-        SessionStateService service = new SessionStateService(mapper, objectMapper);
-
-        SessionRow row = new SessionRow();
-        row.setId("sess_legacy");
-        row.setUserId(1L);
-        row.setPhase("RECOMMEND");
-        row.setSlots("""
-                {
-                  "city":["西安"],
-                  "mood":["放松"],
-                  "scene":["朋友"],
-                  "duration":["半天"],
-                  "_meta":{"sourceMode":"PUBLIC"}
-                }
-                """);
-        row.setLastRecommendedActivityIds("[]");
-        when(mapper.findById("sess_legacy", 1L)).thenReturn(row);
-
-        SessionState state = service.loadExisting("sess_legacy", 1L);
-
-        assertEquals(List.of("放松"), state.slots().experienceGoal());
-        assertEquals(List.of("朋友"), state.slots().companion());
-        assertEquals(List.of(), state.slots().feature());
-    }
 }

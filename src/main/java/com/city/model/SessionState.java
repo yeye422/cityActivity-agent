@@ -45,24 +45,6 @@ public class SessionState {
     private List<Long> lastRecommendedActivityIds;
 
     /**
-     * 兼容已有调用方的旧构造参数；新增的 pendingRelaxationContext 默认为空。
-     */
-    public SessionState(String sessionId,
-                        Long userId,
-                        SessionPhase phase,
-                        SourceMode sourceMode,
-                        Intent currentIntent,
-                        SlotBundle slots,
-                        SlotBundle excludedSlots,
-                        Set<String> unconstrainedSlots,
-                        TimeConstraint timeConstraint,
-                        String recommendationQueryKey,
-                        List<Long> lastRecommendedActivityIds) {
-        this(sessionId, userId, phase, sourceMode, currentIntent, slots, excludedSlots,
-                unconstrainedSlots, timeConstraint, recommendationQueryKey, null, lastRecommendedActivityIds);
-    }
-
-    /**
      * 创建一个新的空状态。
      * 该工厂方法用于数据库首次创建会话或旧数据缺少元信息时兜底。
      */

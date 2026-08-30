@@ -67,7 +67,7 @@ duration 中的“室内/户外/近距离/少排队/交通方便” -> feature
 半天/全天继续保留为 duration 时长标签
 ```
 
-旧 SessionState JSON 中的 `mood/scene` 也会在读取时兼容映射到 `experienceGoal/companion`，下一次保存后统一使用新字段名。
+迁移完成后，接口、会话状态与活动数据均只接受 `experienceGoal/companion`，不再读取旧的 `mood/scene` 字段。
 
 如果数据库已经存在但报 `Table 'city_db.activity_item' doesn't exist`，重新执行初始化脚本；评估迁移会在活动表缺失时自动补建相关表，但不会自动插入完整演示活动数据。
 

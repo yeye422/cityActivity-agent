@@ -4,7 +4,6 @@ import java.util.List;
 import java.time.LocalDate;
 import java.time.LocalTime;
 
-import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 
 import lombok.AllArgsConstructor;
@@ -21,9 +20,7 @@ public class ActivityRequest {
     private String name;
     private List<String> city;
     private List<String> location;
-    @JsonAlias("mood")
     private List<String> experienceGoal;
-    @JsonAlias("scene")
     private List<String> companion;
     private List<String> budget;
     private List<String> activityType;

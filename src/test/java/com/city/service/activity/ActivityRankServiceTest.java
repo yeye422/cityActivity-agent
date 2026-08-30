@@ -135,7 +135,7 @@ class ActivityRankServiceTest {
 
     private ActivityItem activity(Long id, String name, SlotBundle slots, LocalTime start, LocalTime end) {
         return new ActivityItem(id, SourceMode.PUBLIC, null, name, slots,
-                null, null, start, end, 0.0);
+                null, null, start, end, null, 0.0);
     }
 
     private SlotBundle slots(List<String> city,

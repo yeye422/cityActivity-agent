@@ -284,7 +284,7 @@ public class CityOrchestratorService {
         return slotOptionService.sanitize(new SlotBundle(
                 city.isBlank() ? List.of() : List.of(city),
                 location.isBlank() ? List.of() : List.of(location),
-                List.of(), List.of(), List.of(), List.of(), List.of(), List.of()
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of()
         ));
     }
 
@@ -295,7 +295,7 @@ public class CityOrchestratorService {
                 context.city().isEmpty() ? historical.city() : context.city(),
                 context.location().isEmpty() ? historical.location() : context.location(),
                 historical.experienceGoal(), historical.companion(), historical.budget(), historical.activityType(),
-                historical.style(), historical.duration()
+                historical.style(), historical.duration(), historical.feature()
         );
         Set<String> unconstrained = new LinkedHashSet<>(
                 state.unconstrainedSlots() == null ? Set.of() : state.unconstrainedSlots());
@@ -395,7 +395,8 @@ public class CityOrchestratorService {
         List<String> planActivityTimes = activityPlanService.resolveActivityTimes(mergedSlots, planContextState.timeConstraint());
         SlotBundle planSlots = new SlotBundle(
                 mergedSlots.city(), mergedSlots.location(), mergedSlots.experienceGoal(), mergedSlots.companion(),
-                mergedSlots.budget(), mergedSlots.activityType(), mergedSlots.style(), mergedSlots.duration()
+                mergedSlots.budget(), mergedSlots.activityType(), mergedSlots.style(), mergedSlots.duration(),
+                mergedSlots.feature()
         );
         agentTraceService.recordEvent(
                 "PLAN_CONTEXT_RESOLVED", "PLAN", intent,

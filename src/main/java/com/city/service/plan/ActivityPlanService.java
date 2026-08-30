@@ -59,12 +59,6 @@ public class ActivityPlanService {
         this.activitySessionService = activitySessionService;
     }
 
-    /** 兼容旧单元测试/手工构造；无 SessionService 时只是不做场次明细增强。 */
-    public ActivityPlanService(ActivitySearchService activitySearchService,
-                               ActivityRankService activityRankService) {
-        this(activitySearchService, activityRankService, null);
-    }
-
     /**
      * 例如 12:00~23:00 会拆成 12-14、14-16、16-18、18-20、20-23，
      * 给 PlanResponseAgent 更大的合法组合空间。

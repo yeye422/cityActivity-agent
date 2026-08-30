@@ -61,6 +61,6 @@ class ActivityDiversityServiceTest {
                 List.of(), List.of(activityType), List.of(), List.of());
         return new ActivityItem(
                 id, SourceMode.PUBLIC, null, name, slots,
-                null, null, start, start.plusHours(2), score);
+                null, null, start, start.plusHours(2), null, score);
     }
 }

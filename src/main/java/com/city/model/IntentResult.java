@@ -19,7 +19,7 @@ import java.util.List;
 public class IntentResult {
     /** 当前用户输入的意图。 */
     private Intent intent;
-    /** 当前输入抽取出的标准 8 槽位。 */
+    /** 当前输入抽取出的标准九维槽位。 */
     private SlotBundle slots;
     /** LLM 对分类结果的置信度；fallback 结果通常较低。 */
     private double confidence;

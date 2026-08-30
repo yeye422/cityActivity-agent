@@ -33,6 +33,7 @@ class RecommendResponseAgentServiceTest {
                 LocalDate.of(2026, 12, 31),
                 LocalTime.of(13, 30),
                 LocalTime.of(17, 30),
+                null,
                 0.88
         );
         RecommendedActivityOption option = new RecommendedActivityOption(
@@ -73,6 +74,7 @@ class RecommendResponseAgentServiceTest {
                 null,
                 LocalTime.of(13, 30),
                 LocalTime.of(17, 30),
+                null,
                 0.88
         );
         RecommendedActivityOption invented = new RecommendedActivityOption(

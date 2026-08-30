@@ -91,8 +91,8 @@ public class SessionStateService {
             SlotBundle slots = new SlotBundle(
                     readStringList(root, "city"),
                     readStringList(root, "location"),
-                    readStringListWithLegacy(root, "experienceGoal", "mood"),
-                    readStringListWithLegacy(root, "companion", "scene"),
+                    readStringList(root, "experienceGoal"),
+                    readStringList(root, "companion"),
                     readStringList(root, "budget"),
                     readStringList(root, "activityType"),
                     readStringList(root, "style"),
@@ -186,12 +186,6 @@ public class SessionStateService {
             return List.of();
         }
         return objectMapper.readValue(node.toString(), STRING_LIST);
-    }
-
-    /** 兼容旧会话 JSON 中 mood/scene 字段；一旦保存会统一写成新九维字段名。 */
-    private List<String> readStringListWithLegacy(JsonNode root, String field, String legacyField) throws Exception {
-        List<String> current = readStringList(root, field);
-        return current.isEmpty() ? readStringList(root, legacyField) : current;
     }
 
     private List<Long> parseLongList(String json) throws Exception {

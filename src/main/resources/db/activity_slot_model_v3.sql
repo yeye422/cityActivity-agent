@@ -106,6 +106,11 @@ WHERE JSON_CONTAINS(duration, JSON_QUOTE('交通方便'));
 UPDATE activity_item SET duration = JSON_REMOVE(duration, JSON_UNQUOTE(JSON_SEARCH(duration, 'one', '交通方便')))
 WHERE JSON_SEARCH(duration, 'one', '交通方便') IS NOT NULL;
 
+-- 历史“室外”统一为标准标签“户外”，避免与 slot option 不匹配。
+UPDATE activity_item
+SET feature = JSON_REPLACE(feature, JSON_UNQUOTE(JSON_SEARCH(feature, 'one', '室外')), '户外')
+WHERE JSON_SEARCH(feature, 'one', '室外') IS NOT NULL;
+
 -- 旧时长标签给一个规划可用的软回填；后续活动维护应优先填写真实 duration_minutes。
 UPDATE activity_item SET duration_minutes = 240
 WHERE duration_minutes IS NULL AND JSON_CONTAINS(duration, JSON_QUOTE('半天'));
@@ -121,6 +126,8 @@ UPDATE city_slot_option SET slot_name = 'feature'
 WHERE slot_name = 'location' AND option_value = '近地铁';
 UPDATE city_slot_option SET slot_name = 'feature'
 WHERE slot_name = 'duration' AND option_value IN ('室内', '户外', '室外', '近距离', '少排队', '交通方便');
+DELETE FROM city_slot_option
+WHERE slot_name = 'feature' AND option_value = '室外';
 
 INSERT INTO city_slot_option(slot_name, option_value, sort_order, enabled, created_at, updated_at)
 SELECT 'duration', '1小时内', 10, 1, NOW(), NOW()

@@ -34,7 +34,8 @@ class ActivityPlanServiceTest {
     void shouldResolveAfternoonToEveningAsFinePlanWindows() {
         ActivityPlanService service = new ActivityPlanService(
                 mock(ActivitySearchService.class),
-                mock(ActivityRankService.class));
+                mock(ActivityRankService.class),
+                mock(ActivitySessionService.class));
         TimeConstraint timeConstraint = new TimeConstraint(
                 "下午到晚上",
                 null,
@@ -59,7 +60,8 @@ class ActivityPlanServiceTest {
     void shouldPreserveWeekendPrefixForFineWindows() {
         ActivityPlanService service = new ActivityPlanService(
                 mock(ActivitySearchService.class),
-                mock(ActivityRankService.class));
+                mock(ActivityRankService.class),
+                mock(ActivitySessionService.class));
         LocalDate saturday = LocalDate.of(2026, 9, 5);
         TimeConstraint timeConstraint = new TimeConstraint(
                 "周六下午到晚上",
@@ -85,7 +87,7 @@ class ActivityPlanServiceTest {
     void planSearchShouldPreserveNineDimensionsAndReuseWeatherRanking() {
         ActivitySearchService searchService = mock(ActivitySearchService.class);
         ActivityRankService rankService = mock(ActivityRankService.class);
-        ActivityPlanService service = new ActivityPlanService(searchService, rankService);
+        ActivityPlanService service = new ActivityPlanService(searchService, rankService, mock(ActivitySessionService.class));
 
         SlotBundle querySlots = new SlotBundle(
                 List.of("上海"), List.of("徐汇"), List.of("放松"), List.of("独处"),
