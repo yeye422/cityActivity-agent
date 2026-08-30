@@ -135,8 +135,7 @@ public class AgentTraceService {
                 ? null : request.expectedIntent().name();
         String expectedSlots = request.expectedSlots() == null
                 ? null : toTraceJson(request.expectedSlots());
-        String expectedClarifyAction = request.expectedClarifyAction() == null
-                ? null : request.expectedClarifyAction().name();
+        String expectedClarifyAction = request.expectedClarifyAction();
         int updated = agentTraceMapper.updateLabel(
                 userId,
                 traceId,

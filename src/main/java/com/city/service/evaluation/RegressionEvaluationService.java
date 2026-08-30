@@ -1,7 +1,6 @@
 package com.city.service.evaluation;
 
 import com.city.exception.CityException;
-import com.city.enums.ClarifyAction;
 import com.city.enums.Intent;
 import com.city.enums.SourceMode;
 import com.city.model.ChatRequest;
@@ -162,7 +161,9 @@ public class RegressionEvaluationService {
 
     private TraceLabelRequest labelOf(JsonNode testCase) throws Exception {
         Intent intent = parseEnum(Intent.class, testCase.path("expectedIntent").asText(null));
-        ClarifyAction clarify = parseEnum(ClarifyAction.class, testCase.path("expectedClarifyAction").asText(null));
+        String clarify = testCase.path("expectedClarifyAction").asText(null);
+        if (clarify != null) clarify = clarify.trim();
+        if (clarify != null && clarify.isBlank()) clarify = null;
         SlotBundle slots = testCase.path("expectedSlots").isObject()
                 ? objectMapper.treeToValue(testCase.path("expectedSlots"), SlotBundle.class)
                 : null;
