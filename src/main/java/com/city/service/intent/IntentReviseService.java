@@ -1,41 +1,26 @@
 package com.city.service.intent;
 
-import com.city.enums.ConstraintOperationType;
 import com.city.enums.Intent;
 import com.city.enums.SessionPhase;
-import com.city.model.ConstraintOperation;
 import com.city.model.IntentResult;
 import com.city.model.SessionState;
 import com.city.model.SlotBundle;
 import com.city.model.TemporalMutation;
-import com.city.model.TimeConstraint;
-import com.city.service.time.TemporalValidator;
-import com.city.service.time.TimeMutationService;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
  * 意图后处理服务。
- * LLM 意图识别可能误判，Orchestrator 在路由前用历史 SessionState 做二次矫正。
+ * 只负责根据历史会话状态修正 intent；时间解析与时间状态合并由 Orchestrator 的时间链路单独处理。
  */
 @Service
 public class IntentReviseService {
 
     private static final double LOW_CONFIDENCE_THRESHOLD = 0.4;
 
-    private final TimeMutationService timeMutationService;
-    private final TemporalValidator temporalValidator;
-
-    public IntentReviseService(TimeMutationService timeMutationService, TemporalValidator temporalValidator) {
-        this.timeMutationService = timeMutationService;
-        this.temporalValidator = temporalValidator;
-    }
-
     public IntentResult revise(SessionState state, IntentResult result, String userInput) {
         IntentResult safeResult = result == null ? IntentResult.clarify(SlotBundle.empty()) : result;
-        safeResult = bridgeTemporalMutation(state, safeResult);
 
         if (safeResult.intent() == Intent.HEALTH_RISK || containsSafetyRiskKeyword(userInput)) {
             return revised(Intent.HEALTH_RISK, safeResult);
@@ -63,67 +48,6 @@ public class IntentReviseService {
         }
 
         return safeResult;
-    }
-
-    /**
-     * 兼容现有 Orchestrator：先在这里按 KEEP/SET/CLEAR 合并出完整 TimeConstraint，
-     * 再转换为旧的 time SET/CLEAR operation。这样无需一次性重写编排主链路。
-     */
-    private IntentResult bridgeTemporalMutation(SessionState state, IntentResult result) {
-        TemporalMutation temporal = result.temporal();
-        if (temporal == null || !temporal.changesAnything() || !temporalValidator.isValid(temporal)) {
-            return result;
-        }
-
-        TimeConstraint historical = state == null ? TimeConstraint.empty() : state.timeConstraint();
-        TimeConstraint merged = timeMutationService.apply(historical, temporal);
-
-        List<ConstraintOperation> operations = new ArrayList<>();
-        if (result.operations() != null) {
-            result.operations().stream()
-                    .filter(operation -> operation != null && !"time".equals(operation.field()))
-                    .forEach(operations::add);
-        }
-
-        if (merged.hasConstraint()) {
-            operations.add(new ConstraintOperation(
-                    "time", ConstraintOperationType.SET, List.of(), toParserExpression(temporal.raw(), merged)));
-        } else {
-            operations.add(new ConstraintOperation(
-                    "time", ConstraintOperationType.CLEAR, List.of(), temporal.raw() == null ? "" : temporal.raw()));
-        }
-
-        return new IntentResult(
-                result.intent(), safeSlots(result), result.confidence(), List.copyOf(operations), temporal);
-    }
-
-    /**
-     * 将完整绝对约束转换为现有 TimeExpressionParser 能稳定识别的表达式。
-     * 前缀保留用户原始时间片段，使 Trace 与既有 expectedTime 回归标注仍可直接比对。
-     */
-    private String toParserExpression(String originalRaw, TimeConstraint time) {
-        StringBuilder value = new StringBuilder();
-        if (originalRaw != null && !originalRaw.isBlank()) {
-            value.append(originalRaw.trim()).append(' ');
-        }
-        if (time.hasDate()) {
-            if (time.dateStart().equals(time.dateEnd())) {
-                value.append(time.dateStart().getYear()).append("年")
-                        .append(time.dateStart().getMonthValue()).append("月")
-                        .append(time.dateStart().getDayOfMonth()).append("日");
-            } else {
-                value.append(time.dateStart().getYear()).append("年")
-                        .append(time.dateStart().getMonthValue()).append("月")
-                        .append(time.dateStart().getDayOfMonth()).append("日到")
-                        .append(time.dateEnd().getMonthValue()).append("月")
-                        .append(time.dateEnd().getDayOfMonth()).append("日");
-            }
-        }
-        if (time.hasTime()) {
-            if (!value.isEmpty() && value.charAt(value.length() - 1) != ' ') value.append(' ');
-            value.append(time.startTime()).append("到").append(time.endTime());
-        }
-        return value.toString().trim();
     }
 
     private boolean hasLastRecommendations(SessionState state) {
