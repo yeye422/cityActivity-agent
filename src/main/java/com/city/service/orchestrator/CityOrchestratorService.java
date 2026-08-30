@@ -1,6 +1,6 @@
 package com.city.service.orchestrator;
 
-import com.city.enums.ClarifyAction;
+import com.city.enums.ClarifyField;
 import com.city.enums.Intent;
 import com.city.enums.SessionPhase;
 import com.city.enums.SourceMode;
@@ -12,7 +12,6 @@ import com.city.model.ActivityRankResult;
 import com.city.model.ActivitySearchRequest;
 import com.city.model.ChatRequest;
 import com.city.model.ChatResponse;
-import com.city.model.ClarifyResult;
 import com.city.model.IntentResult;
 import com.city.model.RecommendResult;
 import com.city.model.RelaxationContext;
@@ -31,7 +30,7 @@ import com.city.service.activity.ActivityRankService;
 import com.city.service.activity.ActivitySearchService;
 import com.city.service.activity.ActivityService;
 import com.city.service.activity.RelaxationSearchService;
-import com.city.service.clarify.ClarifyAgentService;
+import com.city.service.clarify.ClarifyRuleService;
 import com.city.service.intent.IntentAgentService;
 import com.city.service.intent.IntentReviseService;
 import com.city.service.plan.ActivityPlanService;
@@ -62,7 +61,6 @@ import java.util.concurrent.ConcurrentHashMap;
 public class CityOrchestratorService {
 
     private static final String CHITCHAT_REPLY = "我是城市周末活动助手，帮你发现周末好去处。你可以告诉我时间、预算、想要的氛围，比如「周六和朋友，预算200以内，想放松」。";
-    private static final String TIME_CLARIFY_QUESTION = "我没能准确理解你的时间要求。可以说得更具体一点吗？例如「下周六下午3点」或「晚上7点到9点」。";
 
     private final SessionService sessionService;
     private final SessionStateService sessionStateService;
@@ -71,7 +69,7 @@ public class CityOrchestratorService {
     private final SlotMergeService slotMergeService;
     private final SlotOptionService slotOptionService;
     private final SlotMutationService slotMutationService;
-    private final ClarifyAgentService clarifyAgentService;
+    private final ClarifyRuleService clarifyRuleService;
     private final ActivitySearchService activitySearchService;
     private final ActivityRankService activityRankService;
     private final ActivityDiversityService activityDiversityService;
@@ -94,7 +92,7 @@ public class CityOrchestratorService {
             SlotMergeService slotMergeService,
             SlotOptionService slotOptionService,
             SlotMutationService slotMutationService,
-            ClarifyAgentService clarifyAgentService,
+            ClarifyRuleService clarifyRuleService,
             ActivitySearchService activitySearchService,
             ActivityRankService activityRankService,
             ActivityDiversityService activityDiversityService,
@@ -115,7 +113,7 @@ public class CityOrchestratorService {
         this.slotMergeService = slotMergeService;
         this.slotOptionService = slotOptionService;
         this.slotMutationService = slotMutationService;
-        this.clarifyAgentService = clarifyAgentService;
+        this.clarifyRuleService = clarifyRuleService;
         this.activitySearchService = activitySearchService;
         this.activityRankService = activityRankService;
         this.activityDiversityService = activityDiversityService;
@@ -196,7 +194,8 @@ public class CityOrchestratorService {
                     throw new CityException("该相近活动方案暂时没有结果，请重新获取相近活动方案");
                 }
 
-                SessionState selectedState = effectiveState.withPendingRelaxationContext(null);
+                SessionState selectedState = effectiveState.withPendingRelaxationContext(null)
+                        .withPendingClarifyField(null);
                 return completeRecommendation(
                         selectedState.sessionId(), userId, "查看相近活动：" + result.label(), traceId,
                         selectedState, context.excludeActivityIds(), result);
@@ -243,7 +242,7 @@ public class CityOrchestratorService {
             agentTraceService.recordEvent("TIME_PARSE_CLARIFY", "TIME", request.message(), timeResolution);
             SessionState clarifyState = state.withIntent(intent.intent());
             return completeAsk(sessionId, traceId, clarifyState,
-                    ClarifyResult.ask(TIME_CLARIFY_QUESTION, List.of("time")));
+                    ClarifyField.TIME, clarifyRuleService.questionFor(ClarifyField.TIME));
         }
 
         if (timeResolution.shouldUpdateState()) {
@@ -327,25 +326,43 @@ public class CityOrchestratorService {
                 .withSlots(mergedSlots)
                 .withExcludedSlots(mutation.excluded())
                 .withUnconstrainedSlots(mutation.unconstrained());
-        ClarifyResult clarify = clarifyAgentService.decide(
-                sessionId, userInput, mergedSlots, workingState.timeConstraint(), workingState.unconstrainedSlots());
+        ClarifyField missingField = firstMissingRequiredField(
+                Intent.MEAL_RECOMMENDATION, workingState);
         agentTraceService.recordEvent("CLARIFY_DECISION", "CLARIFY",
-                traceMap("slots", mergedSlots, "unconstrainedSlots", workingState.unconstrainedSlots()), clarify);
-        if (clarify.action() == ClarifyAction.ASK) {
-            return completeAsk(sessionId, traceId, workingState, clarify);
+                traceMap("slots", mergedSlots,
+                        "timeConstraint", workingState.timeConstraint(),
+                        "pendingClarifyField", workingState.pendingClarifyField()),
+                traceMap("missingField", missingField == null ? null : missingField.key()));
+        if (missingField != null) {
+            return completeAsk(sessionId, traceId, workingState,
+                    missingField, clarifyRuleService.questionFor(missingField));
         }
         return completeRecommendation(sessionId, userId, userInput, traceId,
-                workingState.withPhase(SessionPhase.RECOMMEND), List.of(), publicFallbackUsed);
+                workingState.withPendingClarifyField(null).withPhase(SessionPhase.RECOMMEND),
+                List.of(), publicFallbackUsed);
     }
 
-    private ChatResponse completeAsk(String sessionId, String traceId, SessionState workingState, ClarifyResult clarify) {
+    private ClarifyField firstMissingRequiredField(Intent intent, SessionState state) {
+        List<ClarifyField> missing = clarifyRuleService.missingRequiredFields(
+                intent, state.slots(), state.timeConstraint());
+        return missing.isEmpty() ? null : missing.getFirst();
+    }
+
+    private ChatResponse completeAsk(String sessionId,
+                                     String traceId,
+                                     SessionState workingState,
+                                     ClarifyField field,
+                                     String question) {
         SessionState clarifyState = workingState.withPhase(SessionPhase.CLARIFY)
+                .withPendingClarifyField(field)
                 .withPendingRelaxationContext(null);
         sessionStateService.save(clarifyState);
-        sessionService.appendMessage(sessionId, "assistant", clarify.questionToAsk(), Intent.CLARIFY_NEEDED.name(), traceId);
+        sessionService.appendMessage(sessionId, "assistant", question, Intent.CLARIFY_NEEDED.name(), traceId);
+        List<String> missingSlots = List.of(field.key());
         ChatResponse response = withConversationContext(
-                ChatResponse.clarify(sessionId, traceId, clarify.questionToAsk(), clarify.missingSlots()), clarifyState);
-        agentTraceService.recordEvent("RESPONSE_READY", "CLARIFY", clarify, response);
+                ChatResponse.clarify(sessionId, traceId, question, missingSlots), clarifyState);
+        agentTraceService.recordEvent("RESPONSE_READY", "CLARIFY",
+                traceMap("field", field.key(), "question", question), response);
         return response;
     }
 
@@ -358,9 +375,20 @@ public class CityOrchestratorService {
         SessionState workingState = state.withIntent(Intent.MEAL_ADJUST)
                 .withSlots(mergedSlots)
                 .withExcludedSlots(mutation.excluded())
-                .withUnconstrainedSlots(mutation.unconstrained())
-                .withPhase(SessionPhase.RECOMMEND);
+                .withUnconstrainedSlots(mutation.unconstrained());
 
+        ClarifyField missingField = firstMissingRequiredField(
+                Intent.MEAL_RECOMMENDATION, workingState);
+        if (missingField != null) {
+            agentTraceService.recordEvent("ADJUST_CLARIFY_DECISION", "CLARIFY",
+                    traceMap("slots", mergedSlots, "timeConstraint", workingState.timeConstraint()),
+                    traceMap("missingField", missingField.key()));
+            return completeAsk(sessionId, traceId, workingState,
+                    missingField, clarifyRuleService.questionFor(missingField));
+        }
+
+        workingState = workingState.withPendingClarifyField(null)
+                .withPhase(SessionPhase.RECOMMEND);
         String currentQueryKey = recommendationQueryKey(workingState);
         boolean queryChanged = !currentQueryKey.equals(state.recommendationQueryKey());
         List<Long> excludeActivityIds = queryChanged || state.lastRecommendedActivityIds() == null
@@ -384,12 +412,16 @@ public class CityOrchestratorService {
                 .withSlots(mergedSlots)
                 .withExcludedSlots(mutation.excluded())
                 .withUnconstrainedSlots(mutation.unconstrained());
-        ClarifyResult clarify = clarifyAgentService.decide(
-                sessionId, userInput, mergedSlots, planContextState.timeConstraint(), planContextState.unconstrainedSlots());
+
+        ClarifyField missingField = firstMissingRequiredField(Intent.ACTIVITY_PLAN, planContextState);
         agentTraceService.recordEvent("PLAN_CLARIFY_DECISION", "CLARIFY",
-                traceMap("slots", mergedSlots, "unconstrainedSlots", planContextState.unconstrainedSlots()), clarify);
-        if (clarify.action() == ClarifyAction.ASK) {
-            return completeAsk(sessionId, traceId, planContextState, clarify);
+                traceMap("slots", mergedSlots,
+                        "timeConstraint", planContextState.timeConstraint(),
+                        "pendingClarifyField", planContextState.pendingClarifyField()),
+                traceMap("missingField", missingField == null ? null : missingField.key()));
+        if (missingField != null) {
+            return completeAsk(sessionId, traceId, planContextState,
+                    missingField, clarifyRuleService.questionFor(missingField));
         }
 
         List<String> planActivityTimes = activityPlanService.resolveActivityTimes(mergedSlots, planContextState.timeConstraint());
@@ -406,7 +438,9 @@ public class CityOrchestratorService {
                         "planActivityTimes", planActivityTimes,
                         "planSlots", planSlots)
         );
-        SessionState workingState = planContextState.withSlots(planSlots).withPhase(SessionPhase.PLAN);
+        SessionState workingState = planContextState.withSlots(planSlots)
+                .withPendingClarifyField(null)
+                .withPhase(SessionPhase.PLAN);
         return completePlan(sessionId, userId, userInput, traceId, workingState, planActivityTimes, publicFallbackUsed);
     }
 
@@ -503,6 +537,7 @@ public class CityOrchestratorService {
                 ? state.appendLastRecommendations(lastIds)
                 : state.withLastRecommendations(lastIds);
         savedState = savedState.withRecommendationQueryKey(queryKey)
+                .withPendingClarifyField(null)
                 .withPendingRelaxationContext(null);
         sessionStateService.save(savedState);
         sessionService.appendMessage(sessionId, "assistant", response.speechText(), Intent.ACTIVITY_PLAN.name(), traceId);
@@ -676,6 +711,7 @@ public class CityOrchestratorService {
                 ? state.appendLastRecommendations(lastIds)
                 : state.withLastRecommendations(lastIds);
         savedState = savedState.withRecommendationQueryKey(queryKey)
+                .withPendingClarifyField(null)
                 .withPendingRelaxationContext(null);
         sessionStateService.save(savedState);
         sessionService.appendMessage(sessionId, "assistant", response.speechText(), state.currentIntent().name(), traceId);
@@ -726,6 +762,7 @@ public class CityOrchestratorService {
                                                    List<RelaxationOption> options,
                                                    RelaxationContext relaxationContext) {
         SessionState savedState = state.withIntent(Intent.MEAL_RECOMMENDATION)
+                .withPendingClarifyField(null)
                 .withPendingRelaxationContext(relaxationContext);
         sessionStateService.save(savedState);
         sessionService.appendMessage(sessionId, "assistant", message, Intent.MEAL_RECOMMENDATION.name(), traceId);
@@ -745,6 +782,7 @@ public class CityOrchestratorService {
 
     private ChatResponse completeTextOnly(String sessionId, String traceId, SessionState state, Intent intent, ResponseResult response) {
         SessionState savedState = state.withIntent(intent)
+                .withPendingClarifyField(null)
                 .withPendingRelaxationContext(null);
         sessionStateService.save(savedState);
         sessionService.appendMessage(sessionId, "assistant", response.speechText(), intent.name(), traceId);
