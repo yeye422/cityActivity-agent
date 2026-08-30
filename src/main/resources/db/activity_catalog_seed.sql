@@ -1,5 +1,5 @@
--- 扩展活动目录演示数据：先执行 city_seed.sql、activity_model_v2.sql 和 activity_venue_session_migration.sql。
--- 本脚本可重复执行；场次日期会自动落在执行日后的最近一个周六。
+-- 扩展活动目录演示数据：先执行 city_seed.sql、activity_slot_model_v3.sql 和 activity_venue_session_migration.sql。
+-- 本脚本可重复执行；具体场次日期会自动落在执行日后的最近一个周六。
 USE city_db;
 SET NAMES utf8mb4;
 SET @next_saturday = DATE_ADD(CURDATE(), INTERVAL ((5 - WEEKDAY(CURDATE()) + 7) % 7) DAY);
@@ -30,25 +30,28 @@ ON DUPLICATE KEY UPDATE
     environment_tags = VALUES(environment_tags), price_note = VALUES(price_note),
     reservation_required = VALUES(reservation_required), active = 1;
 
-INSERT INTO activity_item (source_type, owner_user_id, name, city, location, mood, scene, budget, activity_type, style, duration, duration_minutes, active, created_at, updated_at)
-SELECT seed.source_type, seed.owner_user_id, seed.name, seed.city, seed.location, seed.mood, seed.scene, seed.budget, seed.activity_type, seed.style, seed.duration, seed.duration_minutes, 1, NOW(), NOW()
+INSERT INTO activity_item (
+    source_type, owner_user_id, name, city, location, experience_goal, companion,
+    budget, activity_type, style, duration, feature, duration_minutes, active, created_at, updated_at)
+SELECT seed.source_type, seed.owner_user_id, seed.name, seed.city, seed.location, seed.experience_goal, seed.companion,
+       seed.budget, seed.activity_type, seed.style, seed.duration, seed.feature, seed.duration_minutes, 1, NOW(), NOW()
 FROM (
-    SELECT 'PUBLIC' source_type, NULL owner_user_id, '曲江自然探索亲子日（示例）' name, JSON_ARRAY('西安') city, JSON_ARRAY('曲江','近地铁') location, JSON_ARRAY('放松','治愈') mood, JSON_ARRAY('亲子') scene, JSON_ARRAY('100元内') budget, JSON_ARRAY('展览') activity_type, JSON_ARRAY('安静','文艺') style, JSON_ARRAY('室内','半天') duration, 120 duration_minutes
-    UNION ALL SELECT 'PUBLIC', NULL, '小寨独立电影映后交流（示例）', JSON_ARRAY('西安'), JSON_ARRAY('小寨','近地铁'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','情侣','朋友'), JSON_ARRAY('100元内'), JSON_ARRAY('电影'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('室内','交通方便'), 150
-    UNION ALL SELECT 'PUBLIC', NULL, '高新即兴喜剧夜（示例）', JSON_ARRAY('西安'), JSON_ARRAY('高新','近地铁'), JSON_ARRAY('解压','社交'), JSON_ARRAY('朋友','情侣'), JSON_ARRAY('100元内'), JSON_ARRAY('演出'), JSON_ARRAY('热闹'), JSON_ARRAY('室内','交通方便'), 120
-    UNION ALL SELECT 'PUBLIC', NULL, '钟楼城市夜跑社群（示例）', JSON_ARRAY('西安'), JSON_ARRAY('钟楼','近地铁'), JSON_ARRAY('解压','刺激'), JSON_ARRAY('独处','朋友'), JSON_ARRAY('免费'), JSON_ARRAY('运动'), JSON_ARRAY('热闹'), JSON_ARRAY('近距离','半天'), 90
-    UNION ALL SELECT 'PUBLIC', NULL, '朝阳公园飞盘新手局（示例）', JSON_ARRAY('北京'), JSON_ARRAY('朝阳','近地铁'), JSON_ARRAY('解压','社交'), JSON_ARRAY('朋友'), JSON_ARRAY('100元内'), JSON_ARRAY('运动'), JSON_ARRAY('热闹'), JSON_ARRAY('半天','近距离'), 120
-    UNION ALL SELECT 'PUBLIC', NULL, '朝阳当代设计导览（示例）', JSON_ARRAY('北京'), JSON_ARRAY('朝阳','近地铁'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','朋友'), JSON_ARRAY('100元内'), JSON_ARRAY('展览'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('室内','半天'), 120
-    UNION ALL SELECT 'PUBLIC', NULL, '朝阳独立乐队现场（示例）', JSON_ARRAY('北京'), JSON_ARRAY('朝阳','近地铁'), JSON_ARRAY('社交','刺激'), JSON_ARRAY('朋友','情侣'), JSON_ARRAY('200元内'), JSON_ARRAY('演出'), JSON_ARRAY('热闹'), JSON_ARRAY('室内','交通方便'), 150
-    UNION ALL SELECT 'PUBLIC', NULL, '朝阳周末咖啡读书会（示例）', JSON_ARRAY('北京'), JSON_ARRAY('朝阳','近地铁'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','朋友'), JSON_ARRAY('100元内'), JSON_ARRAY('探店'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('室内','交通方便'), 120
-    UNION ALL SELECT 'PUBLIC', NULL, '徐汇梧桐区建筑散步（示例）', JSON_ARRAY('上海'), JSON_ARRAY('徐汇','近地铁'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','朋友'), JSON_ARRAY('免费'), JSON_ARRAY('运动'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('近距离','半天'), 120
-    UNION ALL SELECT 'PUBLIC', NULL, '徐汇黑胶聆听会（示例）', JSON_ARRAY('上海'), JSON_ARRAY('徐汇','近地铁'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','情侣'), JSON_ARRAY('100元内'), JSON_ARRAY('探店'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('室内','交通方便'), 120
-    UNION ALL SELECT 'PUBLIC', NULL, '徐汇实验戏剧夜（示例）', JSON_ARRAY('上海'), JSON_ARRAY('徐汇','近地铁'), JSON_ARRAY('放松','社交'), JSON_ARRAY('朋友','情侣'), JSON_ARRAY('200元内'), JSON_ARRAY('演出'), JSON_ARRAY('文艺','热闹'), JSON_ARRAY('室内','交通方便'), 120
-    UNION ALL SELECT 'PUBLIC', NULL, '徐汇桌游轻策局（示例）', JSON_ARRAY('上海'), JSON_ARRAY('徐汇','近地铁'), JSON_ARRAY('社交','解压'), JSON_ARRAY('朋友'), JSON_ARRAY('100元内'), JSON_ARRAY('桌游'), JSON_ARRAY('安静'), JSON_ARRAY('室内','少排队'), 180
-    UNION ALL SELECT 'PUBLIC', NULL, '锦江公园晨跑社群（示例）', JSON_ARRAY('成都'), JSON_ARRAY('锦江','近地铁'), JSON_ARRAY('解压','社交'), JSON_ARRAY('独处','朋友'), JSON_ARRAY('免费'), JSON_ARRAY('运动'), JSON_ARRAY('热闹'), JSON_ARRAY('近距离','半天'), 90
-    UNION ALL SELECT 'PUBLIC', NULL, '锦江手作陶艺体验（示例）', JSON_ARRAY('成都'), JSON_ARRAY('锦江','近地铁'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','情侣','朋友'), JSON_ARRAY('200元内'), JSON_ARRAY('探店'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('室内','半天'), 150
-    UNION ALL SELECT 'PUBLIC', NULL, '锦江喜剧开放麦（示例）', JSON_ARRAY('成都'), JSON_ARRAY('锦江','近地铁'), JSON_ARRAY('解压','社交'), JSON_ARRAY('朋友','情侣'), JSON_ARRAY('100元内'), JSON_ARRAY('演出'), JSON_ARRAY('热闹'), JSON_ARRAY('室内','交通方便'), 120
-    UNION ALL SELECT 'PUBLIC', NULL, '锦江影展下午场（示例）', JSON_ARRAY('成都'), JSON_ARRAY('锦江','近地铁'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','情侣'), JSON_ARRAY('100元内'), JSON_ARRAY('电影'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('室内','交通方便'), 150
+    SELECT 'PUBLIC' source_type, NULL owner_user_id, '曲江自然探索亲子日（示例）' name, JSON_ARRAY('西安') city, JSON_ARRAY('曲江') location, JSON_ARRAY('放松','治愈') experience_goal, JSON_ARRAY('亲子') companion, JSON_ARRAY('100元内') budget, JSON_ARRAY('展览') activity_type, JSON_ARRAY('安静','文艺') style, JSON_ARRAY('1-2小时') duration, JSON_ARRAY('室内','近地铁') feature, 120 duration_minutes
+    UNION ALL SELECT 'PUBLIC', NULL, '小寨独立电影映后交流（示例）', JSON_ARRAY('西安'), JSON_ARRAY('小寨'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','情侣','朋友'), JSON_ARRAY('100元内'), JSON_ARRAY('电影'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('2-4小时'), JSON_ARRAY('室内','近地铁','交通方便'), 150
+    UNION ALL SELECT 'PUBLIC', NULL, '高新即兴喜剧夜（示例）', JSON_ARRAY('西安'), JSON_ARRAY('高新'), JSON_ARRAY('解压','社交'), JSON_ARRAY('朋友','情侣'), JSON_ARRAY('100元内'), JSON_ARRAY('演出'), JSON_ARRAY('热闹'), JSON_ARRAY('1-2小时'), JSON_ARRAY('室内','近地铁','交通方便'), 120
+    UNION ALL SELECT 'PUBLIC', NULL, '钟楼城市夜跑社群（示例）', JSON_ARRAY('西安'), JSON_ARRAY('钟楼'), JSON_ARRAY('解压','刺激'), JSON_ARRAY('独处','朋友'), JSON_ARRAY('免费'), JSON_ARRAY('运动'), JSON_ARRAY('热闹'), JSON_ARRAY('1-2小时'), JSON_ARRAY('户外','近地铁','近距离'), 90
+    UNION ALL SELECT 'PUBLIC', NULL, '朝阳公园飞盘新手局（示例）', JSON_ARRAY('北京'), JSON_ARRAY('朝阳'), JSON_ARRAY('解压','社交'), JSON_ARRAY('朋友'), JSON_ARRAY('100元内'), JSON_ARRAY('运动'), JSON_ARRAY('热闹'), JSON_ARRAY('1-2小时'), JSON_ARRAY('户外','近地铁','近距离'), 120
+    UNION ALL SELECT 'PUBLIC', NULL, '朝阳当代设计导览（示例）', JSON_ARRAY('北京'), JSON_ARRAY('朝阳'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','朋友'), JSON_ARRAY('100元内'), JSON_ARRAY('展览'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('1-2小时'), JSON_ARRAY('室内','近地铁'), 120
+    UNION ALL SELECT 'PUBLIC', NULL, '朝阳独立乐队现场（示例）', JSON_ARRAY('北京'), JSON_ARRAY('朝阳'), JSON_ARRAY('社交','刺激'), JSON_ARRAY('朋友','情侣'), JSON_ARRAY('200元内'), JSON_ARRAY('演出'), JSON_ARRAY('热闹'), JSON_ARRAY('2-4小时'), JSON_ARRAY('室内','近地铁','交通方便'), 150
+    UNION ALL SELECT 'PUBLIC', NULL, '朝阳周末咖啡读书会（示例）', JSON_ARRAY('北京'), JSON_ARRAY('朝阳'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','朋友'), JSON_ARRAY('100元内'), JSON_ARRAY('探店'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('1-2小时'), JSON_ARRAY('室内','近地铁','交通方便'), 120
+    UNION ALL SELECT 'PUBLIC', NULL, '徐汇梧桐区建筑散步（示例）', JSON_ARRAY('上海'), JSON_ARRAY('徐汇'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','朋友'), JSON_ARRAY('免费'), JSON_ARRAY('运动'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('1-2小时'), JSON_ARRAY('户外','近地铁','近距离'), 120
+    UNION ALL SELECT 'PUBLIC', NULL, '徐汇黑胶聆听会（示例）', JSON_ARRAY('上海'), JSON_ARRAY('徐汇'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','情侣'), JSON_ARRAY('100元内'), JSON_ARRAY('探店'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('1-2小时'), JSON_ARRAY('室内','近地铁','交通方便'), 120
+    UNION ALL SELECT 'PUBLIC', NULL, '徐汇实验戏剧夜（示例）', JSON_ARRAY('上海'), JSON_ARRAY('徐汇'), JSON_ARRAY('放松','社交'), JSON_ARRAY('朋友','情侣'), JSON_ARRAY('200元内'), JSON_ARRAY('演出'), JSON_ARRAY('文艺','热闹'), JSON_ARRAY('1-2小时'), JSON_ARRAY('室内','近地铁','交通方便'), 120
+    UNION ALL SELECT 'PUBLIC', NULL, '徐汇桌游轻策局（示例）', JSON_ARRAY('上海'), JSON_ARRAY('徐汇'), JSON_ARRAY('社交','解压'), JSON_ARRAY('朋友'), JSON_ARRAY('100元内'), JSON_ARRAY('桌游'), JSON_ARRAY('安静'), JSON_ARRAY('2-4小时'), JSON_ARRAY('室内','近地铁','少排队'), 180
+    UNION ALL SELECT 'PUBLIC', NULL, '锦江公园晨跑社群（示例）', JSON_ARRAY('成都'), JSON_ARRAY('锦江'), JSON_ARRAY('解压','社交'), JSON_ARRAY('独处','朋友'), JSON_ARRAY('免费'), JSON_ARRAY('运动'), JSON_ARRAY('热闹'), JSON_ARRAY('1-2小时'), JSON_ARRAY('户外','近地铁','近距离'), 90
+    UNION ALL SELECT 'PUBLIC', NULL, '锦江手作陶艺体验（示例）', JSON_ARRAY('成都'), JSON_ARRAY('锦江'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','情侣','朋友'), JSON_ARRAY('200元内'), JSON_ARRAY('探店'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('2-4小时'), JSON_ARRAY('室内','近地铁'), 150
+    UNION ALL SELECT 'PUBLIC', NULL, '锦江喜剧开放麦（示例）', JSON_ARRAY('成都'), JSON_ARRAY('锦江'), JSON_ARRAY('解压','社交'), JSON_ARRAY('朋友','情侣'), JSON_ARRAY('100元内'), JSON_ARRAY('演出'), JSON_ARRAY('热闹'), JSON_ARRAY('1-2小时'), JSON_ARRAY('室内','近地铁','交通方便'), 120
+    UNION ALL SELECT 'PUBLIC', NULL, '锦江影展下午场（示例）', JSON_ARRAY('成都'), JSON_ARRAY('锦江'), JSON_ARRAY('放松','治愈'), JSON_ARRAY('独处','情侣'), JSON_ARRAY('100元内'), JSON_ARRAY('电影'), JSON_ARRAY('安静','文艺'), JSON_ARRAY('2-4小时'), JSON_ARRAY('室内','近地铁','交通方便'), 150
 ) seed
 WHERE NOT EXISTS (SELECT 1 FROM activity_item a WHERE a.source_type = 'PUBLIC' AND a.name = seed.name);
 
