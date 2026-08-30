@@ -30,9 +30,10 @@ public class IntentReviseService {
             return batchRefresh(targetIntent, safeResult);
         }
 
-        // Plan 澄清中的短回答（如“上海”“预算不限”）沿用原 Plan 会话状态。
+        // 正在回答持久化的 Plan 必要字段时，短回答沿用原 Plan 意图。
         if (state != null
                 && state.phase() == SessionPhase.CLARIFY
+                && state.pendingClarifyField() != null
                 && state.currentIntent() == Intent.ACTIVITY_PLAN
                 && (safeResult.intent() == Intent.MEAL_RECOMMENDATION || safeResult.intent() == Intent.CLARIFY_NEEDED)) {
             return revised(Intent.ACTIVITY_PLAN, safeResult);
