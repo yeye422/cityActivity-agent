@@ -77,7 +77,7 @@ public class IntentAgentService {
                     agent,
                     buildUserPrompt(userId, sessionId, userInput, knownSlots, knownTimeConstraint, recentHistory, slotOptions)
             );
-            return parseResult(response.getTextContent(), userInput, slotOptions);
+            return parseResult(response.getTextContent(), slotOptions);
         } catch (Exception ignored) {
             Map<String, List<String>> fallbackOptions;
             try {
@@ -197,7 +197,7 @@ public class IntentAgentService {
                  "temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},
                  "confidence":0.95}
 
-                历史已有 city=西安、time=14:00~23:00，上一轮助手问“预算有偏好吗？”，当前用户“ 不限 ” =>
+                历史已有 city=西安、time=14:00~23:00，上一轮助手问“预算有偏好吗？”，当前用户“不限” =>
                 {"intent":"MEAL_RECOMMENDATION","slots":{"city":[],"location":[],"mood":[],"scene":[],"budget":[],"activityType":[],"style":[],"duration":[]},
                  "operations":[{"field":"budget","op":"CLEAR","values":[],"raw":"不限"}],
                  "temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},
@@ -217,9 +217,9 @@ public class IntentAgentService {
         );
     }
 
-    private IntentResult parseResult(String content, String userInput, Map<String, List<String>> slotOptions) {
+    private IntentResult parseResult(String content, Map<String, List<String>> slotOptions) {
         JsonNode root = llmJsonService.parseObject(content);
-        Intent intent = parseIntent(root.path("intent").asText(null), userInput);
+        Intent intent = parseIntent(root.path("intent").asText(null));
         JsonNode slotsNode = root.path("slots").isObject() ? root.path("slots") : root;
         SlotBundle slots = parseSlots(slotsNode, slotOptions);
         double confidence = root.path("confidence").asDouble(0.5);
@@ -267,12 +267,12 @@ public class IntentAgentService {
         return LocalTime.parse(node.asText());
     }
 
-    private Intent parseIntent(String rawIntent, String userInput) {
-        try {
-            return rawIntent == null ? fallbackIntent(userInput) : Intent.valueOf(rawIntent);
-        } catch (Exception ignored) {
-            return fallbackIntent(userInput);
+    /** 缺失或非法 intent 视为模型结构解析失败，交给 recognize() 的 fallback 路径统一处理。 */
+    private Intent parseIntent(String rawIntent) {
+        if (rawIntent == null || rawIntent.isBlank()) {
+            throw new IllegalArgumentException("intent missing");
         }
+        return Intent.valueOf(rawIntent);
     }
 
     private SlotBundle parseSlots(JsonNode node, Map<String, List<String>> options) {
@@ -298,8 +298,6 @@ public class IntentAgentService {
             try {
                 ConstraintOperationType op = ConstraintOperationType.valueOf(opText.toUpperCase(Locale.ROOT));
                 List<String> values = SlotJsonPicker.pick(item, "values", optionsFor(field, options));
-                // 非 CLEAR 操作在字典清洗后若没有合法值，说明模型输出了非法/越界标签。
-                // 直接丢弃，禁止把无效 SET [] 解释成“清空历史条件”。
                 if (op != ConstraintOperationType.CLEAR && values.isEmpty()) {
                     continue;
                 }
@@ -315,8 +313,9 @@ public class IntentAgentService {
         return Map.of("values", options.getOrDefault(field, List.of()));
     }
 
+    /** 仅在 Agent 调用或结构解析失败后执行。 */
     private IntentResult fallback(String userInput, Map<String, List<String>> options) {
-        return new IntentResult(fallbackIntent(userInput), fallbackSlots(userInput, options), 0.2);
+        return IntentResult.fallback(fallbackIntent(userInput), fallbackSlots(userInput, options), 0.2);
     }
 
     private SlotBundle fallbackSlots(String userInput, Map<String, List<String>> options) {
@@ -331,6 +330,7 @@ public class IntentAgentService {
         return parseSlots(node, options);
     }
 
+    /** 关键词 Intent 判断只存在于模型失败后的 fallback 路径。 */
     private Intent fallbackIntent(String userInput) {
         if (userInput == null || userInput.isBlank()) return Intent.CLARIFY_NEEDED;
         if (containsAny(userInput, "危险", "偏远", "深夜独自", "违法", "未成年人进入")) return Intent.HEALTH_RISK;
@@ -345,7 +345,6 @@ public class IntentAgentService {
         return Intent.CLARIFY_NEEDED;
     }
 
-    /** LLM 失败时也只用明确规划动作兜底，时长词本身不代表多时段规划。 */
     private boolean containsActivityPlanSignal(String userInput) {
         if (userInput == null || userInput.isBlank()) return false;
         String text = userInput.replaceAll("\\s+", "");
