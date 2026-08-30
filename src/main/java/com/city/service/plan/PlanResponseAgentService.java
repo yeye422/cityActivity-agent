@@ -66,7 +66,7 @@ public class PlanResponseAgentService {
             RecommendResult empty = RecommendResult.empty();
             return new RecommendResponseAgentService.Result(
                     empty,
-                    ResponseResult.textOnly("暂时没有拼出完整的多时段方案，你可以补充氛围、活动类型，或调整时间安排后再试。")
+                    ResponseResult.textOnly("当前这些时段里还没有找到足够合适的活动，我先不硬凑。如果你愿意，可以放宽一点活动类型、区域或其他偏好，我再帮你补一版。")
             );
         }
 
@@ -137,8 +137,8 @@ public class PlanResponseAgentService {
                 天气排序说明：%s
                 Java 为各时段生成的已排序候选池：%s
 
-                请输出一个合法 JSON 对象：
-                {"mealPlans":[{"period":"上午","activityId":1,"reason":"..."}],"speechText":"..."}
+                请只输出一个合法 JSON 对象，顶层只能包含 mealPlans 和 speechText。
+                mealPlans 中每个实际选择项必须包含 period、activityId、reason。
 
                 规划目标：
                 - 在每个 period 自己的候选池中最多选择 1 个活动，不能跨时段选取候选。
@@ -148,9 +148,13 @@ public class PlanResponseAgentService {
 
                 强制规则：
                 - activityId 必须来自对应 period 的 candidates，禁止编造、换用其他时段活动或新增候选。
+                - candidates=[] 的时段不要伪造 activityId，也不要为了凑满行程硬塞其他时段候选。
                 - reason 和 speechText 只能使用候选明确提供的 facts、用户条件和天气说明，不要根据活动名称脑补地址、价格、具体玩法、距离、开放状态或主观体验。
-                - 每个最终选择的时段用 1 句说明最有区分度的匹配理由；某时段 candidates=[] 时可以简短说明暂无匹配。
-                - speechText 必须完整写出最终选择的各时段、活动名称和推荐理由，不能只写一句开场。
+                - 每个最终选择的时段用 1 句说明最有区分度的匹配理由。
+                - 如果某个时段 candidates=[]，先自然介绍已经选到的安排，再说明该时段当前没有足够合适的候选，我先不硬凑；可以提示用户后续单独放宽该时段条件再补一个。
+                - 不要把部分时段未匹配描述成整个规划失败，也不要只写“暂无匹配”“没有活动”这种生硬句子。
+                - speechText 必须完整写出最终选择的各时段、活动名称和推荐理由；如果有缺失时段，也要自然说明。
+                - 禁止输出“...”、示例占位理由、虚构 activityId 或候选中不存在的 period。
                 - 最终只输出 JSON，不要输出 Markdown 代码块或 JSON 之外的文字。
                 """.formatted(userInput, sourceMode, sharedSlots, weatherSummary, activitySection);
     }
@@ -173,7 +177,7 @@ public class PlanResponseAgentService {
                 String reason = node.path("reason").asText("").trim();
                 ActivityPlanService.PlannedActivity expected = plansByPeriod.get(period);
                 ActivityItem selected = findCandidate(expected, activityId);
-                if (selected != null) {
+                if (selected != null && !reason.equals("...")) {
                     requestedByPeriod.put(period, new AgentSelection(selected, reason));
                 }
             });
@@ -214,7 +218,7 @@ public class PlanResponseAgentService {
         }
 
         String speechText = root.path("speechText").asText("").trim();
-        if (speechText.isBlank() || adjusted) {
+        if (speechText.isBlank() || speechText.equals("...") || adjusted) {
             speechText = templateSpeech(
                     selectedPlans, new RecommendResult(options, needsDisclaimer(sharedSlots)));
         }
@@ -307,21 +311,47 @@ public class PlanResponseAgentService {
     private String templateSpeech(
             List<ActivityPlanService.PlannedActivity> plannedActivities,
             RecommendResult recommendResult) {
-        StringBuilder builder = new StringBuilder("可以按这个顺序安排：");
-        for (ActivityPlanService.PlannedActivity planned : plannedActivities) {
-            builder.append("\n- ").append(planned.period()).append("：");
-            if (planned.matched()) {
+        List<ActivityPlanService.PlannedActivity> matchedPlans = plannedActivities.stream()
+                .filter(ActivityPlanService.PlannedActivity::matched)
+                .toList();
+        List<String> missingPeriods = plannedActivities.stream()
+                .filter(planned -> !planned.matched())
+                .map(ActivityPlanService.PlannedActivity::period)
+                .toList();
+
+        StringBuilder builder = new StringBuilder();
+        if (!matchedPlans.isEmpty()) {
+            builder.append("我先按当前能匹配到的时段给你排一下：");
+            for (ActivityPlanService.PlannedActivity planned : matchedPlans) {
                 String reason = recommendResult.recommendations().stream()
                         .filter(option -> option.itemId().equals(planned.activity().id()))
                         .map(RecommendedActivityOption::reason)
                         .findFirst()
                         .orElse(planned.activity().name());
-                builder.append(planned.activity().name()).append("（").append(reason).append("）");
-            } else {
-                builder.append("暂时没有很匹配的活动");
+                builder.append("\n- ").append(planned.period()).append("：")
+                        .append(planned.activity().name()).append("（").append(reason).append("）");
             }
         }
-        builder.append("\n如果想换其中某一段，可以直接告诉我具体时段和新偏好。");
+
+        if (!missingPeriods.isEmpty()) {
+            if (!builder.isEmpty()) {
+                builder.append("\n");
+            }
+            if (missingPeriods.size() == 1) {
+                builder.append(missingPeriods.get(0))
+                        .append("这段当前候选里没有足够合适的活动，我先不硬凑。")
+                        .append("如果你愿意，我可以只针对")
+                        .append(missingPeriods.get(0))
+                        .append("放宽部分条件，再补一个合适的安排。");
+            } else {
+                builder.append(String.join("、", missingPeriods))
+                        .append("这几个时段当前候选里没有足够合适的活动，我先不硬凑。")
+                        .append("如果你愿意，我可以只针对这些时段放宽部分条件，再继续补齐。");
+            }
+        } else if (!matchedPlans.isEmpty()) {
+            builder.append("\n如果想换其中某一段，可以直接告诉我具体时段和新偏好。");
+        }
+
         if (recommendResult.needDisclaimer()) {
             builder.append("\n这些建议仅供周末娱乐参考，具体安排请根据实际情况调整。");
         }
