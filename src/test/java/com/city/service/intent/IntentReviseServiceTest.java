@@ -1,5 +1,6 @@
 package com.city.service.intent;
 
+import com.city.enums.ClarifyField;
 import com.city.enums.Intent;
 import com.city.enums.SessionPhase;
 import com.city.enums.SourceMode;
@@ -18,14 +19,15 @@ class IntentReviseServiceTest {
     private final IntentReviseService service = new IntentReviseService();
 
     @Test
-    void shouldKeepActivityPlanIntentWhenUserIsAnsweringPlanClarification() {
+    void shouldKeepActivityPlanIntentWhenUserIsAnsweringPersistedPlanClarification() {
         SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
                 .withIntent(Intent.ACTIVITY_PLAN)
-                .withPhase(SessionPhase.CLARIFY);
+                .withPhase(SessionPhase.CLARIFY)
+                .withPendingClarifyField(ClarifyField.CITY);
 
         SlotBundle cityOnly = new SlotBundle(
                 List.of("西安"), List.of(), List.of(), List.of(),
-                List.of(), List.of(), List.of(), List.of());
+                List.of(), List.of(), List.of(), List.of(), List.of());
         IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, cityOnly, 0.95, List.of());
 
         IntentResult revised = service.revise(state, raw, "西安");
@@ -35,9 +37,22 @@ class IntentReviseServiceTest {
     }
 
     @Test
+    void shouldNotKeepPlanIntentWhenClarifyPhaseHasNoPendingField() {
+        SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
+                .withIntent(Intent.ACTIVITY_PLAN)
+                .withPhase(SessionPhase.CLARIFY);
+        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.95, List.of());
+
+        IntentResult revised = service.revise(state, raw, "西安");
+
+        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+    }
+
+    @Test
     void shouldNotConvertNormalRecommendationIntoPlanWithoutPlanContext() {
         SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
-                .withPhase(SessionPhase.CLARIFY);
+                .withPhase(SessionPhase.CLARIFY)
+                .withPendingClarifyField(ClarifyField.CITY);
         IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.95, List.of());
 
         IntentResult revised = service.revise(state, raw, "西安");
