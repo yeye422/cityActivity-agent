@@ -4,6 +4,7 @@ import com.city.agent.factory.AgentFactory;
 import com.city.enums.SourceMode;
 import com.city.model.ActivityItem;
 import com.city.model.ActivityResponse;
+import com.city.model.ActivitySessionResponse;
 import com.city.model.RecommendResult;
 import com.city.model.RecommendedActivityOption;
 import com.city.model.ResponseResult;
@@ -19,20 +20,25 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * 多时段规划 Agent：Java 负责生成合法候选空间，Agent 负责决定哪些时段值得安排、
- * 每个已安排时段选哪个候选，以及整体组合如何兼顾相关性、多样性和区域连贯性。
- * Java 最后验证候选归属、重复活动和时间冲突；非法选择才退化为确定性 fallback。
+ * 受约束多时段规划 Agent：Java 生成合法候选/具体场次空间，Agent 决定 SELECT/SKIP、组合与表达。
+ * Java 最后验证候选归属、场次归属、重复活动和时间冲突。
  */
 @Service
 public class PlanResponseAgentService {
+
+    private static final Pattern EXACT_HOURS = Pattern.compile("^(\\d+(?:\\.\\d+)?)小时$");
+    private static final DateTimeFormatter DATE_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     private final AgentFactory agentFactory;
     private final LlmJsonService llmJsonService;
@@ -67,7 +73,7 @@ public class PlanResponseAgentService {
             RecommendResult empty = RecommendResult.empty();
             return new RecommendResponseAgentService.Result(
                     empty,
-                    ResponseResult.textOnly("当前这些时段里还没有找到足够合适的活动，我先不硬凑。如果你愿意，可以放宽一点活动类型、区域或其他偏好，我再帮你补一版。")
+                    ResponseResult.textOnly("当前这些时间窗口里还没有找到足够合适的活动，我先不硬凑。如果你愿意，可以只放宽其中一段的活动类型、区域或其他偏好，我再帮你补一版。")
             );
         }
 
@@ -83,9 +89,10 @@ public class PlanResponseAgentService {
             );
             ParsedOutput parsed = parseOutput(response.getTextContent(), safePlans, sharedSlots);
             RecommendResult recommend = new RecommendResult(parsed.options(), needDisclaimer);
-            ResponseResult responseResult = new ResponseResult(
-                    parsed.speechText(), toDisplayBlocks(recommend, parsed.selectedPlans()), "WAIT_USER");
-            return new RecommendResponseAgentService.Result(recommend, responseResult);
+            return new RecommendResponseAgentService.Result(
+                    recommend,
+                    new ResponseResult(parsed.speechText(), toDisplayBlocks(recommend, parsed.selectedPlans()), "WAIT_USER")
+            );
         } catch (Exception ignored) {
             List<ActivityPlanService.PlannedActivity> fallbackPlans = deterministicFallback(safePlans);
             RecommendResult recommend = new RecommendResult(templateOptions(fallbackPlans, sharedSlots), needDisclaimer);
@@ -108,67 +115,86 @@ public class PlanResponseAgentService {
     ) {
         StringBuilder activitySection = new StringBuilder();
         for (ActivityPlanService.PlannedActivity planned : plannedActivities) {
-            List<ActivityItem> candidates = candidatePool(planned);
             activitySection.append("\n- period=").append(planned.period()).append(", candidates=[");
+            List<ActivityItem> candidates = candidatePool(planned);
             for (int i = 0; i < candidates.size(); i++) {
+                if (i > 0) activitySection.append(", ");
                 ActivityItem activity = candidates.get(i);
-                if (i > 0) {
-                    activitySection.append(", ");
-                }
+                DurationInfo duration = durationInfo(activity);
                 activitySection.append("{")
                         .append("activityId=").append(activity.id())
                         .append(", name=").append(activity.name())
                         .append(", slots=").append(activity.slots())
-                        .append(", validFrom=").append(activity.validFrom())
-                        .append(", validTo=").append(activity.validTo())
-                        .append(", validStartTime=").append(activity.validStartTime())
-                        .append(", validEndTime=").append(activity.validEndTime())
+                        .append(", availableStartTime=").append(activity.validStartTime())
+                        .append(", availableEndTime=").append(activity.validEndTime())
+                        .append(", expectedDurationMinutes=").append(duration.minutes())
+                        .append(", durationSource=").append(duration.source())
                         .append(", matchScore=").append(activity.matchScore())
+                        .append(", sessions=").append(sessionSummary(planned, activity.id()))
                         .append("}");
             }
             activitySection.append("]");
         }
-        String weatherSummary = weather != null && weather.active()
-                ? weather.summary()
-                : "未启用天气排序";
+
+        String weatherSummary = weather != null && weather.active() ? weather.summary() : "未启用天气排序";
         return """
                 用户原话：%s
                 数据源模式：%s
-                用户共享条件：%s
+                用户共享九维条件：%s
                 天气排序说明：%s
-                Java 为各时段生成的已排序候选池：%s
+                Java 为细时间窗口生成的合法候选池：%s
 
-                请只输出一个合法 JSON 对象，顶层只能包含 mealPlans 和 speechText。
-                mealPlans 必须覆盖上面列出的每一个 period，并为每个 period 明确给出 decision=SELECT 或 decision=SKIP。
+                输出一个合法 JSON 对象，顶层只能包含 mealPlans 和 speechText。
+                mealPlans 必须覆盖上面每一个 period，并明确 decision=SELECT 或 decision=SKIP。
 
-                SELECT 时：
+                SELECT：
                 - 必须输出 period、decision、activityId、reason。
-                - activityId 必须来自该 period 自己的 candidates。
+                - activityId 必须来自该 period 的 candidates。
+                - 如果该候选 sessions 非空，还必须输出 sessionId，并且必须来自该候选 sessions；具体场次时间是硬规划依据。
+                - 如果 sessions=[]，不要编造 sessionId，此时结合 availableStartTime/availableEndTime 与 expectedDurationMinutes 做软规划。
 
-                SKIP 时：
-                - 必须输出 period、decision、reason。
-                - 不要输出 activityId，或将 activityId 设为 null。
-                - SKIP 表示你主动认为该时段不值得为了凑满行程而安排活动，不代表系统失败。
+                SKIP：
+                - 输出 period、decision、reason；不要输出 activityId/sessionId，或设为 null。
+                - 即使 candidates 非空，也可以为了整体质量主动留空。
+
+                规划依据优先级：
+                1. 具体场次 session.startAt/endAt：最高优先级，必须满足且不能与已选具体场次冲突。
+                2. expectedDurationMinutes：活动实际/预计占用时间。
+                   - durationSource=EXPLICIT 表示活动数据明确提供，可强依赖。
+                   - ESTIMATED_FROM_LABEL 表示由时长标签估算，是较可靠软依据。
+                   - ESTIMATED_FROM_TYPE 表示仅按活动类型给出的保守预期，只能作为弱依据。
+                3. availableStartTime/availableEndTime：活动可安排窗口，不要把这个窗口长度误认为活动耗时。
+                4. matchScore、九维条件、多样性、location 连贯性共同决定整体组合。
 
                 规划目标：
-                - 你可以只选择 1 个或多个真正合适的活动，不要求覆盖所有时段。
-                - 相关性优先：明显弱的候选可以 SKIP，不要为了凑满行程牺牲匹配度。
-                - 在相关性接近时，提高活动类型多样性，并优先 location 更连贯的组合。
-                - 结合候选的 validStartTime / validEndTime，避免选择时间明显重叠的活动。
-                - 不同 period 不得重复使用同一个 activityId。
-                - 某个 period 即使 candidates 非空，也允许基于整体组合主动 SKIP。
+                - 不要求填满所有窗口；可以只选 1 个或多个真正合适的活动。
+                - 同一活动可能因为跨窗口可参加而出现在多个 period，最多只能选择一次。
+                - 相关性优先；相近时再考虑活动类型多样性、区域连贯性和时间节奏。
+                - 要利用活动预计耗时判断两个活动之间是否真正塞得下，不要只看它们分别落在哪个 2 小时窗口。
+                - 对具体场次，优先选择时间衔接自然、剩余座位可用的 OPEN 场次。
+                - 不要为了凑满行程牺牲匹配度或制造过密安排。
 
                 强制规则：
-                - 每个 period 最多 SELECT 1 个活动。
-                - 禁止跨时段选取、编造 activityId 或新增候选。
-                - candidates=[] 的时段必须 SKIP，不能从别的时段借活动填充。
-                - reason 和 speechText 只能使用候选明确提供的 facts、用户条件和天气说明，不要根据活动名称脑补地址、价格、具体玩法、真实距离、开放状态或主观体验。
-                - speechText 要像真正帮用户排计划：先说整体安排，再自然解释哪些时段被选中、哪些时段主动留空以及为什么。
-                - 对主动 SKIP 的时段，不要生硬写“暂无匹配”；可以表达成“这一段先留空更合适”“不为了凑满硬塞一个活动”。
-                - 如果只有一两个时段值得安排，也直接给出部分行程，不要把它描述成规划失败。
-                - 禁止输出“...”、示例占位理由、候选中不存在的 period 或 activityId。
-                - 最终只输出 JSON，不要输出 Markdown 代码块或 JSON 之外的文字。
+                - 禁止跨 period 借候选、禁止编造 activityId/sessionId。
+                - candidates=[] 的 period 必须 SKIP。
+                - reason 和 speechText 只能使用候选、场次、用户条件和天气提供的事实；不得脑补价格、玩法、距离、开放状态。
+                - 估算时长必须说成“预计/按标签估算”，不要伪装成精确事实。
+                - speechText 先给整体安排，再自然解释 SELECT/SKIP；不要像系统日志一样逐字段输出。
+                - 禁止输出“...”或示例占位值。
                 """.formatted(userInput, sourceMode, sharedSlots, weatherSummary, activitySection);
+    }
+
+    private String sessionSummary(ActivityPlanService.PlannedActivity planned, Long activityId) {
+        List<ActivitySessionResponse> sessions = sessionsFor(planned, activityId);
+        if (sessions.isEmpty()) return "[]";
+        return sessions.stream().map(session -> "{sessionId=" + session.sessionId()
+                        + ",startAt=" + session.startAt()
+                        + ",endAt=" + session.endAt()
+                        + ",venueName=" + session.venueName()
+                        + ",district=" + session.district()
+                        + ",remainingSeats=" + session.remainingSeats()
+                        + ",status=" + session.status() + "}")
+                .toList().toString();
     }
 
     private ParsedOutput parseOutput(String content,
@@ -176,9 +202,7 @@ public class PlanResponseAgentService {
                                      SlotBundle sharedSlots) {
         JsonNode root = llmJsonService.parseObject(content);
         Map<String, ActivityPlanService.PlannedActivity> plansByPeriod = new LinkedHashMap<>();
-        for (ActivityPlanService.PlannedActivity planned : plannedActivities) {
-            plansByPeriod.put(planned.period(), planned);
-        }
+        for (ActivityPlanService.PlannedActivity planned : plannedActivities) plansByPeriod.put(planned.period(), planned);
 
         Map<String, AgentDecision> requestedByPeriod = new LinkedHashMap<>();
         boolean invalidStructure = false;
@@ -191,7 +215,6 @@ public class PlanResponseAgentService {
                 String decision = node.path("decision").asText("").trim().toUpperCase();
                 String reason = node.path("reason").asText("").trim();
                 ActivityPlanService.PlannedActivity expected = plansByPeriod.get(period);
-
                 if (expected == null || requestedByPeriod.containsKey(period)) {
                     invalidStructure = true;
                     continue;
@@ -204,15 +227,26 @@ public class PlanResponseAgentService {
 
                 if ("SELECT".equals(decision)) {
                     long activityId = node.path("activityId").asLong(0L);
-                    ActivityItem selected = findCandidate(expected, activityId);
-                    if (selected != null && !"...".equals(reason)) {
-                        requestedByPeriod.put(period, AgentDecision.select(selected, reason));
-                    } else {
+                    ActivityItem activity = findCandidate(expected, activityId);
+                    if (activity == null || "...".equals(reason)) {
                         invalidStructure = true;
+                        continue;
                     }
+                    List<ActivitySessionResponse> sessions = sessionsFor(expected, activityId);
+                    ActivitySessionResponse selectedSession = null;
+                    if (!sessions.isEmpty()) {
+                        long sessionId = node.path("sessionId").asLong(0L);
+                        selectedSession = sessions.stream()
+                                .filter(session -> session.sessionId() != null && session.sessionId() == sessionId)
+                                .findFirst().orElse(null);
+                        if (selectedSession == null) {
+                            invalidStructure = true;
+                            continue;
+                        }
+                    }
+                    requestedByPeriod.put(period, AgentDecision.select(activity, selectedSession, reason));
                     continue;
                 }
-
                 invalidStructure = true;
             }
         }
@@ -225,46 +259,41 @@ public class PlanResponseAgentService {
 
         for (ActivityPlanService.PlannedActivity planned : plannedActivities) {
             AgentDecision requested = requestedByPeriod.get(planned.period());
-
             if (requested != null && requested.skip()) {
-                selectedPlans.add(new ActivityPlanService.PlannedActivity(
-                        planned.period(), null, planned.querySlots(), candidatePool(planned)));
+                selectedPlans.add(emptySelection(planned));
                 unfilledReasons.put(planned.period(), normalizeSkipReason(requested.reason(), planned));
                 continue;
             }
 
-            ActivityItem selected = requested == null ? null : requested.activity();
+            Selection selection = requested == null
+                    ? null
+                    : new Selection(requested.activity(), requested.session());
             String reason = requested == null ? "" : requested.reason();
 
-            if (selected == null
-                    || usedIds.contains(selected.id())
-                    || hasTimeConflict(planned.period(), selected, selectedPlans)) {
-                selected = fallbackCandidate(planned, usedIds, selectedPlans);
+            if (selection == null
+                    || selection.activity() == null
+                    || usedIds.contains(selection.activity().id())
+                    || hasTimeConflict(planned.period(), selection, selectedPlans)) {
+                selection = fallbackSelection(planned, usedIds, selectedPlans);
                 reason = "";
-                if (!candidatePool(planned).isEmpty()) {
-                    adjusted = true;
-                }
+                if (!candidatePool(planned).isEmpty()) adjusted = true;
             }
 
-            if (selected == null) {
-                selectedPlans.add(new ActivityPlanService.PlannedActivity(
-                        planned.period(), null, planned.querySlots(), candidatePool(planned)));
-                if (candidatePool(planned).isEmpty()) {
-                    unfilledReasons.put(planned.period(), "当前候选池为空，这一段先留空更合适");
-                } else {
-                    unfilledReasons.put(planned.period(), "现有候选和前面的安排时间上不够顺，这一段先留空更合适");
-                }
+            if (selection == null) {
+                selectedPlans.add(emptySelection(planned));
+                unfilledReasons.put(planned.period(), candidatePool(planned).isEmpty()
+                        ? "当前候选池为空，这一段先留空更合适"
+                        : "现有候选和已选安排衔接不够稳，这一段先留空更合适");
                 continue;
             }
 
-            usedIds.add(selected.id());
+            usedIds.add(selection.activity().id());
             ActivityPlanService.PlannedActivity selectedPlan = new ActivityPlanService.PlannedActivity(
-                    planned.period(), selected, planned.querySlots(), candidatePool(planned));
+                    planned.period(), selection.activity(), planned.querySlots(), candidatePool(planned),
+                    planned.sessionsByActivityId(), selection.session());
             selectedPlans.add(selectedPlan);
-            if (reason.isBlank()) {
-                reason = templateReason(selectedPlan, sharedSlots);
-            }
-            options.add(toOption(selected, reason, planned.querySlots()));
+            if (reason.isBlank()) reason = templateReason(selectedPlan, sharedSlots);
+            options.add(toOption(selection.activity(), reason, planned.querySlots()));
         }
 
         String speechText = root.path("speechText").asText("").trim();
@@ -272,81 +301,66 @@ public class PlanResponseAgentService {
             speechText = templateSpeech(
                     selectedPlans,
                     new RecommendResult(options, needsDisclaimer(sharedSlots)),
-                    unfilledReasons
-            );
+                    unfilledReasons);
         }
         return new ParsedOutput(options, speechText, selectedPlans);
     }
 
-    private String normalizeSkipReason(String reason, ActivityPlanService.PlannedActivity planned) {
-        if (reason != null && !reason.isBlank() && !"...".equals(reason)) {
-            return reason;
-        }
-        if (candidatePool(planned).isEmpty()) {
-            return "当前没有合适候选，这一段先留空";
-        }
-        return "为了整体行程质量，这一段先留空，不为了凑满硬塞活动";
+    private ActivityPlanService.PlannedActivity emptySelection(ActivityPlanService.PlannedActivity planned) {
+        return new ActivityPlanService.PlannedActivity(
+                planned.period(), null, planned.querySlots(), candidatePool(planned),
+                planned.sessionsByActivityId(), null);
     }
 
-    private ActivityItem findCandidate(ActivityPlanService.PlannedActivity planned, long activityId) {
-        if (planned == null || activityId <= 0) {
-            return null;
+    private Selection fallbackSelection(ActivityPlanService.PlannedActivity planned,
+                                        Set<Long> usedIds,
+                                        List<ActivityPlanService.PlannedActivity> selectedPlans) {
+        for (ActivityItem activity : candidatePool(planned)) {
+            if (activity.id() == null || usedIds.contains(activity.id())) continue;
+            List<ActivitySessionResponse> sessions = sessionsFor(planned, activity.id());
+            if (!sessions.isEmpty()) {
+                for (ActivitySessionResponse session : sessions) {
+                    Selection selection = new Selection(activity, session);
+                    if (!hasTimeConflict(planned.period(), selection, selectedPlans)) return selection;
+                }
+                continue;
+            }
+            Selection selection = new Selection(activity, null);
+            if (!hasTimeConflict(planned.period(), selection, selectedPlans)) return selection;
         }
-        return candidatePool(planned).stream()
-                .filter(activity -> activity.id() != null && activity.id() == activityId)
-                .findFirst()
-                .orElse(null);
+        return null;
     }
 
-    private ActivityItem fallbackCandidate(ActivityPlanService.PlannedActivity planned,
-                                           Set<Long> usedIds,
-                                           List<ActivityPlanService.PlannedActivity> alreadySelected) {
-        if (planned == null) {
-            return null;
-        }
-        return candidatePool(planned).stream()
-                .filter(activity -> activity.id() != null)
-                .filter(activity -> !usedIds.contains(activity.id()))
-                .filter(activity -> !hasTimeConflict(planned.period(), activity, alreadySelected))
-                .findFirst()
-                .orElse(null);
-    }
-
-    /**
-     * Java 只做可客观验证的时间冲突检查：同一规划日内，两个活动的有效时间窗口真实重叠则冲突。
-     * 没有完整时间字段时不猜，由 Agent 的组合判断和候选排序继续负责。
-     */
     private boolean hasTimeConflict(String period,
-                                    ActivityItem candidate,
+                                    Selection candidate,
                                     List<ActivityPlanService.PlannedActivity> selectedPlans) {
-        if (candidate == null || selectedPlans == null || selectedPlans.isEmpty()) {
-            return false;
-        }
+        if (candidate == null || candidate.activity() == null || selectedPlans == null) return false;
         for (ActivityPlanService.PlannedActivity selectedPlan : selectedPlans) {
-            if (selectedPlan == null || !selectedPlan.matched()) {
-                continue;
-            }
-            if (!samePlanningDay(period, selectedPlan.period())) {
-                continue;
-            }
-            if (activitiesOverlap(candidate, selectedPlan.activity())) {
+            if (selectedPlan == null || !selectedPlan.matched() || !samePlanningDay(period, selectedPlan.period())) continue;
+            if (intervalsOverlap(candidate.session(), candidate.activity(),
+                    selectedPlan.selectedSession(), selectedPlan.activity())) {
                 return true;
             }
         }
         return false;
     }
 
-    private boolean activitiesOverlap(ActivityItem first, ActivityItem second) {
-        if (first == null || second == null) {
-            return false;
+    /** 具体场次优先作为硬时间；缺少场次时兼容旧活动级有效时段。 */
+    private boolean intervalsOverlap(ActivitySessionResponse firstSession,
+                                     ActivityItem firstActivity,
+                                     ActivitySessionResponse secondSession,
+                                     ActivityItem secondActivity) {
+        if (firstSession != null && secondSession != null
+                && firstSession.startAt() != null && firstSession.endAt() != null
+                && secondSession.startAt() != null && secondSession.endAt() != null) {
+            return firstSession.startAt().isBefore(secondSession.endAt())
+                    && firstSession.endAt().isAfter(secondSession.startAt());
         }
-        LocalTime firstStart = first.validStartTime();
-        LocalTime firstEnd = first.validEndTime();
-        LocalTime secondStart = second.validStartTime();
-        LocalTime secondEnd = second.validEndTime();
-        if (firstStart == null || firstEnd == null || secondStart == null || secondEnd == null) {
-            return false;
-        }
+        LocalTime firstStart = firstActivity == null ? null : firstActivity.validStartTime();
+        LocalTime firstEnd = firstActivity == null ? null : firstActivity.validEndTime();
+        LocalTime secondStart = secondActivity == null ? null : secondActivity.validStartTime();
+        LocalTime secondEnd = secondActivity == null ? null : secondActivity.validEndTime();
+        if (firstStart == null || firstEnd == null || secondStart == null || secondEnd == null) return false;
         return firstStart.isBefore(secondEnd) && firstEnd.isAfter(secondStart);
     }
 
@@ -355,12 +369,8 @@ public class PlanResponseAgentService {
     }
 
     private String planningDayKey(String period) {
-        if (period != null && period.contains("周六")) {
-            return "SATURDAY";
-        }
-        if (period != null && period.contains("周日")) {
-            return "SUNDAY";
-        }
+        if (period != null && period.contains("周六")) return "SATURDAY";
+        if (period != null && period.contains("周日")) return "SUNDAY";
         return "SAME_DAY";
     }
 
@@ -369,24 +379,41 @@ public class PlanResponseAgentService {
         List<ActivityPlanService.PlannedActivity> result = new ArrayList<>();
         Set<Long> usedIds = new LinkedHashSet<>();
         for (ActivityPlanService.PlannedActivity planned : plannedActivities) {
-            ActivityItem selected = fallbackCandidate(planned, usedIds, result);
-            if (selected != null) {
-                usedIds.add(selected.id());
-            }
+            Selection selection = fallbackSelection(planned, usedIds, result);
+            if (selection != null) usedIds.add(selection.activity().id());
             result.add(new ActivityPlanService.PlannedActivity(
-                    planned.period(), selected, planned.querySlots(), candidatePool(planned)));
+                    planned.period(),
+                    selection == null ? null : selection.activity(),
+                    planned.querySlots(),
+                    candidatePool(planned),
+                    planned.sessionsByActivityId(),
+                    selection == null ? null : selection.session()));
         }
         return result;
     }
 
+    private ActivityItem findCandidate(ActivityPlanService.PlannedActivity planned, long activityId) {
+        if (planned == null || activityId <= 0) return null;
+        return candidatePool(planned).stream()
+                .filter(activity -> activity.id() != null && activity.id() == activityId)
+                .findFirst().orElse(null);
+    }
+
     private List<ActivityItem> candidatePool(ActivityPlanService.PlannedActivity planned) {
-        if (planned == null) {
-            return List.of();
-        }
-        if (planned.candidates() != null && !planned.candidates().isEmpty()) {
-            return planned.candidates();
-        }
+        if (planned == null) return List.of();
+        if (planned.candidates() != null && !planned.candidates().isEmpty()) return planned.candidates();
         return planned.activity() == null ? List.of() : List.of(planned.activity());
+    }
+
+    private List<ActivitySessionResponse> sessionsFor(ActivityPlanService.PlannedActivity planned, Long activityId) {
+        if (planned == null || activityId == null || planned.sessionsByActivityId() == null) return List.of();
+        return planned.sessionsByActivityId().getOrDefault(activityId, List.of());
+    }
+
+    private String normalizeSkipReason(String reason, ActivityPlanService.PlannedActivity planned) {
+        if (reason != null && !reason.isBlank() && !"...".equals(reason)) return reason;
+        if (candidatePool(planned).isEmpty()) return "当前没有合适候选，这一段先留空";
+        return "为了整体行程质量，这一段先留空，不为了凑满硬塞活动";
     }
 
     private List<RecommendedActivityOption> templateOptions(
@@ -394,13 +421,8 @@ public class PlanResponseAgentService {
             SlotBundle sharedSlots) {
         List<RecommendedActivityOption> options = new ArrayList<>();
         for (ActivityPlanService.PlannedActivity planned : plannedActivities) {
-            if (!planned.matched()) {
-                continue;
-            }
-            options.add(toOption(
-                    planned.activity(),
-                    templateReason(planned, sharedSlots),
-                    planned.querySlots()));
+            if (!planned.matched()) continue;
+            options.add(toOption(planned.activity(), templateReason(planned, sharedSlots), planned.querySlots()));
         }
         return options;
     }
@@ -412,14 +434,28 @@ public class PlanResponseAgentService {
     }
 
     private String templateReason(ActivityPlanService.PlannedActivity planned, SlotBundle sharedSlots) {
-        String name = planned.activity().name();
-        if (sharedSlots != null && !sharedSlots.budget().isEmpty()) {
-            return name + "符合你当前的预算条件，放在" + planned.period() + "比较合适。";
+        StringBuilder reason = new StringBuilder(planned.activity().name());
+        if (planned.selectedSession() != null && planned.selectedSession().startAt() != null) {
+            reason.append("有可参加场次 ")
+                    .append(planned.selectedSession().startAt().format(DATE_TIME));
+            if (planned.selectedSession().endAt() != null) {
+                reason.append("~").append(planned.selectedSession().endAt().toLocalTime());
+            }
+            reason.append("，");
+        }
+        DurationInfo duration = durationInfo(planned.activity());
+        if (duration.source() == DurationSource.EXPLICIT) {
+            reason.append("明确预计耗时约 ").append(duration.minutes()).append(" 分钟，");
+        } else {
+            reason.append("按").append(duration.source() == DurationSource.ESTIMATED_FROM_LABEL ? "时长标签" : "活动类型")
+                    .append("估算约 ").append(duration.minutes()).append(" 分钟，");
         }
         if (sharedSlots != null && !sharedSlots.style().isEmpty()) {
-            return name + "比较贴近你想要的" + String.join("、", sharedSlots.style()) + "风格，放在" + planned.period() + "比较合适。";
+            reason.append("也比较贴近你想要的").append(String.join("、", sharedSlots.style())).append("风格。");
+        } else {
+            reason.append("放在这个时间窗口比较合适。");
         }
-        return name + "和你当前条件匹配度较高，放在" + planned.period() + "比较合适。";
+        return reason.toString();
     }
 
     private String templateSpeech(
@@ -427,68 +463,88 @@ public class PlanResponseAgentService {
             RecommendResult recommendResult,
             Map<String, String> unfilledReasons) {
         List<ActivityPlanService.PlannedActivity> matchedPlans = plannedActivities.stream()
-                .filter(ActivityPlanService.PlannedActivity::matched)
-                .toList();
+                .filter(ActivityPlanService.PlannedActivity::matched).toList();
         List<ActivityPlanService.PlannedActivity> unfilledPlans = plannedActivities.stream()
-                .filter(planned -> !planned.matched())
-                .toList();
+                .filter(planned -> !planned.matched()).toList();
 
         StringBuilder builder = new StringBuilder();
         if (!matchedPlans.isEmpty()) {
-            builder.append("这版我不强求把每个时段都塞满，先保留更顺的安排：");
+            builder.append("这版我按更细的时间窗口来组合，不强求每一段都塞满：");
             for (ActivityPlanService.PlannedActivity planned : matchedPlans) {
                 String reason = recommendResult.recommendations().stream()
                         .filter(option -> option.itemId().equals(planned.activity().id()))
                         .map(RecommendedActivityOption::reason)
-                        .findFirst()
-                        .orElse(planned.activity().name());
+                        .findFirst().orElse(planned.activity().name());
                 builder.append("\n- ").append(planned.period()).append("：")
                         .append(planned.activity().name()).append("（").append(reason).append("）");
             }
         }
 
         if (!unfilledPlans.isEmpty()) {
-            if (!builder.isEmpty()) {
-                builder.append("\n");
-            }
-            for (int i = 0; i < unfilledPlans.size(); i++) {
-                ActivityPlanService.PlannedActivity planned = unfilledPlans.get(i);
-                if (i > 0) {
-                    builder.append("\n");
-                }
+            if (!builder.isEmpty()) builder.append("\n");
+            for (ActivityPlanService.PlannedActivity planned : unfilledPlans) {
                 String reason = unfilledReasons == null
                         ? "这一段先留空更合适"
                         : unfilledReasons.getOrDefault(planned.period(), "这一段先留空更合适");
-                builder.append(planned.period()).append("这段先不硬凑：").append(reason).append("。");
+                builder.append(planned.period()).append("先不硬凑：").append(reason).append("。\n");
             }
-            builder.append("\n如果你想把留空的时段也补上，可以告诉我更想保留哪种活动，或者只放宽那一段的条件。");
+            builder.append("如果你想把留空的窗口也补上，可以只放宽那一段的条件。");
         } else if (!matchedPlans.isEmpty()) {
-            builder.append("\n如果想调整节奏，也可以直接告诉我哪一段想换掉或留空。");
-        } else {
-            builder.append("当前候选里没有值得硬排进计划的组合，我先不为了凑满行程随便塞活动。")
-                    .append("如果你愿意，可以放宽某个时段的条件，我再从那一段开始补。");
+            builder.append("\n如果想调松一点节奏，也可以直接告诉我哪一段想换掉或留空。");
         }
-
-        if (recommendResult.needDisclaimer()) {
-            builder.append("\n这些建议仅供周末娱乐参考，具体安排请根据实际情况调整。");
-        }
-        return builder.toString();
+        return builder.toString().trim();
     }
 
-    /** 规划卡片始终以 Agent 合法选中的原始 ActivityItem 为事实来源。 */
+    private DurationInfo durationInfo(ActivityItem activity) {
+        if (activity != null && activity.durationMinutes() != null && activity.durationMinutes() > 0) {
+            return new DurationInfo(activity.durationMinutes(), DurationSource.EXPLICIT);
+        }
+        List<String> labels = activity == null || activity.slots() == null
+                ? List.of() : activity.slots().duration();
+        for (String label : labels == null ? List.<String>of() : labels) {
+            Integer minutes = durationMinutesFromLabel(label);
+            if (minutes != null) return new DurationInfo(minutes, DurationSource.ESTIMATED_FROM_LABEL);
+        }
+        String type = activity == null || activity.slots() == null || activity.slots().activityType().isEmpty()
+                ? "" : activity.slots().activityType().getFirst();
+        int estimated = switch (type) {
+            case "电影" -> 120;
+            case "展览" -> 120;
+            case "演出" -> 120;
+            case "桌游" -> 150;
+            case "运动" -> 120;
+            case "探店" -> 90;
+            default -> 120;
+        };
+        return new DurationInfo(estimated, DurationSource.ESTIMATED_FROM_TYPE);
+    }
+
+    private Integer durationMinutesFromLabel(String label) {
+        if (label == null || label.isBlank()) return null;
+        return switch (label.trim()) {
+            case "1小时内" -> 60;
+            case "1-2小时" -> 90;
+            case "2-4小时" -> 180;
+            case "半天" -> 240;
+            case "全天" -> 480;
+            default -> {
+                Matcher matcher = EXACT_HOURS.matcher(label.trim());
+                if (matcher.matches()) {
+                    yield (int) Math.round(Double.parseDouble(matcher.group(1)) * 60);
+                }
+                yield null;
+            }
+        };
+    }
+
     private List<ActivityResponse> toDisplayBlocks(
             RecommendResult recommendResult,
             List<ActivityPlanService.PlannedActivity> plans) {
         if (recommendResult == null || recommendResult.recommendations() == null
-                || plans == null || plans.isEmpty()) {
-            return List.of();
-        }
+                || plans == null || plans.isEmpty()) return List.of();
         Map<Long, ActivityItem> byId = new LinkedHashMap<>();
         for (ActivityPlanService.PlannedActivity planned : plans) {
-            if (planned != null && planned.matched()) {
-                ActivityItem activity = planned.activity();
-                byId.putIfAbsent(activity.id(), activity);
-            }
+            if (planned != null && planned.matched()) byId.putIfAbsent(planned.activity().id(), planned.activity());
         }
         return recommendResult.recommendations().stream()
                 .map(option -> option == null ? null : byId.get(option.itemId()))
@@ -498,17 +554,21 @@ public class PlanResponseAgentService {
     }
 
     private boolean needsDisclaimer(SlotBundle slots) {
-        return slots != null && slots.budget().stream().anyMatch(value ->
-                value.contains("减脂") || value.contains("低糖") || value.contains("控碳水") || value.contains("养胃"));
+        return false;
     }
 
-    private record AgentDecision(boolean skip, ActivityItem activity, String reason) {
+    private record Selection(ActivityItem activity, ActivitySessionResponse session) {}
+
+    private record AgentDecision(boolean skip,
+                                 ActivityItem activity,
+                                 ActivitySessionResponse session,
+                                 String reason) {
         static AgentDecision skip(String reason) {
-            return new AgentDecision(true, null, reason == null ? "" : reason);
+            return new AgentDecision(true, null, null, reason == null ? "" : reason);
         }
 
-        static AgentDecision select(ActivityItem activity, String reason) {
-            return new AgentDecision(false, activity, reason == null ? "" : reason);
+        static AgentDecision select(ActivityItem activity, ActivitySessionResponse session, String reason) {
+            return new AgentDecision(false, activity, session, reason == null ? "" : reason);
         }
     }
 
@@ -516,6 +576,13 @@ public class PlanResponseAgentService {
             List<RecommendedActivityOption> options,
             String speechText,
             List<ActivityPlanService.PlannedActivity> selectedPlans
-    ) {
+    ) {}
+
+    private record DurationInfo(int minutes, DurationSource source) {}
+
+    private enum DurationSource {
+        EXPLICIT,
+        ESTIMATED_FROM_LABEL,
+        ESTIMATED_FROM_TYPE
     }
 }
