@@ -6,6 +6,8 @@ import com.city.enums.SourceMode;
 import com.city.model.IntentResult;
 import com.city.model.SessionState;
 import com.city.model.SlotBundle;
+import com.city.service.time.TemporalValidator;
+import com.city.service.time.TimeMutationService;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -14,7 +16,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class IntentReviseServiceTest {
 
-    private final IntentReviseService service = new IntentReviseService();
+    private final TemporalValidator temporalValidator = new TemporalValidator();
+    private final IntentReviseService service = new IntentReviseService(
+            new TimeMutationService(temporalValidator), temporalValidator);
 
     @Test
     void shouldKeepActivityPlanIntentWhenUserIsAnsweringPlanClarification() {
