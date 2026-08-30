@@ -1,6 +1,8 @@
 package com.city.agent.factory;
 
-import com.city.agent.builder.*;
+import com.city.agent.builder.IntentAgentBuilder;
+import com.city.agent.builder.PlanResponseAgentBuilder;
+import com.city.agent.builder.RecommendResponseAgentBuilder;
 import io.agentscope.core.ReActAgent;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -22,7 +24,6 @@ public class AgentFactory {
     private static final int MAX_AGENT_SETS = 1000;
 
     private final IntentAgentBuilder intentBuilder;
-    private final ClarifyAgentBuilder clarifyBuilder;
     private final RecommendResponseAgentBuilder recommendResponseBuilder;
     private final PlanResponseAgentBuilder planResponseBuilder;
     /** Prompt 版本，Prompt 升级后通过缓存键避免复用旧 Agent。 */
@@ -39,13 +40,11 @@ public class AgentFactory {
 
     public AgentFactory(
             IntentAgentBuilder intentBuilder,
-            ClarifyAgentBuilder clarifyBuilder,
             RecommendResponseAgentBuilder recommendResponseBuilder,
             PlanResponseAgentBuilder planResponseBuilder,
             @Value("${diet.prompt.version:v2}") String promptVersion
     ) {
         this.intentBuilder = intentBuilder;
-        this.clarifyBuilder = clarifyBuilder;
         this.recommendResponseBuilder = recommendResponseBuilder;
         this.planResponseBuilder = planResponseBuilder;
         this.promptVersion = promptVersion;
@@ -54,7 +53,6 @@ public class AgentFactory {
     public AgentSet get(String sessionId) {
         return cache.computeIfAbsent(cacheKey(sessionId), ignored -> new AgentSet(
                 intentBuilder.build(),
-                clarifyBuilder.build(),
                 recommendResponseBuilder.build(),
                 planResponseBuilder.build()
         ));
@@ -73,7 +71,6 @@ public class AgentFactory {
     @AllArgsConstructor
     public static class AgentSet {
         private ReActAgent intent;
-        private ReActAgent clarify;
         private ReActAgent recommendResponse;
         private ReActAgent planResponse;
     }
