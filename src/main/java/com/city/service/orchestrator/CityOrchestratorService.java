@@ -191,7 +191,7 @@ public class CityOrchestratorService {
                                 "excludedSlots", effectiveState.excludedSlots(),
                                 "candidateCount", result.ranked().size()));
                 if (result.ranked().isEmpty()) {
-                    throw new CityException("该相近活动方案暂时没有结果，请重新获取相近活动方案");
+                    throw new CityException("该相近活动方案暂时没有结果，请重新获取可选方案");
                 }
 
                 SessionState selectedState = effectiveState.withPendingRelaxationContext(null)
@@ -241,6 +241,8 @@ public class CityOrchestratorService {
         if (timeResolution.needsClarification() && isActivityFlow(intent.intent())) {
             agentTraceService.recordEvent("TIME_PARSE_CLARIFY", "TIME", request.message(), timeResolution);
             SessionState clarifyState = state.withIntent(intent.intent());
+            agentTraceService.recordEvent("CLARIFY_DECISION", "CLARIFY",
+                    traceMap("timeResolution", timeResolution), clarifyDecisionPayload(ClarifyField.TIME));
             return completeAsk(sessionId, traceId, clarifyState,
                     ClarifyField.TIME, clarifyRuleService.questionFor(ClarifyField.TIME));
         }
@@ -332,7 +334,7 @@ public class CityOrchestratorService {
                 traceMap("slots", mergedSlots,
                         "timeConstraint", workingState.timeConstraint(),
                         "pendingClarifyField", workingState.pendingClarifyField()),
-                traceMap("missingField", missingField == null ? null : missingField.key()));
+                clarifyDecisionPayload(missingField));
         if (missingField != null) {
             return completeAsk(sessionId, traceId, workingState,
                     missingField, clarifyRuleService.questionFor(missingField));
@@ -346,6 +348,14 @@ public class CityOrchestratorService {
         List<ClarifyField> missing = clarifyRuleService.missingRequiredFields(
                 intent, state.slots(), state.timeConstraint());
         return missing.isEmpty() ? null : missing.getFirst();
+    }
+
+    private Map<String, Object> clarifyDecisionPayload(ClarifyField field) {
+        return traceMap(
+                "action", field == null ? "READY" : "ASK",
+                "questionToAsk", field == null ? null : clarifyRuleService.questionFor(field),
+                "missingSlots", field == null ? List.of() : List.of(field.key())
+        );
     }
 
     private ChatResponse completeAsk(String sessionId,
@@ -380,9 +390,11 @@ public class CityOrchestratorService {
         ClarifyField missingField = firstMissingRequiredField(
                 Intent.MEAL_RECOMMENDATION, workingState);
         if (missingField != null) {
+            Map<String, Object> decision = clarifyDecisionPayload(missingField);
             agentTraceService.recordEvent("ADJUST_CLARIFY_DECISION", "CLARIFY",
-                    traceMap("slots", mergedSlots, "timeConstraint", workingState.timeConstraint()),
-                    traceMap("missingField", missingField.key()));
+                    traceMap("slots", mergedSlots, "timeConstraint", workingState.timeConstraint()), decision);
+            agentTraceService.recordEvent("CLARIFY_DECISION", "CLARIFY",
+                    traceMap("slots", mergedSlots, "timeConstraint", workingState.timeConstraint()), decision);
             return completeAsk(sessionId, traceId, workingState,
                     missingField, clarifyRuleService.questionFor(missingField));
         }
@@ -414,11 +426,13 @@ public class CityOrchestratorService {
                 .withUnconstrainedSlots(mutation.unconstrained());
 
         ClarifyField missingField = firstMissingRequiredField(Intent.ACTIVITY_PLAN, planContextState);
-        agentTraceService.recordEvent("PLAN_CLARIFY_DECISION", "CLARIFY",
-                traceMap("slots", mergedSlots,
-                        "timeConstraint", planContextState.timeConstraint(),
-                        "pendingClarifyField", planContextState.pendingClarifyField()),
-                traceMap("missingField", missingField == null ? null : missingField.key()));
+        Map<String, Object> decision = clarifyDecisionPayload(missingField);
+        Map<String, Object> decisionInput = traceMap(
+                "slots", mergedSlots,
+                "timeConstraint", planContextState.timeConstraint(),
+                "pendingClarifyField", planContextState.pendingClarifyField());
+        agentTraceService.recordEvent("PLAN_CLARIFY_DECISION", "CLARIFY", decisionInput, decision);
+        agentTraceService.recordEvent("CLARIFY_DECISION", "CLARIFY", decisionInput, decision);
         if (missingField != null) {
             return completeAsk(sessionId, traceId, planContextState,
                     missingField, clarifyRuleService.questionFor(missingField));
@@ -509,8 +523,7 @@ public class CityOrchestratorService {
         if (weather.active()) {
             response = new ResponseResult(
                     weather.summary() + "\n" + response.speechText(),
-                    response.displayBlocks(),
-                    response.nextAction()
+                    response.displayBlocks(), response.nextAction()
             );
         }
         if (publicFallbackUsed) {
