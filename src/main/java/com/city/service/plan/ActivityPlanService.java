@@ -20,13 +20,16 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 多时段规划服务：解析目标活动时段，并按时段拆分检索/重排后各取一个活动。
+ * 多时段规划服务：解析目标活动时段，并按时段独立检索/排序后保留 TopK 候选。
+ * Java 仍会给出一个确定性 Top1 组合作为 Agent 失败时的 fallback；真正的全局组合选择由 PlanResponseAgent 完成。
  */
 @Service
 public class ActivityPlanService {
 
     /** 一天规划默认拆分的日内时段。日期由 TimeConstraint 单独确定。 */
     private static final List<String> DEFAULT_DAY_PERIODS = List.of("上午", "下午", "晚上");
+    /** 个人项目保持小候选空间：三个时段各 Top3，最多 27 种组合。 */
+    private static final int PLAN_CANDIDATE_LIMIT = 3;
 
     private final ActivitySearchService activitySearchService;
     private final ActivityRankService activityRankService;
@@ -81,7 +84,9 @@ public class ActivityPlanService {
     }
 
     /**
-     * 按时段依次检索重排，每个时段取 top1；跨时段排除已选 activityId，避免重复活动。
+     * 按时段独立检索、排序并保留 Top3 候选。
+     * 候选生成阶段不提前跨时段排除 activityId，因为全局组合尚未发生；
+     * 同时按原 Rank 顺序构造一份不重复的确定性 Top1 结果，供 Agent 失败或非法输出时 fallback。
      * excludedSlots 始终作为硬排除条件透传；WeatherContext 与普通推荐共用同一套天气排序语义。
      */
     public List<PlannedActivity> planActivities(SourceMode sourceMode,
@@ -99,35 +104,38 @@ public class ActivityPlanService {
                 ? WeatherRecommendationContext.inactive()
                 : weather;
         List<PlannedActivity> planned = new ArrayList<>();
-        Set<Long> usedIds = new LinkedHashSet<>();
+        Set<Long> fallbackUsedIds = new LinkedHashSet<>();
 
         for (String activityTime : targets) {
             SlotBundle querySlots = slotsForActivityTime(baseSlots, activityTime);
             TimeConstraint targetTimeConstraint = timeConstraintForActivityTime(timeConstraint, activityTime);
-            List<Long> excludeIds = List.copyOf(usedIds);
+
             List<ActivityItem> candidates = activitySearchService.search(
                     new ActivitySearchRequest(
                             sourceMode,
                             userId,
                             querySlots,
-                            excludeIds,
+                            List.of(),
                             targetTimeConstraint,
                             safeExcluded
                     ));
             List<ActivityItem> ranked = activityRankService.rank(
-                            new ActivityRankRequest(candidates, querySlots, targetTimeConstraint, excludeIds),
+                            new ActivityRankRequest(candidates, querySlots, targetTimeConstraint, List.of()),
                             safeWeather)
                     .ranked();
-            ActivityItem picked = ranked.stream()
-                    .filter(item -> item != null && item.id() != null && !usedIds.contains(item.id()))
+            List<ActivityItem> topCandidates = ranked.stream()
+                    .filter(item -> item != null && item.id() != null)
+                    .limit(PLAN_CANDIDATE_LIMIT)
+                    .toList();
+
+            ActivityItem fallback = topCandidates.stream()
+                    .filter(item -> !fallbackUsedIds.contains(item.id()))
                     .findFirst()
                     .orElse(null);
-            if (picked != null) {
-                usedIds.add(picked.id());
-                planned.add(new PlannedActivity(activityTime, picked, querySlots));
-            } else {
-                planned.add(new PlannedActivity(activityTime, null, querySlots));
+            if (fallback != null) {
+                fallbackUsedIds.add(fallback.id());
             }
+            planned.add(new PlannedActivity(activityTime, fallback, querySlots, topCandidates));
         }
         return planned;
     }
@@ -164,8 +172,26 @@ public class ActivityPlanService {
         return start;
     }
 
-    /** 单时段规划结果：时段 + Java 选定活动（可能为空）+ 该时段检索用正向槽位。 */
-    public record PlannedActivity(String period, ActivityItem activity, SlotBundle querySlots) {
+    /**
+     * 单时段规划结果：
+     * period = 时段；activity = Java 的确定性 fallback 选择；querySlots = 该时段查询条件；
+     * candidates = 交给 PlanResponseAgent 做全局组合选择的已排序 TopK 候选。
+     */
+    public record PlannedActivity(
+            String period,
+            ActivityItem activity,
+            SlotBundle querySlots,
+            List<ActivityItem> candidates
+    ) {
+        public PlannedActivity {
+            candidates = candidates == null ? List.of() : List.copyOf(candidates);
+        }
+
+        /** 保留旧调用兼容：测试或旧代码手工构造时，已选活动同时作为唯一候选。 */
+        public PlannedActivity(String period, ActivityItem activity, SlotBundle querySlots) {
+            this(period, activity, querySlots, activity == null ? List.of() : List.of(activity));
+        }
+
         public boolean matched() {
             return activity != null && activity.id() != null;
         }
