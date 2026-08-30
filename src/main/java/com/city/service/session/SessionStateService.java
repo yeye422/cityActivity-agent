@@ -71,7 +71,6 @@ public class SessionStateService {
         try {
             JsonNode root = parseObject(row.getSlots());
             JsonNode meta = root.path("_meta");
-            SourceMode sourceMode = parseSourceMode(meta.path("sourceMode").asText(null), requestSourceMode);
             Intent currentIntent = parseIntent(meta.path("currentIntent").asText(null));
             SlotBundle slots = new SlotBundle(
                     readStringList(root, "city"),
@@ -97,7 +96,7 @@ public class SessionStateService {
                     row.getId(),
                     row.getUserId(),
                     parsePhase(row.getPhase()),
-                    sourceMode,
+                    requestSourceMode,
                     currentIntent,
                     slots,
                     excludedSlots,
@@ -138,7 +137,6 @@ public class SessionStateService {
         root.set("timeConstraint", objectMapper.valueToTree(
                 state.timeConstraint() == null ? TimeConstraint.empty() : state.timeConstraint()));
         ObjectNode meta = objectMapper.createObjectNode();
-        meta.put("sourceMode", state.sourceMode() == null ? null : state.sourceMode().name());
         meta.put("currentIntent", state.currentIntent() == null ? null : state.currentIntent().name());
         meta.put("recommendationQueryKey", state.recommendationQueryKey());
         root.set("_meta", meta);
@@ -188,16 +186,6 @@ public class SessionStateService {
             return intent == null || intent.isBlank() ? null : Intent.valueOf(intent);
         } catch (Exception ignored) {
             return null;
-        }
-    }
-
-    private SourceMode parseSourceMode(String savedSourceMode, SourceMode requestSourceMode) {
-        try {
-            return savedSourceMode == null || savedSourceMode.isBlank()
-                    ? requestSourceMode
-                    : SourceMode.valueOf(savedSourceMode);
-        } catch (Exception ignored) {
-            return requestSourceMode;
         }
     }
 }
