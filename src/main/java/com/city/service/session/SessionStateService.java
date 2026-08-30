@@ -1,113 +1,78 @@
 package com.city.service.session;
 
-import com.city.exception.CityException;
-import com.city.mapper.SessionMapper;
 import com.city.enums.Intent;
 import com.city.enums.SessionPhase;
+import com.city.enums.SourceMode;
+import com.city.exception.CityException;
+import com.city.mapper.SessionMapper;
 import com.city.model.SessionRow;
 import com.city.model.SessionState;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
-import com.city.enums.SourceMode;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Service;
+
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
-/**
- * 会话状态读写服务。
- * Orchestrator 是唯一写 SessionState 的角色；dietChat 链路中 loadOrCreate 和 save 被频繁调用。
- */
+/** 会话状态读写服务。 */
 @Service
 public class SessionStateService {
 
-    /**
-     * last_recommendations 列反序列化为 List&lt;Long&gt; 的类型引用。
-     */
-    private static final TypeReference<List<Long>> LONG_LIST = new TypeReference<>() {
-    };
+    private static final TypeReference<List<Long>> LONG_LIST = new TypeReference<>() {};
+    private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {};
 
-    /**
-     * MyBatis Mapper，读写 diet_sessions 表。
-     */
     private final SessionMapper sessionMapper;
-
-    /**
-     * Jackson，序列化/反序列化 slots JSON 和 last_recommendations JSON。
-     */
     private final ObjectMapper objectMapper;
 
-    /**
-     * 构造器注入 Mapper 和 ObjectMapper。
-     */
     public SessionStateService(SessionMapper sessionMapper, ObjectMapper objectMapper) {
         this.sessionMapper = sessionMapper;
         this.objectMapper = objectMapper;
     }
 
-    /**
-     * 创建新会话：生成 sessionId + 初始 SessionState + INSERT。
-     */
     public SessionState create(Long userId, SourceMode sourceMode) {
-        String sessionId = "sess_" + UUID.randomUUID().toString().replace("-", ""); // 生成唯一 sessionId
-        SessionState state = SessionState.fresh(sessionId, userId, sourceMode);     // 构造初始状态（空 slots、START phase）
-        insert(state);                                                               // INSERT diet_sessions
+        String sessionId = "sess_" + UUID.randomUUID().toString().replace("-", "");
+        SessionState state = SessionState.fresh(sessionId, userId, sourceMode);
+        insert(state);
         return state;
     }
 
-    /**
-     * 加载或创建会话状态。
-     * 由 Orchestrator#dietChat 入口调用，返回 slots/phase/lastRecommendedActivityIds 等。
-     */
     public SessionState loadOrCreate(String sessionId, Long userId, SourceMode sourceMode) {
-        // 请求未带 sessionId 时自动创建新会话
         if (sessionId == null || sessionId.isBlank()) {
             return create(userId, sourceMode);
         }
-        // 按 sessionId + userId 查 diet_sessions（校验归属）
         SessionRow row = sessionMapper.findById(sessionId, userId);
-        // 不存在则用请求的 sessionId 创建新行
         if (row == null) {
             SessionState state = SessionState.fresh(sessionId, userId, sourceMode);
             insert(state);
             return state;
         }
-        // 存在则从 DB 行反序列化为 SessionState
         return fromRow(row, sourceMode);
     }
 
-    /**
-     * 持久化 Orchestrator 更新后的会话状态。
-     * 澄清/推荐/固定回复分支结束前都会调用。
-     */
     public void save(SessionState state) {
-        SessionRow row = toRow(state);              // SessionState → SessionRow
-        int updated = sessionMapper.update(row);    // UPDATE diet_sessions
+        SessionRow row = toRow(state);
+        int updated = sessionMapper.update(row);
         if (updated == 0) {
-            throw new CityException("会话状态保存失败"); // 影响行数 0 说明 sessionId 不存在或并发冲突
+            throw new CityException("会话状态保存失败");
         }
     }
 
-    /**
-     * INSERT 新会话行到 diet_sessions。
-     */
     private void insert(SessionState state) {
         sessionMapper.insert(toRow(state));
     }
 
-    /**
-     * 将 diet_sessions 行反序列化为 SessionState 业务对象。
-     */
     private SessionState fromRow(SessionRow row, SourceMode requestSourceMode) {
         try {
-            JsonNode root = parseObject(row.getSlots());                                    // 解析 slots JSON
-            JsonNode meta = root.path("_meta");                                             // _meta 存 sourceMode/intent 等
+            JsonNode root = parseObject(row.getSlots());
+            JsonNode meta = root.path("_meta");
             SourceMode sourceMode = parseSourceMode(meta.path("sourceMode").asText(null), requestSourceMode);
             Intent currentIntent = parseIntent(meta.path("currentIntent").asText(null));
-            // 活动属性槽位从 slots JSON 读取；时间单独保存在 timeConstraint
             SlotBundle slots = new SlotBundle(
                     readStringList(root, "city"),
                     readStringList(root, "location"),
@@ -121,41 +86,41 @@ public class SessionStateService {
             SlotBundle excludedSlots = root.path("excludedSlots").isObject()
                     ? objectMapper.treeToValue(root.path("excludedSlots"), SlotBundle.class)
                     : SlotBundle.empty();
+            Set<String> unconstrainedSlots = root.path("unconstrainedSlots").isArray()
+                    ? new LinkedHashSet<>(objectMapper.readValue(root.path("unconstrainedSlots").toString(), STRING_LIST))
+                    : Set.of();
             TimeConstraint timeConstraint = root.path("timeConstraint").isObject()
                     ? objectMapper.treeToValue(root.path("timeConstraint"), TimeConstraint.class)
                     : TimeConstraint.empty();
-            String recommendationQueryKey = root.path("_meta").path("recommendationQueryKey").asText("");
+            String recommendationQueryKey = meta.path("recommendationQueryKey").asText("");
             return new SessionState(
-                    row.getId(),                           // sessionId
-                    row.getUserId(),                         // userId
-                    parsePhase(row.getPhase()),              // phase 枚举
-                    sourceMode,                              // PERSONAL / PUBLIC
-                    currentIntent,                           // 当前意图
-                    slots,                                   // 槽位
+                    row.getId(),
+                    row.getUserId(),
+                    parsePhase(row.getPhase()),
+                    sourceMode,
+                    currentIntent,
+                    slots,
                     excludedSlots,
+                    unconstrainedSlots,
                     timeConstraint,
                     recommendationQueryKey,
-                    parseLongList(row.getLastRecommendedActivityIds()) // 上轮推荐 ID 列表
+                    parseLongList(row.getLastRecommendedActivityIds())
             );
         } catch (Exception e) {
             throw new CityException("会话状态解析失败", e);
         }
     }
 
-    /**
-     * SessionState 转为 SessionRow，供 INSERT/UPDATE。
-     */
     private SessionRow toRow(SessionState state) {
         SessionRow row = new SessionRow();
         row.setId(state.sessionId());
         row.setUserId(state.userId());
         row.setPhase(state.phase().name());
-        row.setSlots(toSlotsJson(state));                          // slots + _meta 序列化
-        row.setLastRecommendedActivityIds(toJson(state.lastRecommendedActivityIds())); // 推荐 ID 列表 JSON
+        row.setSlots(toSlotsJson(state));
+        row.setLastRecommendedActivityIds(toJson(state.lastRecommendedActivityIds()));
         return row;
     }
 
-    /** 将活动属性槽位 + _meta（sourceMode/currentIntent）序列化为 slots 列 JSON。 */
     private String toSlotsJson(SessionState state) {
         ObjectNode root = objectMapper.createObjectNode();
         root.set("city", objectMapper.valueToTree(state.slots().city()));
@@ -166,8 +131,12 @@ public class SessionStateService {
         root.set("activityType", objectMapper.valueToTree(state.slots().activityType()));
         root.set("style", objectMapper.valueToTree(state.slots().style()));
         root.set("duration", objectMapper.valueToTree(state.slots().duration()));
-        root.set("excludedSlots", objectMapper.valueToTree(state.excludedSlots() == null ? SlotBundle.empty() : state.excludedSlots()));
-        root.set("timeConstraint", objectMapper.valueToTree(state.timeConstraint() == null ? TimeConstraint.empty() : state.timeConstraint()));
+        root.set("excludedSlots", objectMapper.valueToTree(
+                state.excludedSlots() == null ? SlotBundle.empty() : state.excludedSlots()));
+        root.set("unconstrainedSlots", objectMapper.valueToTree(
+                state.unconstrainedSlots() == null ? Set.of() : state.unconstrainedSlots()));
+        root.set("timeConstraint", objectMapper.valueToTree(
+                state.timeConstraint() == null ? TimeConstraint.empty() : state.timeConstraint()));
         ObjectNode meta = objectMapper.createObjectNode();
         meta.put("sourceMode", state.sourceMode() == null ? null : state.sourceMode().name());
         meta.put("currentIntent", state.currentIntent() == null ? null : state.currentIntent().name());
@@ -176,9 +145,6 @@ public class SessionStateService {
         return root.toString();
     }
 
-    /**
-     * 解析 JSON 字符串；空/null 返回空 ObjectNode。
-     */
     private JsonNode parseObject(String json) throws Exception {
         if (json == null || json.isBlank()) {
             return objectMapper.createObjectNode();
@@ -186,21 +152,14 @@ public class SessionStateService {
         return objectMapper.readTree(json);
     }
 
-    /**
-     * 从 JSON 对象读取指定字段的字符串数组。
-     */
     private List<String> readStringList(JsonNode root, String field) throws Exception {
         JsonNode node = root.path(field);
         if (!node.isArray()) {
             return List.of();
         }
-        return objectMapper.readValue(node.toString(), new TypeReference<List<String>>() {
-        });
+        return objectMapper.readValue(node.toString(), STRING_LIST);
     }
 
-    /**
-     * 解析 last_recommendations 列 JSON 为 List&lt;Long&gt;。
-     */
     private List<Long> parseLongList(String json) throws Exception {
         if (json == null || json.isBlank()) {
             return List.of();
@@ -208,9 +167,6 @@ public class SessionStateService {
         return objectMapper.readValue(json, LONG_LIST);
     }
 
-    /**
-     * 对象序列化为 JSON 字符串。
-     */
     private String toJson(Object value) {
         try {
             return objectMapper.writeValueAsString(value == null ? List.of() : value);
@@ -219,9 +175,6 @@ public class SessionStateService {
         }
     }
 
-    /**
-     * 解析 phase 字符串为 SessionPhase 枚举，脏数据回退 START。
-     */
     private SessionPhase parsePhase(String phase) {
         try {
             return phase == null ? SessionPhase.START : SessionPhase.valueOf(phase);
@@ -230,9 +183,6 @@ public class SessionStateService {
         }
     }
 
-    /**
-     * 解析 intent 字符串为 Intent 枚举，缺失/脏数据返回 null。
-     */
     private Intent parseIntent(String intent) {
         try {
             return intent == null || intent.isBlank() ? null : Intent.valueOf(intent);
@@ -241,12 +191,11 @@ public class SessionStateService {
         }
     }
 
-    /**
-     * 解析 sourceMode：DB _meta 优先，请求值兜底。
-     */
     private SourceMode parseSourceMode(String savedSourceMode, SourceMode requestSourceMode) {
         try {
-            return savedSourceMode == null || savedSourceMode.isBlank() ? requestSourceMode : SourceMode.valueOf(savedSourceMode);
+            return savedSourceMode == null || savedSourceMode.isBlank()
+                    ? requestSourceMode
+                    : SourceMode.valueOf(savedSourceMode);
         } catch (Exception ignored) {
             return requestSourceMode;
         }
