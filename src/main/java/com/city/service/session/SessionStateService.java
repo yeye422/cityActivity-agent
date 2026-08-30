@@ -5,6 +5,7 @@ import com.city.enums.SessionPhase;
 import com.city.enums.SourceMode;
 import com.city.exception.CityException;
 import com.city.mapper.SessionMapper;
+import com.city.model.RelaxationContext;
 import com.city.model.SessionRow;
 import com.city.model.SessionState;
 import com.city.model.SlotBundle;
@@ -55,6 +56,21 @@ public class SessionStateService {
         return fromRow(row, sourceMode);
     }
 
+    /**
+     * 读取已经存在的会话，不允许因为请求参数缺失而创建新会话。
+     * 主要用于“点击放宽方案”这类二阶段操作，执行上下文必须以后端已保存状态为准。
+     */
+    public SessionState loadExisting(String sessionId, Long userId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new CityException("会话 ID 不能为空");
+        }
+        SessionRow row = sessionMapper.findById(sessionId, userId);
+        if (row == null) {
+            throw new CityException("会话不存在或已失效，请重新发起推荐");
+        }
+        return fromRow(row, null);
+    }
+
     public void save(SessionState state) {
         SessionRow row = toRow(state);
         int updated = sessionMapper.update(row);
@@ -91,18 +107,28 @@ public class SessionStateService {
             TimeConstraint timeConstraint = root.path("timeConstraint").isObject()
                     ? objectMapper.treeToValue(root.path("timeConstraint"), TimeConstraint.class)
                     : TimeConstraint.empty();
+            RelaxationContext pendingRelaxationContext = root.path("pendingRelaxationContext").isObject()
+                    ? objectMapper.treeToValue(root.path("pendingRelaxationContext"), RelaxationContext.class)
+                    : null;
             String recommendationQueryKey = meta.path("recommendationQueryKey").asText("");
+            SourceMode persistedSourceMode = parseSourceMode(meta.path("sourceMode").asText(null));
+            SourceMode effectiveSourceMode = requestSourceMode != null
+                    ? requestSourceMode
+                    : pendingRelaxationContext != null && pendingRelaxationContext.sourceMode() != null
+                    ? pendingRelaxationContext.sourceMode()
+                    : persistedSourceMode != null ? persistedSourceMode : SourceMode.PUBLIC;
             return new SessionState(
                     row.getId(),
                     row.getUserId(),
                     parsePhase(row.getPhase()),
-                    requestSourceMode,
+                    effectiveSourceMode,
                     currentIntent,
                     slots,
                     excludedSlots,
                     unconstrainedSlots,
                     timeConstraint,
                     recommendationQueryKey,
+                    pendingRelaxationContext,
                     parseLongList(row.getLastRecommendedActivityIds())
             );
         } catch (Exception e) {
@@ -136,9 +162,11 @@ public class SessionStateService {
                 state.unconstrainedSlots() == null ? Set.of() : state.unconstrainedSlots()));
         root.set("timeConstraint", objectMapper.valueToTree(
                 state.timeConstraint() == null ? TimeConstraint.empty() : state.timeConstraint()));
+        root.set("pendingRelaxationContext", objectMapper.valueToTree(state.pendingRelaxationContext()));
         ObjectNode meta = objectMapper.createObjectNode();
         meta.put("currentIntent", state.currentIntent() == null ? null : state.currentIntent().name());
         meta.put("recommendationQueryKey", state.recommendationQueryKey());
+        meta.put("sourceMode", state.sourceMode() == null ? null : state.sourceMode().name());
         root.set("_meta", meta);
         return root.toString();
     }
@@ -184,6 +212,14 @@ public class SessionStateService {
     private Intent parseIntent(String intent) {
         try {
             return intent == null || intent.isBlank() ? null : Intent.valueOf(intent);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private SourceMode parseSourceMode(String sourceMode) {
+        try {
+            return sourceMode == null || sourceMode.isBlank() ? null : SourceMode.valueOf(sourceMode);
         } catch (Exception ignored) {
             return null;
         }
