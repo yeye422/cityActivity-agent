@@ -25,7 +25,7 @@ public class SessionState {
     private Long userId;
     /** 当前会话阶段，决定下一轮上下文如何被解释。 */
     private SessionPhase phase;
-    /** 当前会话绑定的数据源模式，禁止 PERSONAL 和 PUBLIC 自动混查。 */
+    /** 当前会话实际使用的数据源模式。 */
     private SourceMode sourceMode;
     /** 当前或上一轮被 Orchestrator 确认的意图。 */
     private Intent currentIntent;
@@ -39,8 +39,28 @@ public class SessionState {
     private TimeConstraint timeConstraint;
     /** 生成上一批推荐时使用的完整检索约束摘要。 */
     private String recommendationQueryKey;
+    /** 当前等待用户选择的放宽检索上下文；没有待选方案时为 null。 */
+    private RelaxationContext pendingRelaxationContext;
     /** 本会话已推荐过的活动 ID（累积），用于“换一批”时排除重复。 */
     private List<Long> lastRecommendedActivityIds;
+
+    /**
+     * 兼容已有调用方的旧构造参数；新增的 pendingRelaxationContext 默认为空。
+     */
+    public SessionState(String sessionId,
+                        Long userId,
+                        SessionPhase phase,
+                        SourceMode sourceMode,
+                        Intent currentIntent,
+                        SlotBundle slots,
+                        SlotBundle excludedSlots,
+                        Set<String> unconstrainedSlots,
+                        TimeConstraint timeConstraint,
+                        String recommendationQueryKey,
+                        List<Long> lastRecommendedActivityIds) {
+        this(sessionId, userId, phase, sourceMode, currentIntent, slots, excludedSlots,
+                unconstrainedSlots, timeConstraint, recommendationQueryKey, null, lastRecommendedActivityIds);
+    }
 
     /**
      * 创建一个新的空状态。
@@ -58,55 +78,68 @@ public class SessionState {
                 Set.of(),
                 TimeConstraint.empty(),
                 "",
+                null,
                 List.of()
         );
     }
 
     /** 返回更新阶段后的新状态。 */
     public SessionState withPhase(SessionPhase newPhase) {
-        return new SessionState(sessionId, userId, newPhase, sourceMode, currentIntent, slots, excludedSlots,
-                safeUnconstrained(unconstrainedSlots), timeConstraint, recommendationQueryKey, lastRecommendedActivityIds);
+        return copy(newPhase, sourceMode, currentIntent, slots, excludedSlots,
+                safeUnconstrained(unconstrainedSlots), timeConstraint, recommendationQueryKey,
+                pendingRelaxationContext, lastRecommendedActivityIds);
     }
 
     /** 返回更新意图后的新状态。 */
     public SessionState withIntent(Intent newIntent) {
-        return new SessionState(sessionId, userId, phase, sourceMode, newIntent, slots, excludedSlots,
-                safeUnconstrained(unconstrainedSlots), timeConstraint, recommendationQueryKey, lastRecommendedActivityIds);
+        return copy(phase, sourceMode, newIntent, slots, excludedSlots,
+                safeUnconstrained(unconstrainedSlots), timeConstraint, recommendationQueryKey,
+                pendingRelaxationContext, lastRecommendedActivityIds);
     }
 
     /** 返回更新槽位后的新状态。 */
     public SessionState withSlots(SlotBundle newSlots) {
-        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, newSlots, excludedSlots,
-                safeUnconstrained(unconstrainedSlots), timeConstraint, recommendationQueryKey, lastRecommendedActivityIds);
+        return copy(phase, sourceMode, currentIntent, newSlots, excludedSlots,
+                safeUnconstrained(unconstrainedSlots), timeConstraint, recommendationQueryKey,
+                pendingRelaxationContext, lastRecommendedActivityIds);
     }
 
     public SessionState withExcludedSlots(SlotBundle value) {
-        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, slots,
+        return copy(phase, sourceMode, currentIntent, slots,
                 value == null ? SlotBundle.empty() : value, safeUnconstrained(unconstrainedSlots),
-                timeConstraint, recommendationQueryKey, lastRecommendedActivityIds);
+                timeConstraint, recommendationQueryKey, pendingRelaxationContext, lastRecommendedActivityIds);
     }
 
     public SessionState withUnconstrainedSlots(Set<String> value) {
-        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, slots, excludedSlots,
-                safeUnconstrained(value), timeConstraint, recommendationQueryKey, lastRecommendedActivityIds);
+        return copy(phase, sourceMode, currentIntent, slots, excludedSlots,
+                safeUnconstrained(value), timeConstraint, recommendationQueryKey,
+                pendingRelaxationContext, lastRecommendedActivityIds);
     }
 
     public SessionState withTimeConstraint(TimeConstraint value) {
-        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, slots, excludedSlots,
+        return copy(phase, sourceMode, currentIntent, slots, excludedSlots,
                 safeUnconstrained(unconstrainedSlots), value == null ? timeConstraint : value,
-                recommendationQueryKey, lastRecommendedActivityIds);
+                recommendationQueryKey, pendingRelaxationContext, lastRecommendedActivityIds);
     }
 
     public SessionState withRecommendationQueryKey(String value) {
-        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, slots, excludedSlots,
+        return copy(phase, sourceMode, currentIntent, slots, excludedSlots,
                 safeUnconstrained(unconstrainedSlots), timeConstraint, value == null ? "" : value,
-                lastRecommendedActivityIds);
+                pendingRelaxationContext, lastRecommendedActivityIds);
+    }
+
+    /** 保存或清除当前待选择的放宽查询上下文。 */
+    public SessionState withPendingRelaxationContext(RelaxationContext value) {
+        return copy(phase, sourceMode, currentIntent, slots, excludedSlots,
+                safeUnconstrained(unconstrainedSlots), timeConstraint, recommendationQueryKey,
+                value, lastRecommendedActivityIds);
     }
 
     /** 返回更新推荐历史后的新状态（覆盖）。 */
     public SessionState withLastRecommendations(List<Long> newLastRecommendations) {
-        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, slots, excludedSlots,
+        return copy(phase, sourceMode, currentIntent, slots, excludedSlots,
                 safeUnconstrained(unconstrainedSlots), timeConstraint, recommendationQueryKey,
+                pendingRelaxationContext,
                 newLastRecommendations == null ? List.of() : List.copyOf(newLastRecommendations));
     }
 
@@ -115,16 +148,45 @@ public class SessionState {
         if (newIds == null || newIds.isEmpty()) {
             return this;
         }
-        LinkedHashSet<Long> merged = new LinkedHashSet<>(lastRecommendedActivityIds == null ? List.of() : lastRecommendedActivityIds);
+        LinkedHashSet<Long> merged = new LinkedHashSet<>(
+                lastRecommendedActivityIds == null ? List.of() : lastRecommendedActivityIds);
         merged.addAll(newIds);
-        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, slots, excludedSlots,
-                safeUnconstrained(unconstrainedSlots), timeConstraint, recommendationQueryKey, List.copyOf(merged));
+        return copy(phase, sourceMode, currentIntent, slots, excludedSlots,
+                safeUnconstrained(unconstrainedSlots), timeConstraint, recommendationQueryKey,
+                pendingRelaxationContext, List.copyOf(merged));
     }
 
-    /** 返回更新数据源模式后的新状态，主要用于首次绑定 sourceMode。 */
+    /** 返回更新数据源模式后的新状态。 */
     public SessionState withSourceMode(SourceMode newSourceMode) {
-        return new SessionState(sessionId, userId, phase, newSourceMode, currentIntent, slots, excludedSlots,
-                safeUnconstrained(unconstrainedSlots), timeConstraint, recommendationQueryKey, lastRecommendedActivityIds);
+        return copy(phase, newSourceMode, currentIntent, slots, excludedSlots,
+                safeUnconstrained(unconstrainedSlots), timeConstraint, recommendationQueryKey,
+                pendingRelaxationContext, lastRecommendedActivityIds);
+    }
+
+    private SessionState copy(SessionPhase newPhase,
+                              SourceMode newSourceMode,
+                              Intent newIntent,
+                              SlotBundle newSlots,
+                              SlotBundle newExcludedSlots,
+                              Set<String> newUnconstrainedSlots,
+                              TimeConstraint newTimeConstraint,
+                              String newRecommendationQueryKey,
+                              RelaxationContext newPendingRelaxationContext,
+                              List<Long> newLastRecommendedActivityIds) {
+        return new SessionState(
+                sessionId,
+                userId,
+                newPhase,
+                newSourceMode,
+                newIntent,
+                newSlots,
+                newExcludedSlots,
+                newUnconstrainedSlots,
+                newTimeConstraint,
+                newRecommendationQueryKey,
+                newPendingRelaxationContext,
+                newLastRecommendedActivityIds
+        );
     }
 
     private static Set<String> safeUnconstrained(Set<String> value) {
