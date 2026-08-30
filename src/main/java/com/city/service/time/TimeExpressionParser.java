@@ -1,6 +1,5 @@
 package com.city.service.time;
 
-import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
 import org.springframework.stereotype.Service;
 
@@ -13,7 +12,7 @@ import java.time.temporal.TemporalAdjusters;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** 以中国时区确定性解析相对日期；LLM 不参与日期计算。 */
+/** Java 规则时间解析器，仅作为 LLM temporal 失败后的兜底。 */
 @Service
 public class TimeExpressionParser {
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
@@ -95,12 +94,30 @@ public class TimeExpressionParser {
         return new TimeConstraint(text, start, end, startTime, endTime, LocalDateTime.now(ZONE));
     }
 
-    /** 用户明确表示不限制时间时，清除会话中上一轮遗留的日期约束。 */
+    /** 用户明确表示完全不限制时间。 */
     public boolean clearRequested(String input) {
         String text = input == null ? "" : input.replaceAll("\\s+", "");
         return text.contains("不限时间") || text.contains("不限制时间") || text.contains("随时都行")
                 || text.contains("什么时候都行") || text.contains("任何时候都可以")
                 || text.contains("时间无所谓") || text.contains("不挑时间") || text.equals("随时");
+    }
+
+    /**
+     * 判断用户是否明显在表达时间。用于 LLM 和规则解析均失败后的澄清门控，
+     * 避免普通聊天因为没有 temporal 而被误判为时间解析失败。
+     */
+    public boolean mentionsTime(String input) {
+        String text = input == null ? "" : input.replaceAll("\\s+", "");
+        if (text.isBlank()) return false;
+        if (MONTH_DAY_RANGE.matcher(text).find() || MONTH_DAY.matcher(text).find()
+                || CLOCK_RANGE.matcher(text).find() || CLOCK_POINT.matcher(text).find()) {
+            return true;
+        }
+        return containsAny(text,
+                "今天", "明天", "后天", "本周", "这周", "下周", "周末", "星期", "周一", "周二", "周三", "周四", "周五", "周六", "周日", "周天",
+                "下个月", "这个月", "月底", "月末", "日期", "哪天",
+                "上午", "早上", "早晨", "中午", "下午", "午后", "傍晚", "黄昏", "晚上", "夜晚", "今晚", "夜里", "凌晨",
+                "几点", "时间", "时段", "点半", "点左右", "左右", "随时");
     }
 
     private DayOfWeek weekday(String text) {
@@ -123,5 +140,12 @@ public class TimeExpressionParser {
         int m = minute == null || minute.isBlank() ? 0 : Integer.parseInt(minute);
         if (h < 0 || h > 23 || m < 0 || m > 59) return null;
         return LocalTime.of(h, m);
+    }
+
+    private boolean containsAny(String text, String... keywords) {
+        for (String keyword : keywords) {
+            if (text.contains(keyword)) return true;
+        }
+        return false;
     }
 }
