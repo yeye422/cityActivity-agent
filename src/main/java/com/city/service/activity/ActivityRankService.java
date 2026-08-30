@@ -17,7 +17,7 @@ import java.util.Set;
 
 /**
  * 活动相关性重排服务（Orchestrator 推荐流水线第二层）。
- * Search 负责硬约束召回；这里融合槽位、时间适配和天气上下文，输出可解释相关性分数。
+ * Search 负责硬约束召回；这里融合九维槽位、时间窗口适配和天气上下文。
  */
 @Service
 public class ActivityRankService {
@@ -47,9 +47,9 @@ public class ActivityRankService {
                 .limit(MAX_RANKED_CANDIDATES)
                 .toList();
 
-        List<ActivityItem> ranked = scored.stream().map(ScoredActivity::activity).toList();
-        List<ActivityRankScore> scores = scored.stream().map(ScoredActivity::score).toList();
-        return new ActivityRankResult(ranked, scores);
+        return new ActivityRankResult(
+                scored.stream().map(ScoredActivity::activity).toList(),
+                scored.stream().map(ScoredActivity::score).toList());
     }
 
     private ScoredActivity score(ActivityItem item,
@@ -64,7 +64,8 @@ public class ActivityRankService {
 
         ActivityItem rankedItem = new ActivityItem(
                 item.id(), item.sourceType(), item.ownerUserId(), item.name(), item.slots(),
-                item.validFrom(), item.validTo(), item.validStartTime(), item.validEndTime(), weatherAdjusted);
+                item.validFrom(), item.validTo(), item.validStartTime(), item.validEndTime(),
+                item.durationMinutes(), weatherAdjusted);
         WeatherRecommendationContext.Status weatherStatus = weather == null || weather.status() == null
                 ? WeatherRecommendationContext.Status.NOT_REQUESTED
                 : weather.status();
@@ -74,52 +75,36 @@ public class ActivityRankService {
     }
 
     private double combineRelevance(double slotScore, Double timeScore, boolean hasActiveSlot) {
-        if (timeScore == null) {
-            return slotScore;
-        }
-        if (!hasActiveSlot) {
-            return clamp(timeScore);
-        }
+        if (timeScore == null) return slotScore;
+        if (!hasActiveSlot) return clamp(timeScore);
         return clamp(slotScore * SLOT_WEIGHT_WITH_TIME + timeScore * TIME_WEIGHT);
     }
 
     /**
-     * 用户指定时段时，按“活动自身时长有多少比例落在用户可用窗口内”计算时间适配度。
-     * Search 仍只要求有交集；Rank 会让完整落入时间窗的活动优先于只有部分重叠的活动。
+     * 用户指定时段时，计算活动有效/可参加时间窗口与用户时间窗的覆盖程度。
+     * validStartTime~validEndTime 表示可安排时间或具体场次窗口，不等同于活动实际耗时；
+     * 实际/预计耗时由 durationMinutes 单独提供给 Plan 层。
      */
     private Double timeScore(ActivityItem item, TimeConstraint timeConstraint) {
-        if (timeConstraint == null || !timeConstraint.hasTime()) {
-            return null;
-        }
-        if (item.validStartTime() == null || item.validEndTime() == null) {
-            return 0.0;
-        }
+        if (timeConstraint == null || !timeConstraint.hasTime()) return null;
+        if (item.validStartTime() == null || item.validEndTime() == null) return 0.0;
         return overlapRatio(
                 item.validStartTime(), item.validEndTime(),
                 timeConstraint.startTime(), timeConstraint.endTime());
     }
 
-    /** 支持普通时段和跨午夜时段，返回活动时长被用户窗口覆盖的比例。 */
     private double overlapRatio(LocalTime activityStart, LocalTime activityEnd,
                                 LocalTime queryStart, LocalTime queryEnd) {
-        if (activityStart == null || activityEnd == null || queryStart == null || queryEnd == null) {
-            return 0.0;
-        }
+        if (activityStart == null || activityEnd == null || queryStart == null || queryEnd == null) return 0.0;
         int activityStartMinute = minuteOfDay(activityStart);
         int activityEndMinute = minuteOfDay(activityEnd);
-        if (activityEndMinute <= activityStartMinute) {
-            activityEndMinute += 24 * 60;
-        }
-        int duration = activityEndMinute - activityStartMinute;
-        if (duration <= 0) {
-            return 0.0;
-        }
+        if (activityEndMinute <= activityStartMinute) activityEndMinute += 24 * 60;
+        int windowDuration = activityEndMinute - activityStartMinute;
+        if (windowDuration <= 0) return 0.0;
 
         int queryStartMinute = minuteOfDay(queryStart);
         int queryEndMinute = minuteOfDay(queryEnd);
-        if (queryEndMinute <= queryStartMinute) {
-            queryEndMinute += 24 * 60;
-        }
+        if (queryEndMinute <= queryStartMinute) queryEndMinute += 24 * 60;
 
         int bestOverlap = 0;
         for (int shift : new int[]{-24 * 60, 0, 24 * 60}) {
@@ -129,7 +114,7 @@ public class ActivityRankService {
                     Math.min(shiftedEnd, queryEndMinute) - Math.max(shiftedStart, queryStartMinute));
             bestOverlap = Math.max(bestOverlap, overlap);
         }
-        return clamp(bestOverlap * 1.0 / duration);
+        return clamp(bestOverlap * 1.0 / windowDuration);
     }
 
     private int minuteOfDay(LocalTime time) {
@@ -137,20 +122,18 @@ public class ActivityRankService {
     }
 
     private double weatherScore(double relevanceScore, SlotBundle item, WeatherRecommendationContext weather) {
-        if (weather == null || !weather.active() || item == null) {
-            return relevanceScore;
-        }
-        Set<String> durations = Set.copyOf(item.duration() == null ? List.of() : item.duration());
-        if (durations.contains("室内")) {
+        if (weather == null || !weather.active() || item == null) return relevanceScore;
+        Set<String> features = Set.copyOf(item.feature() == null ? List.of() : item.feature());
+        if (features.contains("室内")) {
             return clamp(relevanceScore * 0.88 + 0.12);
         }
-        if (durations.contains("户外") || durations.contains("室外")) {
+        if (features.contains("户外") || features.contains("室外")) {
             return clamp(relevanceScore * 0.82);
         }
         return relevanceScore;
     }
 
-    /** 计算活动 slots 与查询 slots 的有效维度平均重叠比例。 */
+    /** 计算活动九维 slots 与查询 slots 的有效维度平均重叠比例。 */
     private double slotScore(SlotBundle item, SlotBundle query) {
         SlotBundle safeItem = item == null ? SlotBundle.empty() : item;
         SlotBundle safeQuery = query == null ? SlotBundle.empty() : query;
@@ -164,7 +147,8 @@ public class ActivityRankService {
                 budgetScorePart(safeItem.budget(), safeQuery.budget()),
                 scorePart(safeItem.activityType(), safeQuery.activityType()),
                 scorePart(safeItem.style(), safeQuery.style()),
-                scorePart(safeItem.duration(), safeQuery.duration())
+                scorePart(safeItem.duration(), safeQuery.duration()),
+                scorePart(safeItem.feature(), safeQuery.feature())
         };
         for (ScorePart part : parts) {
             if (part.active()) {
@@ -183,18 +167,11 @@ public class ActivityRankService {
         return new ScorePart(queryValues != null && !queryValues.isEmpty(), overlap(itemValues, queryValues));
     }
 
-    /** budget 标签是上限语义：100元内活动完整满足“200元内”，不应按标签不相等计 0 分。 */
     private ScorePart budgetScorePart(List<String> itemBudgets, List<String> queryBudgets) {
-        if (queryBudgets == null || queryBudgets.isEmpty()) {
-            return new ScorePart(false, 0.0);
-        }
+        if (queryBudgets == null || queryBudgets.isEmpty()) return new ScorePart(false, 0.0);
         int queryMax = maxBudgetIndex(queryBudgets);
-        if (queryMax < 0) {
-            return new ScorePart(true, overlap(itemBudgets, queryBudgets));
-        }
-        if (itemBudgets == null || itemBudgets.isEmpty()) {
-            return new ScorePart(true, 0.0);
-        }
+        if (queryMax < 0) return new ScorePart(true, overlap(itemBudgets, queryBudgets));
+        if (itemBudgets == null || itemBudgets.isEmpty()) return new ScorePart(true, 0.0);
         boolean withinLimit = itemBudgets.stream()
                 .mapToInt(BUDGET_ORDER::indexOf)
                 .anyMatch(index -> index >= 0 && index <= queryMax);
@@ -203,17 +180,12 @@ public class ActivityRankService {
 
     private int maxBudgetIndex(List<String> budgets) {
         int max = -1;
-        for (String budget : budgets) {
-            max = Math.max(max, BUDGET_ORDER.indexOf(budget));
-        }
+        for (String budget : budgets) max = Math.max(max, BUDGET_ORDER.indexOf(budget));
         return max;
     }
 
-    /** 计算 queryValues 中有多少标签出现在 itemValues 中，返回命中比例。 */
     private double overlap(List<String> itemValues, List<String> queryValues) {
-        if (queryValues == null || queryValues.isEmpty()) {
-            return 0;
-        }
+        if (queryValues == null || queryValues.isEmpty()) return 0;
         Set<String> itemSet = Set.copyOf(itemValues == null ? List.of() : itemValues);
         long hits = queryValues.stream().filter(itemSet::contains).count();
         return hits * 1.0 / queryValues.size();
@@ -223,9 +195,6 @@ public class ActivityRankService {
         return Math.max(0, Math.min(1, score));
     }
 
-    private record ScorePart(boolean active, double score) {
-    }
-
-    private record ScoredActivity(ActivityItem activity, ActivityRankScore score) {
-    }
+    private record ScorePart(boolean active, double score) {}
+    private record ScoredActivity(ActivityItem activity, ActivityRankScore score) {}
 }
