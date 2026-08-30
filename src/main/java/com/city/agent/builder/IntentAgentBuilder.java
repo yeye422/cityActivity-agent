@@ -9,19 +9,19 @@ import org.springframework.stereotype.Component;
 
 /**
  * IntentAgent 构建器。
- * 该 Agent 负责意图分类和槽位归一，使用轻量模型以降低延迟。
+ * 该 Agent 负责意图分类、槽位归一和时间 Patch 提取，优先使用主模型提升复杂语义解析准确率。
  */
 @Component
 public class IntentAgentBuilder {
-    /** 轻量模型用于分类和 JSON 抽取任务。 */
-    private final Model lightModel;
+    /** 主模型用于多轮语义理解、Patch 抽取和相对时间解析。 */
+    private final Model mainModel;
 
     /** PromptLoader 用于加载现有 intent.txt。 */
     private final PromptLoader promptLoader;
 
     /** 构造器注入模型和 PromptLoader。 */
-    public IntentAgentBuilder(@Qualifier("DietLightChatModel") Model lightModel, PromptLoader promptLoader) {
-        this.lightModel = lightModel;
+    public IntentAgentBuilder(@Qualifier("DietMainChatModel") Model mainModel, PromptLoader promptLoader) {
+        this.mainModel = mainModel;
         this.promptLoader = promptLoader;
     }
 
@@ -29,7 +29,7 @@ public class IntentAgentBuilder {
     public ReActAgent build() {
         return ReActAgent.builder()
                 .name("diet_intent_agent")
-                .model(lightModel)
+                .model(mainModel)
                 .sysPrompt(promptLoader.load("diet/prompts/intent.txt"))
                 .memory(new InMemoryMemory())
                 .build();
