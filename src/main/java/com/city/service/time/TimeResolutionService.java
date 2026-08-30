@@ -35,8 +35,9 @@ public class TimeResolutionService {
         TimeConstraint base = historical == null ? TimeConstraint.empty() : historical;
         TemporalMutation safeTemporal = temporal == null ? TemporalMutation.keep() : temporal;
 
-        // LLM 明确理解为“时间保持不变”时直接保留历史状态，不再错误进入 fallback/澄清。
-        if (isReliableKeepReference(safeTemporal)) {
+        // 高置信 KEEP/KEEP 是 LLM 的有效解析结果：可能表示本轮没提时间，也可能明确要求沿用历史时间。
+        // 这两种情况都不应触发 Java fallback。
+        if (isReliableNoChange(safeTemporal)) {
             return new TimeResolutionResult(TimeResolutionResult.Status.UNCHANGED, base, safeTemporal.raw());
         }
 
@@ -94,7 +95,7 @@ public class TimeResolutionService {
                 && temporalValidator.isValid(temporal);
     }
 
-    private boolean isReliableKeepReference(TemporalMutation temporal) {
+    private boolean isReliableNoChange(TemporalMutation temporal) {
         if (temporal.dateMode() != TemporalMode.KEEP
                 || temporal.timeMode() != TemporalMode.KEEP
                 || temporal.confidence() < MIN_LLM_TEMPORAL_CONFIDENCE
@@ -102,6 +103,7 @@ public class TimeResolutionService {
             return false;
         }
         String raw = temporal.raw() == null ? "" : temporal.raw().replaceAll("\\s+", "");
+        if (raw.isBlank()) return true;
         return containsAny(raw,
                 "还是之前那个时间", "还是之前的时间", "按之前的时间", "照之前的时间",
                 "时间不变", "时间照旧", "时间保持不变", "还是原来的时间", "时间还是原来");
