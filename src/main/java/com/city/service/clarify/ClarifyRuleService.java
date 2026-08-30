@@ -1,5 +1,6 @@
 package com.city.service.clarify;
 
+import com.city.enums.Intent;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
 import org.springframework.stereotype.Service;
@@ -10,52 +11,57 @@ import java.util.Set;
 
 /**
  * 澄清规则服务。
- * 是否追问由 Java 规则决定，避免 LLM 随机性影响状态机；ClarifyAgent 只负责生成追问文案。
+ * Java 只追问执行任务不可缺少的信息，不为了补全用户画像阻塞推荐。
  */
 @Service
 public class ClarifyRuleService {
 
-    public List<String> missingSlots(SlotBundle slots,
-                                     TimeConstraint timeConstraint,
-                                     Set<String> unconstrainedSlots) {
+    /**
+     * 普通推荐：只要求 city。
+     * 行程规划：要求 city + 明确日期；具体时段和其余九维偏好都可缺省。
+     */
+    public List<String> missingRequiredFields(Intent intent,
+                                              SlotBundle slots,
+                                              TimeConstraint timeConstraint) {
         SlotBundle safeSlots = slots == null ? SlotBundle.empty() : slots;
-        Set<String> safeUnconstrained = unconstrainedSlots == null ? Set.of() : unconstrainedSlots;
         List<String> missing = new ArrayList<>();
 
-        if (safeSlots.city().isEmpty() && !safeUnconstrained.contains("city")) {
+        if (safeSlots.city().isEmpty()) {
             missing.add("city");
         }
 
-        if (safeSlots.budget().isEmpty()
-                && !safeUnconstrained.contains("budget")
-                && !hasStrongActivityPreference(safeSlots)) {
-            missing.add("budget");
+        if (intent == Intent.ACTIVITY_PLAN
+                && (timeConstraint == null || !timeConstraint.hasDate())) {
+            missing.add("date");
         }
-        return missing;
+        return List.copyOf(missing);
     }
 
-    /** 九维中任一较强偏好已出现时，不因预算缺失机械追问。 */
-    private boolean hasStrongActivityPreference(SlotBundle slots) {
-        return !slots.activityType().isEmpty()
-                || !slots.style().isEmpty()
-                || !slots.experienceGoal().isEmpty()
-                || !slots.companion().isEmpty()
-                || !slots.duration().isEmpty()
-                || !slots.feature().isEmpty();
+    /**
+     * 兼容旧调用：按普通推荐规则判断。
+     * unconstrainedSlots 不再参与必填判断；city 不能通过“不限”绕过。
+     */
+    public List<String> missingSlots(SlotBundle slots,
+                                     TimeConstraint timeConstraint,
+                                     Set<String> unconstrainedSlots) {
+        return missingRequiredFields(Intent.MEAL_RECOMMENDATION, slots, timeConstraint);
     }
 
+    /** 固定追问文案，不再调用 LLM。一次只追问一个必要字段。 */
+    public String questionFor(List<String> missingFields) {
+        if (missingFields == null || missingFields.isEmpty()) {
+            throw new IllegalArgumentException("missingFields 不能为空");
+        }
+        String field = missingFields.getFirst();
+        return switch (field) {
+            case "city" -> "你想看哪个城市的活动？";
+            case "date" -> "你想安排哪一天？比如本周六或本周日。";
+            default -> throw new IllegalArgumentException("不支持的澄清字段: " + field);
+        };
+    }
+
+    /** 兼容旧代码的固定文案入口。 */
     public String fallbackQuestion(List<String> missingSlots, TimeConstraint timeConstraint) {
-        if (missingSlots == null || missingSlots.isEmpty()) {
-            return "你更想参加哪类活动，或者更看重什么体验？";
-        }
-        if (missingSlots.contains("city")) {
-            return timeConstraint != null && timeConstraint.hasDate()
-                    ? "你想看哪个城市当天的活动？"
-                    : "你想看哪个城市的活动？";
-        }
-        if (missingSlots.contains("budget")) {
-            return "预算有偏好吗？不限制也可以，我会优先推荐性价比合适的活动。";
-        }
-        return "我再确认一下，你更看重活动类型、同行人还是交通便利？";
+        return questionFor(missingSlots);
     }
 }
