@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class IntentReviseServiceTest {
 
@@ -45,38 +46,40 @@ class IntentReviseServiceTest {
     }
 
     @Test
-    void shouldNotUseHalfDayKeywordAloneAsPlanSignal() {
+    void shouldRespectSuccessfulModelPlanEvenWhenTextLooksLikeSingleActivity() {
         IntentResult raw = new IntentResult(Intent.ACTIVITY_PLAN, SlotBundle.empty(), 0.95, List.of());
 
         IntentResult revised = service.revise(null, raw, "想找个半天的展览");
 
-        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+        assertEquals(Intent.ACTIVITY_PLAN, revised.intent());
+        assertFalse(revised.fallback());
     }
 
     @Test
-    void shouldNotUseAllDayAvailabilityAsPlanSignal() {
-        IntentResult raw = new IntentResult(Intent.ACTIVITY_PLAN, SlotBundle.empty(), 0.95, List.of());
-
-        IntentResult revised = service.revise(null, raw, "周六全天都行，推荐几个");
-
-        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
-    }
-
-    @Test
-    void shouldPromoteExplicitPlanningActionToActivityPlan() {
+    void shouldRespectSuccessfulModelRecommendationEvenWhenTextContainsPlanningWords() {
         IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.95, List.of());
 
         IntentResult revised = service.revise(null, raw, "帮我安排周六一天");
 
-        assertEquals(Intent.ACTIVITY_PLAN, revised.intent());
+        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
     }
 
     @Test
-    void shouldPromoteExplicitItineraryRequestToActivityPlan() {
+    void shouldNotOverrideRecommendationWithSafetyKeywordsWhenModelSucceeded() {
         IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.95, List.of());
 
-        IntentResult revised = service.revise(null, raw, "给我做个一日行程");
+        IntentResult revised = service.revise(null, raw, "暴雨天推荐几个室内展览");
 
-        assertEquals(Intent.ACTIVITY_PLAN, revised.intent());
+        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+    }
+
+    @Test
+    void shouldNotForceClarificationOnlyBecauseConfidenceIsLow() {
+        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.2, List.of());
+
+        IntentResult revised = service.revise(null, raw, "上海看展");
+
+        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+        assertFalse(revised.fallback());
     }
 }
