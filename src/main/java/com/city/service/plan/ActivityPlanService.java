@@ -123,7 +123,8 @@ public class ActivityPlanService {
             List<ActivityItem> candidates = activitySearchService.search(
                     new ActivitySearchRequest(sourceMode, userId, querySlots, excludeIds, targetTimeConstraint));
             List<ActivityItem> ranked = activityRankService.rank(
-                    new ActivityRankRequest(candidates, querySlots, excludeIds));
+                    new ActivityRankRequest(candidates, querySlots, targetTimeConstraint, excludeIds))
+                    .ranked();
             ActivityItem picked = ranked.stream()
                     .filter(item -> item != null && item.id() != null && !usedIds.contains(item.id()))
                     .findFirst()
