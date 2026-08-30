@@ -29,9 +29,9 @@ qweather:
 
 diet:
   prompt:
-    version: v6
-  rule:
     version: v7
+  rule:
+    version: v8
   llm:
     main-model: qwen-max
     light-model: qwen-turbo
