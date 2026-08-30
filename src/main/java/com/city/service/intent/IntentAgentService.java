@@ -1,10 +1,14 @@
 package com.city.service.intent;
 
 import com.city.agent.factory.AgentFactory;
-import com.city.model.ConversationTurn;
+import com.city.enums.ConstraintOperationType;
 import com.city.enums.Intent;
+import com.city.enums.TemporalMode;
+import com.city.model.ConstraintOperation;
+import com.city.model.ConversationTurn;
 import com.city.model.IntentResult;
 import com.city.model.SlotBundle;
+import com.city.model.TemporalMutation;
 import com.city.service.slot.SlotOptionService;
 import com.city.service.trace.AgentTraceService;
 import com.city.util.LlmJsonService;
@@ -17,36 +21,31 @@ import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import java.util.List;
-import java.util.Map;
+
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
-import com.city.enums.ConstraintOperationType;
-import com.city.model.ConstraintOperation;
+import java.util.Map;
 
 /**
  * IntentAgent 调用服务。
- * 负责调用 LLM 识别 intent + slots，解析 JSON，失败时关键词兜底；不直接写 SessionState。
+ * 负责调用 LLM 识别 intent + slots + temporal，解析 JSON，失败时关键词兜底；不直接写 SessionState。
  */
 @Service
 public class IntentAgentService {
 
-    /** 按 sessionId 提供 IntentAgent 实例的工厂。 */
+    private static final ZoneId TIME_ZONE = ZoneId.of("Asia/Shanghai");
+
     private final AgentFactory agentFactory;
-
-    /** 从 LLM 输出文本中提取 JSON 对象的工具。 */
     private final LlmJsonService llmJsonService;
-
-    /** 槽位字典服务，校验 LLM 输出的标签是否在合法候选值内。 */
     private final SlotOptionService slotOptionService;
-
-    /** 链路追踪服务，callAgent 内部会记录 AGENT_CALL 事件。 */
     private final AgentTraceService agentTraceService;
-
-    /** IntentAgent 使用的轻量模型名，来自配置 diet.llm.light-model。 */
     private final String modelName;
 
-    /** 构造器注入全部依赖。 */
     public IntentAgentService(
             AgentFactory agentFactory,
             LlmJsonService llmJsonService,
@@ -61,26 +60,15 @@ public class IntentAgentService {
         this.modelName = modelName;
     }
 
-    /**
-     * 调用 IntentAgent 识别本轮意图和槽位。
-     * 由 Orchestrator#handleTurn 调用，返回 IntentResult 供路由和槽位合并。
-     */
     public IntentResult recognize(String sessionId, Long userId, String userInput, SlotBundle knownSlots, List<ConversationTurn> recentHistory) {
         try {
-            // 加载活动时间、心情、同行场景、预算和活动类型等合法候选值
             Map<String, List<String>> slotOptions = slotOptionService.findAllOptions();
-            
-            // 从 AgentFactory 获取当前 session 绑定的 IntentAgent ReActAgent 实例
             ReActAgent agent = agentFactory.get(sessionId).intent();
-            // 清空 Agent 内存，避免上一轮对话污染本轮意图识别
             agent.getMemory().clear();
-            // 调用 Agent：内部走 agentTraceService.callAgent，记录 AGENT_CALL 事件（含 input/output/latency）
             Msg response = agentTraceService.callAgent(sessionId, "IntentAgent", modelName,
                     agent, buildUserPrompt(userId, sessionId, userInput, knownSlots, recentHistory, slotOptions));
-            // 解析 Agent 返回的 JSON 文本为 IntentResult（intent + slots + confidence）
             return parseResult(response.getTextContent(), userInput, slotOptions);
         } catch (Exception ignored) {
-            // LLM 超时/JSON 解析失败时不抛异常，走关键词 fallback 保证 Orchestrator 可继续
             Map<String, List<String>> fallbackOptions;
             try { fallbackOptions = slotOptionService.findAllOptions(); }
             catch (Exception unavailable) { fallbackOptions = Map.of(); }
@@ -88,22 +76,31 @@ public class IntentAgentService {
         }
     }
 
-    /** 构造传给 IntentAgent 的用户 prompt，包含上下文和输出格式约束。 */
-    private String buildUserPrompt(Long userId, String sessionId, String userInput, SlotBundle knownSlots, List<ConversationTurn> recentHistory, Map<String, List<String>> slotOptions) {
+    private String buildUserPrompt(Long userId, String sessionId, String userInput, SlotBundle knownSlots,
+                                   List<ConversationTurn> recentHistory, Map<String, List<String>> slotOptions) {
+        ZonedDateTime now = ZonedDateTime.now(TIME_ZONE);
         return """
                 你是“城市活动推荐”的语义解析器，不推荐活动、不解释、不闲聊，只提取本轮用户意图和筛选条件变化。
+
+                ## 当前时间上下文
+                currentDateTime: %s
+                currentDate: %s
+                currentDayOfWeek: %s
+                timezone: %s
+                注意：所有“今天/明天/后天/本周/下周/下个月”等相对日期，都必须基于这里的 currentDate 计算。
+                一周按周一到周日定义；“下周六”表示下一自然周里的星期六。
 
                 ## 输入上下文
                 userId: %s
                 sessionId: %s
                 最近对话: %s
-                当前已生效条件: %s
+                当前已生效普通条件: %s
                 可用标准标签: %s
                 当前用户消息: %s
 
                 ## 任务
                 输出且只输出一个合法 JSON 对象，不使用 Markdown、代码块或额外文字。
-                JSON 顶层只能包含 intent、slots、operations、confidence 四个字段。
+                JSON 顶层只能包含 intent、slots、operations、temporal、confidence 五个字段。
 
                 ## intent 枚举
                 - MEAL_RECOMMENDATION：首次请求推荐、继续补充条件，或意图不明确但仍在询问活动。
@@ -116,24 +113,54 @@ public class IntentAgentService {
                 ## slots 规则
                 slots 只放本轮能从“可用标准标签”精确映射的正向标签；字段必须完整输出：
                 city、location、mood、scene、budget、activityType、style、duration。
-                未提及的字段输出 []。禁止创造标签、禁止把历史条件重复抄进 slots。
-                今天、明天、后天、明确日期、周几、周末、上午/下午/晚上由后端解析；不要写入 slots。
+                未提及字段输出 []。禁止创造标签、禁止把历史条件重复抄进 slots。
+                时间绝不能写入 slots。
 
                 ## operations 规则
-                operations 是“对当前已生效条件”的补丁，数组中每一项必须严格是：
+                operations 只处理普通属性槽位，数组中每项必须是：
                 {"field":"字段名","op":"SET|ADD|REMOVE|CLEAR","values":["标准标签"],"raw":"用户原始片段"}
-                values 是唯一合法的数组字段，禁止 value、items、valueList；raw 必须是字符串。
-                field 只能是 city、location、mood、scene、budget、activityType、style、duration、time。
-                - SET：将该字段替换为 values，例如“改成北京”“只看电影”。
-                - ADD：保留旧值并加入 values，例如“电影和展览都可以”。
-                - REMOVE：排除 values，例如“不要展览”“别太热闹”。
-                - CLEAR：取消该字段全部限制，values 必须为 []，例如“预算不限”“城市不限”。
-                - field 为 time 时只可使用 SET 或 CLEAR，values 必须为 []，原表达写入 raw。
-                - 无明确变更时 operations 必须为 []。
-                - 同一字段若出现 CLEAR，不能再输出该字段其他操作；若同时出现 SET 和 ADD，以 SET 为准。
-                - “换一批”本身不产生 slots 或 operations，只输出 intent=MEAL_ADJUST。
+                field 只能是 city、location、mood、scene、budget、activityType、style、duration。
+                - SET：替换该字段。
+                - ADD：保留旧值并加入 values。
+                - REMOVE：排除 values。
+                - CLEAR：取消该字段全部限制，values 必须为 []。
+                - 无明确普通槽位变更时 operations=[]。
+                - 时间变更不要写进 operations，统一写 temporal。
 
-                ## 通用正确输出示例
+                ## temporal 规则
+                temporal 必须完整输出以下字段：
+                {"raw":"","dateMode":"KEEP|SET|CLEAR","dateStart":null,"dateEnd":null,
+                 "timeMode":"KEEP|SET|CLEAR","timeStart":null,"timeEnd":null,
+                 "approximate":false,"confidence":0.0}
+
+                temporal 表示“本轮对历史时间条件的修改”，不是历史时间的完整抄写：
+                - KEEP：本轮没有修改该维度，值必须为 null。
+                - SET：本轮明确设置/修改该维度，必须输出绝对日期或绝对时间范围。
+                - CLEAR：本轮明确取消该维度限制，值必须为 null。
+                - 用户完全没提时间：dateMode=KEEP，timeMode=KEEP，raw=""。
+                - “改晚上”：dateMode=KEEP，timeMode=SET。
+                - “改周日”：dateMode=SET，timeMode=KEEP。
+                - “几点都行”：dateMode=KEEP，timeMode=CLEAR。
+                - “哪天都行”：dateMode=CLEAR，timeMode=KEEP。
+                - “时间不限/随时都行”：dateMode=CLEAR，timeMode=CLEAR。
+                - 日期格式固定 yyyy-MM-dd；时间格式固定 HH:mm。
+                - 单个明确时刻，例如“下午3点”，输出一个 1 小时时间窗，如 15:00~16:00。
+                - “上午”=08:00~12:00，“下午”=12:00~18:00，“晚上”=18:00~23:00，“凌晨”=00:00~05:00。
+                - “三点左右/大概三点”统一按 ±1 小时展开，并设置 approximate=true，例如下午3点左右 => 14:00~16:00。
+                - 不要猜测复杂 OR、排除时间、周期时间或跨午夜范围；无法可靠解析时对应维度使用 KEEP，并降低 temporal.confidence。
+
+                ## 时间示例
+                如果 currentDate=2026-08-30（SUNDAY）：
+                用户：“下周六下午三点左右”
+                temporal={"raw":"下周六下午三点左右","dateMode":"SET","dateStart":"2026-09-05","dateEnd":"2026-09-05","timeMode":"SET","timeStart":"14:00","timeEnd":"16:00","approximate":true,"confidence":0.96}
+
+                用户：“下个月5号”
+                temporal={"raw":"下个月5号","dateMode":"SET","dateStart":"2026-09-05","dateEnd":"2026-09-05","timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.96}
+
+                用户：“改成晚上”
+                temporal={"raw":"晚上","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"SET","timeStart":"18:00","timeEnd":"23:00","approximate":false,"confidence":0.95}
+
+                ## 普通槽位示例
                 用户：“改成北京，电影和展览都可以，不要太热闹，预算不限”
                 {
                   "intent":"MEAL_ADJUST",
@@ -144,54 +171,82 @@ public class IntentAgentService {
                     {"field":"style","op":"REMOVE","values":["热闹"],"raw":"不要太热闹"},
                     {"field":"budget","op":"CLEAR","values":[],"raw":"预算不限"}
                   ],
+                  "temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":1.0},
                   "confidence":0.92
                 }
-                """.formatted(userId, sessionId, recentHistory, knownSlots, slotOptions, userInput);
+                """.formatted(
+                now.toLocalDateTime(), now.toLocalDate(), now.getDayOfWeek(), TIME_ZONE,
+                userId, sessionId, recentHistory, knownSlots, slotOptions, userInput);
     }
 
-    /** 将 Agent 返回的 JSON 文本解析为 IntentResult。 */
     private IntentResult parseResult(String content, String userInput, Map<String, List<String>> slotOptions) {
-        // 从 LLM 输出中提取 JSON 根节点（可能包裹在 markdown 代码块中）
         JsonNode root = llmJsonService.parseObject(content);
-
-        // 读取 intent 字段并解析为 Intent 枚举，失败时走关键词兜底
         Intent intent = parseIntent(root.path("intent").asText(null), userInput);
-
-        // 若 slots 是嵌套对象则取 slots 节点，否则直接用 root（兼容扁平 JSON）
         JsonNode slotsNode = root.path("slots").isObject() ? root.path("slots") : root;
-
-        // 将 JSON slots 各字段映射为 SlotBundle，并过滤非法字典值
         SlotBundle slots = parseSlots(slotsNode, slotOptions);
-
-        // 读取 confidence 字段，缺省 0.5
         double confidence = root.path("confidence").asDouble(0.5);
-
-        // 组装并返回 IntentResult
-        return new IntentResult(intent, slots, confidence, parseOperations(root.path("operations"), slotOptions));
+        return new IntentResult(
+                intent,
+                slots,
+                confidence,
+                parseOperations(root.path("operations"), slotOptions),
+                parseTemporal(root.path("temporal"))
+        );
     }
 
-    /** 将 JSON 中的 intent 字符串解析为 Intent 枚举。 */
+    private TemporalMutation parseTemporal(JsonNode node) {
+        if (node == null || !node.isObject()) return TemporalMutation.keep();
+        try {
+            TemporalMode dateMode = TemporalMode.valueOf(node.path("dateMode").asText("KEEP").toUpperCase(Locale.ROOT));
+            TemporalMode timeMode = TemporalMode.valueOf(node.path("timeMode").asText("KEEP").toUpperCase(Locale.ROOT));
+            LocalDate dateStart = parseDate(node.path("dateStart"));
+            LocalDate dateEnd = parseDate(node.path("dateEnd"));
+            LocalTime timeStart = parseTime(node.path("timeStart"));
+            LocalTime timeEnd = parseTime(node.path("timeEnd"));
+            return new TemporalMutation(
+                    node.path("raw").asText(""),
+                    dateMode,
+                    dateStart,
+                    dateEnd,
+                    timeMode,
+                    timeStart,
+                    timeEnd,
+                    node.path("approximate").asBoolean(false),
+                    node.path("confidence").asDouble(0.5)
+            );
+        } catch (Exception ignored) {
+            return TemporalMutation.keep();
+        }
+    }
+
+    private LocalDate parseDate(JsonNode node) {
+        if (node == null || node.isNull() || node.asText("").isBlank()) return null;
+        return LocalDate.parse(node.asText());
+    }
+
+    private LocalTime parseTime(JsonNode node) {
+        if (node == null || node.isNull() || node.asText("").isBlank()) return null;
+        return LocalTime.parse(node.asText());
+    }
+
     private Intent parseIntent(String rawIntent, String userInput) {
         try {
-            // rawIntent 为 null 时走关键词兜底；否则 Intent.valueOf 解析
             return rawIntent == null ? fallbackIntent(userInput) : Intent.valueOf(rawIntent);
         } catch (Exception ignored) {
-            // 非法枚举名时走关键词兜底
             return fallbackIntent(userInput);
         }
     }
 
-    /** 将 JSON slots 节点各字段转为 SlotBundle，通过 SlotJsonPicker 过滤非法标签。 */
     private SlotBundle parseSlots(JsonNode node, Map<String, List<String>> options) {
         return new SlotBundle(
-                SlotJsonPicker.pick(node, "city", options),              // 城市标签
-                SlotJsonPicker.pick(node, "location", options),          // 位置/区域标签
-                SlotJsonPicker.pick(node, "mood", options),          // 活动状态标签
-                SlotJsonPicker.pick(node, "scene", options),         // 同行人标签
-                SlotJsonPicker.pick(node, "budget", options),    // 预算标签
-                SlotJsonPicker.pick(node, "activityType", options),       // 活动类型标签
-                SlotJsonPicker.pick(node, "style", options),         // 活动风格标签
-                SlotJsonPicker.pick(node, "duration", options)    // 活动时长标签
+                SlotJsonPicker.pick(node, "city", options),
+                SlotJsonPicker.pick(node, "location", options),
+                SlotJsonPicker.pick(node, "mood", options),
+                SlotJsonPicker.pick(node, "scene", options),
+                SlotJsonPicker.pick(node, "budget", options),
+                SlotJsonPicker.pick(node, "activityType", options),
+                SlotJsonPicker.pick(node, "style", options),
+                SlotJsonPicker.pick(node, "duration", options)
         );
     }
 
@@ -217,13 +272,8 @@ public class IntentAgentService {
         return Map.of("values", options.getOrDefault(field, List.of()));
     }
 
-    /** LLM 完全失败时的保守兜底 IntentResult，confidence 固定 0.2。 */
     private IntentResult fallback(String userInput, Map<String, List<String>> options) {
-        return new IntentResult(
-                fallbackIntent(userInput),                                                          // 关键词推断意图
-                fallbackSlots(userInput, options),                                                   // 基于字典提取多值槽位
-                0.2                                                                                 // 低置信度
-        );
+        return new IntentResult(fallbackIntent(userInput), fallbackSlots(userInput, options), 0.2);
     }
 
     private SlotBundle fallbackSlots(String userInput, Map<String, List<String>> options) {
@@ -236,35 +286,19 @@ public class IntentAgentService {
         return parseSlots(node, options);
     }
 
-    /** 关键词规则推断意图，按优先级依次匹配。 */
     private Intent fallbackIntent(String userInput) {
-        if (userInput == null || userInput.isBlank()) {
-            return Intent.CLARIFY_NEEDED;  // 空输入 → 需要澄清
-        }
-        if (containsAny(userInput, "危险", "偏远", "深夜独自", "违法", "未成年人进入")) {
-            return Intent.HEALTH_RISK;     // 活动安全风险关键词，复用原枚举分支
-        }
-        if (containsAny(userInput, "换一批", "换个", "不要户外", "室内", "便宜点", "近一点", "安静点")) {
-            return Intent.MEAL_ADJUST;   // 调整推荐关键词
-        }
-        if (containsAny(userInput, "半天", "一天", "行程", "安排一下")) {
-            return Intent.ACTIVITY_PLAN;     // 多餐规划关键词
-        }
-        if (containsAny(userInput, "你是谁", "你是 AI", "你好")) {
-            return Intent.OTHER;      // 与饮食无关等关键词
-        }
-        if (containsAny(userInput, "去哪", "去哪里", "玩什么", "活动", "展览", "电影", "演出", "推荐")) {
-            return Intent.MEAL_RECOMMENDATION; // 推荐关键词
-        }
-        return Intent.CLARIFY_NEEDED;    // 默认 → 需要澄清
+        if (userInput == null || userInput.isBlank()) return Intent.CLARIFY_NEEDED;
+        if (containsAny(userInput, "危险", "偏远", "深夜独自", "违法", "未成年人进入")) return Intent.HEALTH_RISK;
+        if (containsAny(userInput, "换一批", "换个", "不要户外", "室内", "便宜点", "近一点", "安静点")) return Intent.MEAL_ADJUST;
+        if (containsAny(userInput, "半天", "一天", "行程", "安排一下")) return Intent.ACTIVITY_PLAN;
+        if (containsAny(userInput, "你是谁", "你是 AI", "你好")) return Intent.OTHER;
+        if (containsAny(userInput, "去哪", "去哪里", "玩什么", "活动", "展览", "电影", "演出", "推荐")) return Intent.MEAL_RECOMMENDATION;
+        return Intent.CLARIFY_NEEDED;
     }
 
-    /** 判断 text 是否包含 keywords 中任一子串。 */
     private boolean containsAny(String text, String... keywords) {
         for (String keyword : keywords) {
-            if (text.contains(keyword)) {
-                return true;
-            }
+            if (text.contains(keyword)) return true;
         }
         return false;
     }
