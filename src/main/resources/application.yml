@@ -29,12 +29,13 @@ qweather:
 
 diet:
   prompt:
-    version: v1
+    version: v2
   rule:
-    version: v1
+    version: v2
   llm:
     main-model: qwen-max
     light-model: qwen-turbo
+    response-model: qwen-turbo
   session:
     max-history-turns: 10
 logging:
