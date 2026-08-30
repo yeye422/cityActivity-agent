@@ -2,7 +2,12 @@ package com.city.service.plan;
 
 import com.city.agent.factory.AgentFactory;
 import com.city.enums.SourceMode;
-import com.city.model.*;
+import com.city.model.ActivityItem;
+import com.city.model.ActivityResponse;
+import com.city.model.RecommendResult;
+import com.city.model.RecommendedActivityOption;
+import com.city.model.ResponseResult;
+import com.city.model.SlotBundle;
 import com.city.service.recommend.RecommendResponseAgentService;
 import com.city.service.trace.AgentTraceService;
 import com.city.util.LlmJsonService;
@@ -40,9 +45,6 @@ public class PlanResponseAgentService {
         this.modelName = modelName;
     }
 
-    /**
-     * 将按时段选出的方案包装为 RecommendResult + ResponseResult。
-     */
     public RecommendResponseAgentService.Result planAndRespond(
             String sessionId,
             String userInput,
@@ -51,7 +53,9 @@ public class PlanResponseAgentService {
             List<ActivityPlanService.PlannedActivity> plannedMeals
     ) {
         List<ActivityPlanService.PlannedActivity> safePlans = plannedMeals == null ? List.of() : plannedMeals;
-        List<ActivityPlanService.PlannedActivity> matched = safePlans.stream().filter(ActivityPlanService.PlannedActivity::matched).toList();
+        List<ActivityPlanService.PlannedActivity> matched = safePlans.stream()
+                .filter(ActivityPlanService.PlannedActivity::matched)
+                .toList();
         boolean needDisclaimer = needsDisclaimer(sharedSlots);
 
         if (matched.isEmpty()) {
@@ -74,13 +78,17 @@ public class PlanResponseAgentService {
             );
             ParsedOutput parsed = parseOutput(response.getTextContent(), safePlans, sharedSlots);
             RecommendResult recommend = new RecommendResult(parsed.options(), needDisclaimer);
-            ResponseResult responseResult = new ResponseResult(parsed.speechText(), toDisplayBlocks(recommend), "WAIT_USER");
+            ResponseResult responseResult = new ResponseResult(
+                    parsed.speechText(), toDisplayBlocks(recommend, safePlans), "WAIT_USER");
             return new RecommendResponseAgentService.Result(recommend, responseResult);
         } catch (Exception ignored) {
             RecommendResult recommend = new RecommendResult(templateOptions(safePlans, sharedSlots), needDisclaimer);
             return new RecommendResponseAgentService.Result(
                     recommend,
-                    new ResponseResult(templateSpeech(safePlans, recommend), toDisplayBlocks(recommend), "WAIT_USER")
+                    new ResponseResult(
+                            templateSpeech(safePlans, recommend),
+                            toDisplayBlocks(recommend, safePlans),
+                            "WAIT_USER")
             );
         }
     }
@@ -133,32 +141,39 @@ public class PlanResponseAgentService {
                 continue;
             }
             ActivityItem activity = planned.activity();
-            // 以 Java 已选活动为准，避免 LLM 跨时段挪用 activityId
-            String reason = reasonsByActivityTime.getOrDefault(planned.period(), templateReason(planned, sharedSlots));
+            String reason = reasonsByActivityTime.getOrDefault(
+                    planned.period(), templateReason(planned, sharedSlots));
             options.add(toOption(activity, reason, planned.querySlots()));
         }
 
         String speechText = root.path("speechText").asText("").trim();
         if (speechText.isBlank()) {
-            speechText = templateSpeech(plannedMeals, new RecommendResult(options, needsDisclaimer(sharedSlots)));
+            speechText = templateSpeech(
+                    plannedMeals, new RecommendResult(options, needsDisclaimer(sharedSlots)));
         }
         return new ParsedOutput(options, speechText);
     }
 
-    private List<RecommendedActivityOption> templateOptions(List<ActivityPlanService.PlannedActivity> plannedMeals, SlotBundle sharedSlots) {
+    private List<RecommendedActivityOption> templateOptions(
+            List<ActivityPlanService.PlannedActivity> plannedMeals,
+            SlotBundle sharedSlots) {
         List<RecommendedActivityOption> options = new ArrayList<>();
         for (ActivityPlanService.PlannedActivity planned : plannedMeals) {
             if (!planned.matched()) {
                 continue;
             }
-            options.add(toOption(planned.activity(), templateReason(planned, sharedSlots), planned.querySlots()));
+            options.add(toOption(
+                    planned.activity(),
+                    templateReason(planned, sharedSlots),
+                    planned.querySlots()));
         }
         return options;
     }
 
     private RecommendedActivityOption toOption(ActivityItem activity, String reason, SlotBundle querySlots) {
         SlotBundle displaySlots = querySlots != null ? querySlots : activity.slots();
-        return new RecommendedActivityOption(activity.id(), activity.sourceType(), activity.name(), reason, activity.matchScore(), displaySlots);
+        return new RecommendedActivityOption(
+                activity.id(), activity.sourceType(), activity.name(), reason, activity.matchScore(), displaySlots);
     }
 
     private String templateReason(ActivityPlanService.PlannedActivity planned, SlotBundle sharedSlots) {
@@ -172,7 +187,9 @@ public class PlanResponseAgentService {
         return name + "和你的偏好匹配度较高，适合安排在" + planned.period() + "。";
     }
 
-    private String templateSpeech(List<ActivityPlanService.PlannedActivity> plannedMeals, RecommendResult recommendResult) {
+    private String templateSpeech(
+            List<ActivityPlanService.PlannedActivity> plannedMeals,
+            RecommendResult recommendResult) {
         StringBuilder builder = new StringBuilder("为你规划了一套时间安排：");
         for (ActivityPlanService.PlannedActivity planned : plannedMeals) {
             builder.append("\n- ").append(planned.period()).append("：");
@@ -194,29 +211,27 @@ public class PlanResponseAgentService {
         return builder.toString();
     }
 
-    private List<ActivityResponse> toDisplayBlocks(RecommendResult recommendResult) {
-        if (recommendResult == null || recommendResult.recommendations() == null) {
+    /**
+     * 规划卡片同样以 PlannedActivity 中的原始 ActivityItem 为事实来源。
+     */
+    private List<ActivityResponse> toDisplayBlocks(
+            RecommendResult recommendResult,
+            List<ActivityPlanService.PlannedActivity> plans) {
+        if (recommendResult == null || recommendResult.recommendations() == null
+                || plans == null || plans.isEmpty()) {
             return List.of();
         }
+        Map<Long, ActivityItem> byId = new LinkedHashMap<>();
+        for (ActivityPlanService.PlannedActivity planned : plans) {
+            if (planned != null && planned.matched()) {
+                ActivityItem activity = planned.activity();
+                byId.putIfAbsent(activity.id(), activity);
+            }
+        }
         return recommendResult.recommendations().stream()
-                .map(option -> new ActivityResponse(
-                        option.itemId(),
-                        option.sourceType(),
-                        option.name(),
-                        option.matchedSlots().city(),
-                        option.matchedSlots().location(),
-                        option.matchedSlots().mood(),
-                        option.matchedSlots().scene(),
-                        option.matchedSlots().budget(),
-                        option.matchedSlots().activityType(),
-                        option.matchedSlots().style(),
-                        option.matchedSlots().duration(),
-                        null,
-                        null,
-                        null,
-                        null,
-                        option.matchScore()
-                ))
+                .map(option -> option == null ? null : byId.get(option.itemId()))
+                .filter(activity -> activity != null)
+                .map(ActivityResponse::from)
                 .toList();
     }
 
