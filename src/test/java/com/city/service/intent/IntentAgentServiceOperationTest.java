@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class IntentAgentServiceOperationTest {
 
     private final IntentAgentService service = new IntentAgentService(
-            null, null, null, null, "qwen-turbo");
+            null, null, null, null, "qwen-max");
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
@@ -52,5 +52,32 @@ class IntentAgentServiceOperationTest {
         assertEquals("budget", result.getFirst().field());
         assertEquals(ConstraintOperationType.CLEAR, result.getFirst().op());
         assertTrue(result.getFirst().values().isEmpty());
+    }
+
+    @Test
+    void fallbackShouldCreateClearOperationForExplicitUnlimitedBudget() {
+        Map<String, List<String>> options = Map.of(
+                "budget", List.of("免费", "100元内", "200元内", "300元内"));
+
+        List<ConstraintOperation> result = ReflectionTestUtils.invokeMethod(
+                service, "fallbackOperations", "预算不限", options);
+
+        assertEquals(1, result.size());
+        assertEquals("budget", result.getFirst().field());
+        assertEquals(ConstraintOperationType.CLEAR, result.getFirst().op());
+    }
+
+    @Test
+    void fallbackShouldCreateRemoveOperationForExplicitNegativePreference() {
+        Map<String, List<String>> options = Map.of(
+                "duration", List.of("户外", "室内", "半天", "全天"));
+
+        List<ConstraintOperation> result = ReflectionTestUtils.invokeMethod(
+                service, "fallbackOperations", "不要户外", options);
+
+        assertEquals(1, result.size());
+        assertEquals("duration", result.getFirst().field());
+        assertEquals(ConstraintOperationType.REMOVE, result.getFirst().op());
+        assertEquals(List.of("户外"), result.getFirst().values());
     }
 }

@@ -12,23 +12,17 @@ import java.util.List;
 
 /**
  * 意图后处理服务。
- * 只负责根据历史会话状态修正 intent；时间解析与时间状态合并由 Orchestrator 的时间链路单独处理。
+ * 正常模型成功路径不再用关键词重新判断用户语义；这里只保留确定性的会话状态修正。
  */
 @Service
 public class IntentReviseService {
 
-    private static final double LOW_CONFIDENCE_THRESHOLD = 0.4;
     private static final double BATCH_REFRESH_CONFIDENCE = 0.95;
 
     public IntentResult revise(SessionState state, IntentResult result, String userInput) {
         IntentResult safeResult = result == null ? IntentResult.clarify(SlotBundle.empty()) : result;
 
-        if (safeResult.intent() == Intent.HEALTH_RISK || containsSafetyRiskKeyword(userInput)) {
-            return revised(Intent.HEALTH_RISK, safeResult);
-        }
-
-        // “换一批”只刷新结果集，不应该修改任何普通槽位或时间约束。
-        // 即使 LLM 误输出 CLEAR/SET/ADD/REMOVE，也在这里归一化为空 Patch，避免 QueryKey 被错误改变。
+        // “换一批”是确定性的结果集操作，不允许模型顺带修改普通槽位或时间条件。
         if (isPureBatchRefresh(userInput)) {
             Intent targetIntent = hasLastRecommendations(state)
                     ? Intent.MEAL_ADJUST
@@ -36,6 +30,7 @@ public class IntentReviseService {
             return batchRefresh(targetIntent, safeResult);
         }
 
+        // Plan 澄清中的短回答（如“上海”“预算不限”）沿用原 Plan 会话状态。
         if (state != null
                 && state.phase() == SessionPhase.CLARIFY
                 && state.currentIntent() == Intent.ACTIVITY_PLAN
@@ -43,30 +38,25 @@ public class IntentReviseService {
             return revised(Intent.ACTIVITY_PLAN, safeResult);
         }
 
+        // 没有历史推荐结果时，ADJUST 不存在可调整对象，按首次推荐流程处理。
         if (safeResult.intent() == Intent.MEAL_ADJUST && !hasLastRecommendations(state)) {
             return revised(Intent.MEAL_RECOMMENDATION, safeResult);
         }
 
-        if (containsActivityPlanKeyword(userInput)
-                && safeResult.intent() != Intent.MEAL_ADJUST
-                && safeResult.intent() != Intent.ACTIVITY_PLAN) {
-            return revised(Intent.ACTIVITY_PLAN, safeResult);
-        }
-
-        if (safeResult.intent() == Intent.MEAL_RECOMMENDATION && safeResult.confidence() < LOW_CONFIDENCE_THRESHOLD) {
-            return revised(Intent.CLARIFY_NEEDED, safeResult);
-        }
-
+        // 其他情况下尊重模型判断：
+        // 不再做 HEALTH_RISK 关键词覆盖、Plan 正向/反向关键词纠正或低 confidence 强制澄清。
         return safeResult;
     }
 
     private boolean hasLastRecommendations(SessionState state) {
-        return state != null && state.lastRecommendedActivityIds() != null && !state.lastRecommendedActivityIds().isEmpty();
+        return state != null
+                && state.lastRecommendedActivityIds() != null
+                && !state.lastRecommendedActivityIds().isEmpty();
     }
 
     /**
      * 仅识别“纯结果刷新”表达。
-     * 像“换一批室内的”“再来几个便宜点的”同时包含新约束，不在这里拦截，继续交给正常 Patch 链路处理。
+     * “换一批室内的”“再来几个便宜点的”包含新约束，不在这里归一化。
      */
     private boolean isPureBatchRefresh(String userInput) {
         if (userInput == null || userInput.isBlank()) return false;
@@ -101,7 +91,8 @@ public class IntentReviseService {
                 SlotBundle.empty(),
                 Math.max(result.confidence(), BATCH_REFRESH_CONFIDENCE),
                 List.of(),
-                TemporalMutation.keep()
+                TemporalMutation.keep(),
+                result.fallback()
         );
     }
 
@@ -115,24 +106,8 @@ public class IntentReviseService {
                 safeSlots(result),
                 result.confidence(),
                 result.operations() == null ? List.of() : result.operations(),
-                result.temporal() == null ? TemporalMutation.keep() : result.temporal()
+                result.temporal() == null ? TemporalMutation.keep() : result.temporal(),
+                result.fallback()
         );
-    }
-
-    private boolean containsSafetyRiskKeyword(String userInput) {
-        if (userInput == null || userInput.isBlank()) return false;
-        return containsAny(userInput, "深夜独自", "凌晨一个人", "偏远", "无人区", "危险活动", "极端天气", "暴雨", "台风");
-    }
-
-    private boolean containsActivityPlanKeyword(String userInput) {
-        if (userInput == null || userInput.isBlank()) return false;
-        return containsAny(userInput, "半天", "一天", "一日", "活动规划", "行程", "安排一下", "周末安排");
-    }
-
-    private boolean containsAny(String text, String... keywords) {
-        for (String keyword : keywords) {
-            if (text.contains(keyword)) return true;
-        }
-        return false;
     }
 }

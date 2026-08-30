@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class IntentReviseServiceTest {
 
@@ -42,5 +43,43 @@ class IntentReviseServiceTest {
         IntentResult revised = service.revise(state, raw, "西安");
 
         assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+    }
+
+    @Test
+    void shouldRespectSuccessfulModelPlanEvenWhenTextLooksLikeSingleActivity() {
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_PLAN, SlotBundle.empty(), 0.95, List.of());
+
+        IntentResult revised = service.revise(null, raw, "想找个半天的展览");
+
+        assertEquals(Intent.ACTIVITY_PLAN, revised.intent());
+        assertFalse(revised.fallback());
+    }
+
+    @Test
+    void shouldRespectSuccessfulModelRecommendationEvenWhenTextContainsPlanningWords() {
+        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.95, List.of());
+
+        IntentResult revised = service.revise(null, raw, "帮我安排周六一天");
+
+        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+    }
+
+    @Test
+    void shouldNotOverrideRecommendationWithSafetyKeywordsWhenModelSucceeded() {
+        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.95, List.of());
+
+        IntentResult revised = service.revise(null, raw, "暴雨天推荐几个室内展览");
+
+        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+    }
+
+    @Test
+    void shouldNotForceClarificationOnlyBecauseConfidenceIsLow() {
+        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.2, List.of());
+
+        IntentResult revised = service.revise(null, raw, "上海看展");
+
+        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+        assertFalse(revised.fallback());
     }
 }

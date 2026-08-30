@@ -13,7 +13,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** 将明确的“不要/不限/改成”表达转为确定性槽位操作，避免依赖 LLM 猜撤销语义。 */
+/**
+ * 普通路径只执行 IntentAgent 的结构化 operations；
+ * “不要/不限”等原文关键词解析仅保留给模型失败后的 fallback 路径。
+ */
 @Service
 public class SlotMutationService {
     private final SlotOptionService options;
@@ -22,6 +25,10 @@ public class SlotMutationService {
         this.options = options;
     }
 
+    /**
+     * 模型失败后的关键词 fallback：从用户原文补齐明确的 CLEAR / REMOVE 语义。
+     * 正常模型成功路径不要调用此方法。
+     */
     public SlotMutation apply(String input,
                               SlotBundle current,
                               SlotBundle currentExcluded,
@@ -39,7 +46,9 @@ public class SlotMutationService {
                 continue;
             }
             for (String value : dictionary.getOrDefault(field, List.of())) {
-                if (text.contains("不要" + value) || text.contains("不想" + value) || text.contains("不想看" + value)
+                if (text.contains("不要" + value)
+                        || text.contains("不想" + value)
+                        || text.contains("不想看" + value)
                         || text.contains("别" + value)) {
                     included = replace(included, field, without(values(included, field), value));
                     excluded = replace(excluded, field, append(values(excluded, field), value));
@@ -50,7 +59,10 @@ public class SlotMutationService {
         return new SlotMutation(included, excluded, unconstrained);
     }
 
-    /** 先执行经字典过滤的 LLM 结构化操作，再用关键词规则补齐模型遗漏。 */
+    /**
+     * 正常模型成功路径：只执行已经过字典过滤的结构化 operations，
+     * 不再扫描用户原文做第二次语义纠正。input 参数仅为兼容现有调用签名保留。
+     */
     public SlotMutation apply(List<ConstraintOperation> operations,
                               String input,
                               SlotBundle current,
@@ -99,7 +111,7 @@ public class SlotMutationService {
                 }
             }
         }
-        return apply(input, included, excluded, unconstrained);
+        return new SlotMutation(included, excluded, unconstrained);
     }
 
     private Set<String> mutableSet(Set<String> source) {

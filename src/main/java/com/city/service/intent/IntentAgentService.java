@@ -49,7 +49,7 @@ public class IntentAgentService {
             LlmJsonService llmJsonService,
             SlotOptionService slotOptionService,
             AgentTraceService agentTraceService,
-            @Value("${diet.llm.light-model:qwen-turbo}") String modelName
+            @Value("${diet.llm.main-model:qwen-max}") String modelName
     ) {
         this.agentFactory = agentFactory;
         this.llmJsonService = llmJsonService;
@@ -77,7 +77,7 @@ public class IntentAgentService {
                     agent,
                     buildUserPrompt(userId, sessionId, userInput, knownSlots, knownTimeConstraint, recentHistory, slotOptions)
             );
-            return parseResult(response.getTextContent(), userInput, slotOptions);
+            return parseResult(response.getTextContent(), slotOptions);
         } catch (Exception ignored) {
             Map<String, List<String>> fallbackOptions;
             try {
@@ -133,9 +133,9 @@ public class IntentAgentService {
                 只输出一个合法 JSON 对象。顶层只能包含 intent、slots、operations、temporal、confidence。
 
                 ## intent 枚举
-                - MEAL_RECOMMENDATION：首次请求推荐、继续补充条件，或仍在询问活动。
+                - MEAL_RECOMMENDATION：首次请求推荐、继续补充条件，或仍在询问单个/多个活动。
                 - MEAL_ADJUST：修改、追加、删除、清除条件，或“换一批”。
-                - ACTIVITY_PLAN：要求半天、一天、行程或活动安排。
+                - ACTIVITY_PLAN：明确要求系统安排/规划多时段行程，例如“帮我安排周六一天”“做个一日行程”“从上午到晚上排一下”；不要仅因为出现“半天/一天/全天”就判断为规划。
                 - HEALTH_RISK：深夜独行、偏远地点、极端天气等安全风险。
                 - OTHER：与城市活动无关。
                 - CLARIFY_NEEDED：无法判断是否在请求活动推荐。
@@ -144,6 +144,9 @@ public class IntentAgentService {
                 slots 只处理 city、location、mood、scene、budget、activityType、style、duration。
                 slots 只填写当前用户消息里明确出现的正向标准标签；历史已生效值不要抄入本轮 slots。
                 未提及字段输出 []；时间绝不能写入 slots。
+                - “想找个半天的展览”中的“半天”描述活动自身时长，可写 duration=["半天"]，intent 仍是 MEAL_RECOMMENDATION。
+                - “想找个全天活动”中的“全天”描述活动自身时长，可写 duration=["全天"]，intent 仍是 MEAL_RECOMMENDATION。
+                - “周六全天都行 / 一整天都有空”描述用户可用时间，不要写 duration，应交给 temporal。
 
                 ## operations
                 operations 只处理普通属性槽位：
@@ -167,7 +170,7 @@ public class IntentAgentService {
                 - 完全没提时间：dateMode=KEEP，timeMode=KEEP，raw=""。
                 - “改晚上”：dateMode=KEEP，timeMode=SET。
                 - “改周日”：dateMode=SET，timeMode=KEEP。
-                - “几点都行”：dateMode=KEEP，timeMode=CLEAR。
+                - “几点都行 / 全天都行 / 一整天都有空”：如果日期仍需保留，则 dateMode 按本轮日期表达处理，timeMode=CLEAR；不要把“全天”写入 duration。
                 - “哪天都行”：dateMode=CLEAR，timeMode=KEEP。
                 - “时间不限/随时都行”：dateMode=CLEAR，timeMode=CLEAR。
                 - “还是之前那个时间”：dateMode=KEEP，timeMode=KEEP；不要重新计算历史时间。
@@ -194,7 +197,7 @@ public class IntentAgentService {
                  "temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},
                  "confidence":0.95}
 
-                历史已有 city=西安、time=14:00~23:00，上一轮助手问“预算有偏好吗？”，当前用户“ 不限 ” =>
+                历史已有 city=西安、time=14:00~23:00，上一轮助手问“预算有偏好吗？”，当前用户“不限” =>
                 {"intent":"MEAL_RECOMMENDATION","slots":{"city":[],"location":[],"mood":[],"scene":[],"budget":[],"activityType":[],"style":[],"duration":[]},
                  "operations":[{"field":"budget","op":"CLEAR","values":[],"raw":"不限"}],
                  "temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},
@@ -214,9 +217,9 @@ public class IntentAgentService {
         );
     }
 
-    private IntentResult parseResult(String content, String userInput, Map<String, List<String>> slotOptions) {
+    private IntentResult parseResult(String content, Map<String, List<String>> slotOptions) {
         JsonNode root = llmJsonService.parseObject(content);
-        Intent intent = parseIntent(root.path("intent").asText(null), userInput);
+        Intent intent = parseIntent(root.path("intent").asText(null));
         JsonNode slotsNode = root.path("slots").isObject() ? root.path("slots") : root;
         SlotBundle slots = parseSlots(slotsNode, slotOptions);
         double confidence = root.path("confidence").asDouble(0.5);
@@ -264,12 +267,12 @@ public class IntentAgentService {
         return LocalTime.parse(node.asText());
     }
 
-    private Intent parseIntent(String rawIntent, String userInput) {
-        try {
-            return rawIntent == null ? fallbackIntent(userInput) : Intent.valueOf(rawIntent);
-        } catch (Exception ignored) {
-            return fallbackIntent(userInput);
+    /** 缺失或非法 intent 视为模型结构解析失败，交给 recognize() 的 fallback 路径统一处理。 */
+    private Intent parseIntent(String rawIntent) {
+        if (rawIntent == null || rawIntent.isBlank()) {
+            throw new IllegalArgumentException("intent missing");
         }
+        return Intent.valueOf(rawIntent);
     }
 
     private SlotBundle parseSlots(JsonNode node, Map<String, List<String>> options) {
@@ -295,8 +298,6 @@ public class IntentAgentService {
             try {
                 ConstraintOperationType op = ConstraintOperationType.valueOf(opText.toUpperCase(Locale.ROOT));
                 List<String> values = SlotJsonPicker.pick(item, "values", optionsFor(field, options));
-                // 非 CLEAR 操作在字典清洗后若没有合法值，说明模型输出了非法/越界标签。
-                // 直接丢弃，禁止把无效 SET [] 解释成“清空历史条件”。
                 if (op != ConstraintOperationType.CLEAR && values.isEmpty()) {
                     continue;
                 }
@@ -312,8 +313,16 @@ public class IntentAgentService {
         return Map.of("values", options.getOrDefault(field, List.of()));
     }
 
+    /** 仅在 Agent 调用或结构解析失败后执行。 */
     private IntentResult fallback(String userInput, Map<String, List<String>> options) {
-        return new IntentResult(fallbackIntent(userInput), fallbackSlots(userInput, options), 0.2);
+        return new IntentResult(
+                fallbackIntent(userInput),
+                fallbackSlots(userInput, options),
+                0.2,
+                fallbackOperations(userInput, options),
+                TemporalMutation.keep(),
+                true
+        );
     }
 
     private SlotBundle fallbackSlots(String userInput, Map<String, List<String>> options) {
@@ -328,14 +337,79 @@ public class IntentAgentService {
         return parseSlots(node, options);
     }
 
+    /** 模型失败时才把少量明确的“不限/不要”表达转换成结构化 operations。 */
+    private List<ConstraintOperation> fallbackOperations(String userInput, Map<String, List<String>> options) {
+        String text = userInput == null ? "" : userInput.replaceAll("\\s+", "");
+        if (text.isBlank()) return List.of();
+
+        List<ConstraintOperation> result = new ArrayList<>();
+        for (String field : SlotOptionService.SLOT_NAMES) {
+            if (fallbackClear(text, field)) {
+                result.add(new ConstraintOperation(field, ConstraintOperationType.CLEAR, List.of(), text));
+                continue;
+            }
+            for (String value : options.getOrDefault(field, List.of())) {
+                if (text.contains("不要" + value)
+                        || text.contains("不想" + value)
+                        || text.contains("不想看" + value)
+                        || text.contains("别" + value)) {
+                    result.add(new ConstraintOperation(
+                            field,
+                            ConstraintOperationType.REMOVE,
+                            List.of(value),
+                            text
+                    ));
+                }
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private boolean fallbackClear(String text, String field) {
+        return switch (field) {
+            case "city" -> text.contains("城市不限") || text.contains("地点不限");
+            case "budget" -> text.contains("预算不限") || text.contains("不限制预算");
+            case "style" -> text.contains("风格不限");
+            case "activityType" -> text.contains("类型不限") || text.contains("活动不限");
+            default -> false;
+        };
+    }
+
+    /** 关键词 Intent 判断只存在于模型失败后的 fallback 路径。 */
     private Intent fallbackIntent(String userInput) {
         if (userInput == null || userInput.isBlank()) return Intent.CLARIFY_NEEDED;
         if (containsAny(userInput, "危险", "偏远", "深夜独自", "违法", "未成年人进入")) return Intent.HEALTH_RISK;
         if (containsAny(userInput, "换一批", "换个", "不要户外", "室内", "便宜点", "近一点", "安静点")) return Intent.MEAL_ADJUST;
-        if (containsAny(userInput, "半天", "一天", "行程", "安排一下")) return Intent.ACTIVITY_PLAN;
+        if (containsActivityPlanSignal(userInput)) return Intent.ACTIVITY_PLAN;
         if (containsAny(userInput, "你是谁", "你是 AI", "你好")) return Intent.OTHER;
-        if (containsAny(userInput, "去哪", "去哪里", "玩什么", "活动", "展览", "电影", "演出", "推荐")) return Intent.MEAL_RECOMMENDATION;
+        if (containsAny(userInput,
+                "去哪", "去哪里", "玩什么", "活动", "展览", "电影", "演出", "运动", "探店", "推荐",
+                "半天", "一天", "一日", "全天", "一整天", "有空", "都行", "都可以")) {
+            return Intent.MEAL_RECOMMENDATION;
+        }
         return Intent.CLARIFY_NEEDED;
+    }
+
+    private boolean containsActivityPlanSignal(String userInput) {
+        if (userInput == null || userInput.isBlank()) return false;
+        String text = userInput.replaceAll("\\s+", "");
+        return containsAny(text,
+                "活动规划",
+                "一日行程",
+                "半日行程",
+                "行程",
+                "帮我安排",
+                "给我安排",
+                "帮我规划",
+                "给我规划",
+                "安排一下",
+                "规划一下",
+                "排一下",
+                "怎么安排",
+                "如何安排",
+                "周末安排",
+                "从上午到晚上",
+                "从早到晚");
     }
 
     private boolean containsAny(String text, String... keywords) {
