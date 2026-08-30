@@ -20,15 +20,28 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 多时段规划服务：解析目标活动时段，并按时段独立检索/排序后保留 TopK 候选。
- * Java 仍会给出一个确定性 Top1 组合作为 Agent 失败时的 fallback；真正的全局组合选择由 PlanResponseAgent 完成。
+ * 多时段规划服务：把用户可用时间拆成较细的候选发现窗口，
+ * 再按窗口独立检索/排序后保留 TopK 候选。
+ * Java 负责合法候选空间；真正选几个、选哪些、哪些窗口留空由 PlanResponseAgent 决定。
  */
 @Service
 public class ActivityPlanService {
 
-    /** 一天规划默认拆分的日内时段。日期由 TimeConstraint 单独确定。 */
-    private static final List<String> DEFAULT_DAY_PERIODS = List.of("上午", "下午", "晚上");
-    /** 个人项目保持小候选空间：三个时段各 Top3，最多 27 种组合。 */
+    /**
+     * 细粒度候选发现窗口。窗口只是召回锚点，不代表活动本身只能占用这两个小时；
+     * Agent 会同时看到活动真实有效时段和明确/预计活动耗时。
+     */
+    private static final List<PlanWindow> PLAN_WINDOWS = List.of(
+            new PlanWindow("08:00-10:00", LocalTime.of(8, 0), LocalTime.of(10, 0)),
+            new PlanWindow("10:00-12:00", LocalTime.of(10, 0), LocalTime.of(12, 0)),
+            new PlanWindow("12:00-14:00", LocalTime.of(12, 0), LocalTime.of(14, 0)),
+            new PlanWindow("14:00-16:00", LocalTime.of(14, 0), LocalTime.of(16, 0)),
+            new PlanWindow("16:00-18:00", LocalTime.of(16, 0), LocalTime.of(18, 0)),
+            new PlanWindow("18:00-20:00", LocalTime.of(18, 0), LocalTime.of(20, 0)),
+            new PlanWindow("20:00-23:00", LocalTime.of(20, 0), LocalTime.of(23, 0))
+    );
+
+    /** 个人项目保持小候选空间：每个细窗口 Top3。 */
     private static final int PLAN_CANDIDATE_LIMIT = 3;
 
     private final ActivitySearchService activitySearchService;
@@ -40,75 +53,58 @@ public class ActivityPlanService {
     }
 
     /**
-     * 从规范化 TimeConstraint 推导一天内的规划时段。
-     * 对明确时间范围按实际覆盖区间拆分，例如 12:00~23:00 => 下午、晚上；
-     * 周六/周日若有明确日期，则保留星期标签。
+     * 从规范化 TimeConstraint 推导候选发现窗口。
+     * 例如 12:00~23:00 会拆成 12-14、14-16、16-18、18-20、20-23，
+     * 给 PlanResponseAgent 更大的合法组合空间。
      */
     public List<String> resolveActivityTimes(SlotBundle slots, TimeConstraint timeConstraint) {
         return defaultActivityTimes(timeConstraint);
     }
 
     private List<String> defaultActivityTimes(TimeConstraint timeConstraint) {
+        List<PlanWindow> windows;
         if (timeConstraint != null && timeConstraint.hasTime()) {
-            List<String> dayPeriods = periodsCoveredByTimeRange(
-                    timeConstraint.startTime(),
-                    timeConstraint.endTime());
-            if (!dayPeriods.isEmpty()) {
-                return decoratePeriodsWithDate(dayPeriods, timeConstraint);
+            windows = windowsCoveredByTimeRange(timeConstraint.startTime(), timeConstraint.endTime());
+            if (windows.isEmpty()) {
+                windows = PLAN_WINDOWS;
             }
+        } else {
+            windows = PLAN_WINDOWS;
         }
-
-        if (timeConstraint == null || !timeConstraint.hasDate()) {
-            return List.of("周六上午", "周六下午", "周六晚上");
-        }
-        return switch (timeConstraint.dateStart().getDayOfWeek()) {
-            case SATURDAY -> List.of("周六上午", "周六下午", "周六晚上");
-            case SUNDAY -> List.of("周日上午", "周日下午", "周日晚上");
-            default -> DEFAULT_DAY_PERIODS;
-        };
+        return decorateWindowsWithDate(windows, timeConstraint);
     }
 
-    /**
-     * 根据用户可用时间范围选择所有发生真实重叠的日内时段。
-     * 区间按 [start, end) 处理：12:00~18:00 只算下午，不会误带晚上。
-     */
-    private List<String> periodsCoveredByTimeRange(LocalTime start, LocalTime end) {
+    /** 按真实时间范围挑出所有发生重叠的细粒度窗口，区间按 [start,end) 处理。 */
+    private List<PlanWindow> windowsCoveredByTimeRange(LocalTime start, LocalTime end) {
         if (start == null || end == null || !start.isBefore(end)) {
             return List.of();
         }
-        List<String> periods = new ArrayList<>();
-        if (overlaps(start, end, LocalTime.of(8, 0), LocalTime.of(12, 0))) {
-            periods.add("上午");
-        }
-        if (overlaps(start, end, LocalTime.of(12, 0), LocalTime.of(18, 0))) {
-            periods.add("下午");
-        }
-        if (overlaps(start, end, LocalTime.of(18, 0), LocalTime.of(23, 0))) {
-            periods.add("晚上");
-        }
-        return List.copyOf(periods);
+        return PLAN_WINDOWS.stream()
+                .filter(window -> overlaps(start, end, window.start(), window.end()))
+                .toList();
     }
 
     private boolean overlaps(LocalTime start, LocalTime end, LocalTime periodStart, LocalTime periodEnd) {
         return start.isBefore(periodEnd) && end.isAfter(periodStart);
     }
 
-    private List<String> decoratePeriodsWithDate(List<String> periods, TimeConstraint timeConstraint) {
-        if (timeConstraint == null || !timeConstraint.hasDate() || timeConstraint.dateStart() == null) {
-            return periods;
+    private List<String> decorateWindowsWithDate(List<PlanWindow> windows, TimeConstraint timeConstraint) {
+        String prefix = "";
+        if (timeConstraint != null && timeConstraint.hasDate() && timeConstraint.dateStart() != null) {
+            prefix = switch (timeConstraint.dateStart().getDayOfWeek()) {
+                case SATURDAY -> "周六 ";
+                case SUNDAY -> "周日 ";
+                default -> "";
+            };
+        } else if (timeConstraint == null || !timeConstraint.hasDate()) {
+            // 沿用城市周末规划的默认语义：没有日期时默认按周六生成候选空间。
+            prefix = "周六 ";
         }
-        String prefix = switch (timeConstraint.dateStart().getDayOfWeek()) {
-            case SATURDAY -> "周六";
-            case SUNDAY -> "周日";
-            default -> "";
-        };
-        if (prefix.isBlank()) {
-            return periods;
-        }
-        return periods.stream().map(period -> prefix + period).toList();
+        String safePrefix = prefix;
+        return windows.stream().map(window -> safePrefix + window.label()).toList();
     }
 
-    /** 复制共享正向槽位；规划时段通过 TimeConstraint 处理，不写回 SlotBundle。 */
+    /** 复制共享正向槽位；规划窗口通过 TimeConstraint 处理，不写回 SlotBundle。 */
     public SlotBundle slotsForActivityTime(SlotBundle base, String activityTime) {
         SlotBundle safe = base == null ? SlotBundle.empty() : base;
         return new SlotBundle(
@@ -124,10 +120,9 @@ public class ActivityPlanService {
     }
 
     /**
-     * 按时段独立检索、排序并保留 Top3 候选。
-     * 候选生成阶段不提前跨时段排除 activityId，因为全局组合尚未发生；
-     * 同时按原 Rank 顺序构造一份不重复的确定性 Top1 结果，供 Agent 失败或非法输出时 fallback。
-     * excludedSlots 始终作为硬排除条件透传；WeatherContext 与普通推荐共用同一套天气排序语义。
+     * 按细窗口独立检索、排序并保留 Top3 候选。
+     * 同一个跨窗口活动可能出现在多个候选池中，这是有意保留的组合空间；
+     * 最终重复 ID、时间冲突由 PlanResponseAgentService 的 Java 校验层处理。
      */
     public List<PlannedActivity> planActivities(SourceMode sourceMode,
                                                  Long userId,
@@ -180,15 +175,26 @@ public class ActivityPlanService {
         return planned;
     }
 
-    /** 为上午/下午/晚上生成对应的场次过滤窗口。 */
+    /** 为一个细粒度候选发现窗口生成对应检索时间范围。 */
     private TimeConstraint timeConstraintForActivityTime(TimeConstraint original, String activityTime) {
-        if (original == null || !original.hasConstraint()) return TimeConstraint.empty();
-
-        LocalDate date = original.hasDate()
+        LocalDate date = original != null && original.hasDate()
                 ? dateForActivityTime(original.dateStart(), original.dateEnd(), activityTime)
                 : null;
-        LocalTime startTime = original.startTime();
-        LocalTime endTime = original.endTime();
+        PlanWindow window = findWindow(activityTime);
+        if (window != null) {
+            return new TimeConstraint(
+                    original == null ? activityTime : original.raw(),
+                    date,
+                    date,
+                    window.start(),
+                    window.end(),
+                    original == null ? null : original.resolvedAt()
+            );
+        }
+
+        // 兼容旧测试/旧调用传入“上午/下午/晚上”。
+        LocalTime startTime = original != null ? original.startTime() : null;
+        LocalTime endTime = original != null ? original.endTime() : null;
         if (activityTime != null && activityTime.contains("上午")) {
             startTime = LocalTime.of(8, 0);
             endTime = LocalTime.of(12, 0);
@@ -199,10 +205,27 @@ public class ActivityPlanService {
             startTime = LocalTime.of(18, 0);
             endTime = LocalTime.of(23, 0);
         }
-        return new TimeConstraint(original.raw(), date, date, startTime, endTime, original.resolvedAt());
+        return new TimeConstraint(
+                original == null ? activityTime : original.raw(),
+                date,
+                date,
+                startTime,
+                endTime,
+                original == null ? null : original.resolvedAt()
+        );
     }
 
-    /** 周日标签命中日期范围内的周日；其他默认规划时段使用范围首日（周末即周六）。 */
+    private PlanWindow findWindow(String activityTime) {
+        if (activityTime == null || activityTime.isBlank()) {
+            return null;
+        }
+        return PLAN_WINDOWS.stream()
+                .filter(window -> activityTime.endsWith(window.label()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /** 周日标签命中日期范围内的周日；其他窗口默认使用范围首日。 */
     private LocalDate dateForActivityTime(LocalDate start, LocalDate end, String activityTime) {
         if (start == null) return null;
         if (activityTime == null || !activityTime.startsWith("周日") || end == null) return start;
@@ -212,10 +235,12 @@ public class ActivityPlanService {
         return start;
     }
 
+    private record PlanWindow(String label, LocalTime start, LocalTime end) {
+    }
+
     /**
-     * 单时段规划结果：
-     * period = 时段；activity = Java 的确定性 fallback 选择；querySlots = 该时段查询条件；
-     * candidates = 交给 PlanResponseAgent 做全局组合选择的已排序 TopK 候选。
+     * 单窗口规划结果：period = 候选发现窗口；activity = Java fallback；
+     * candidates = 交给 PlanResponseAgent 做全局组合选择的 TopK 候选。
      */
     public record PlannedActivity(
             String period,
@@ -227,7 +252,7 @@ public class ActivityPlanService {
             candidates = candidates == null ? List.of() : List.copyOf(candidates);
         }
 
-        /** 保留旧调用兼容：测试或旧代码手工构造时，已选活动同时作为唯一候选。 */
+        /** 保留旧调用兼容：已选活动同时作为唯一候选。 */
         public PlannedActivity(String period, ActivityItem activity, SlotBundle querySlots) {
             this(period, activity, querySlots, activity == null ? List.of() : List.of(activity));
         }
