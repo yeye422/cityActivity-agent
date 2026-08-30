@@ -491,8 +491,9 @@ public class CityOrchestratorService {
                                                  SessionState state, List<Long> excludeActivityIds,
                                                  RelaxationSearchService.SearchResult selectedRelaxation,
                                                  boolean publicFallbackUsed) {
-        WeatherRecommendationContext weather = weatherRecommendationService.resolve(userInput, state.slots());
-        agentTraceService.recordEvent("WEATHER_CONTEXT_RESOLVED", "RANK", state.slots(), weather);
+        WeatherRecommendationContext weather = weatherRecommendationService.resolve(state.slots(), state.timeConstraint());
+        agentTraceService.recordEvent("WEATHER_CONTEXT_RESOLVED", "RANK",
+                traceMap("slots", state.slots(), "timeConstraint", state.timeConstraint()), weather);
 
         ActivitySearchRequest searchRequest = new ActivitySearchRequest(
                 state.sourceMode(), userId, state.slots(), excludeActivityIds, state.timeConstraint(), state.excludedSlots());
