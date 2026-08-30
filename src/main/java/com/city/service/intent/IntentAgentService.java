@@ -120,6 +120,12 @@ public class IntentAgentService {
                 可用标准标签: %s
                 当前用户消息: %s
 
+                ## 本轮 Patch 原则
+                - 输出描述的是“当前用户消息带来的新增或变更”，不是当前完整会话状态快照。
+                - 历史普通条件和历史时间条件只用于理解指代、承接上一轮澄清；当前用户没有再次提及时，绝不能复制进本轮 slots、operations 或 temporal SET。
+                - 如果当前用户是在回答上一轮澄清，只修改被追问的那个字段；其他历史条件保持未提及。
+                - 例如：历史已有 city=西安、time=14:00~23:00，上一轮助手问预算，当前用户只说“不限”，则 city 不要复制到 slots，预算输出 CLEAR，temporal 必须 KEEP/KEEP。
+
                 ## 输出
                 只输出一个合法 JSON 对象。顶层只能包含 intent、slots、operations、temporal、confidence。
 
@@ -133,11 +139,14 @@ public class IntentAgentService {
 
                 ## slots
                 slots 只处理 city、location、mood、scene、budget、activityType、style、duration。
+                slots 只填写当前用户消息里明确出现的正向标准标签；历史已生效值不要抄入本轮 slots。
                 未提及字段输出 []；时间绝不能写入 slots。
 
                 ## operations
                 operations 只处理普通属性槽位：
                 {"field":"字段名","op":"SET|ADD|REMOVE|CLEAR","values":["标准标签"],"raw":"用户原始片段"}
+                - SET/ADD/REMOVE 的 values 只能包含当前用户消息明确针对的标准标签。
+                - CLEAR 表示用户明确取消该字段限制，values 必须为 []，不要把“不限/无所谓/都行”放进 values。
                 时间变更不要写 operations，统一写 temporal。
 
                 ## temporal
@@ -150,6 +159,7 @@ public class IntentAgentService {
                 - KEEP：本轮没改该维度，值必须为 null。
                 - SET：本轮明确设置/修改该维度，输出绝对日期或时间范围。
                 - CLEAR：本轮明确取消该维度限制，值必须为 null。
+                - 当 dateMode 或 timeMode 任一为 SET/CLEAR 时，raw 必须保留当前用户消息中的时间原始片段；不得用历史时间文本充当 raw。
                 - 完全没提时间：dateMode=KEEP，timeMode=KEEP，raw=""。
                 - “改晚上”：dateMode=KEEP，timeMode=SET。
                 - “改周日”：dateMode=SET，timeMode=KEEP。
@@ -173,6 +183,12 @@ public class IntentAgentService {
 
                 “改成晚上” =>
                 {"raw":"晚上","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"SET","timeStart":"18:00","timeEnd":"23:00","approximate":false,"confidence":0.95}
+
+                历史已有 city=西安、time=14:00~23:00，上一轮助手问“预算有偏好吗？”，当前用户“ 不限 ” =>
+                {"intent":"MEAL_RECOMMENDATION","slots":{"city":[],"location":[],"mood":[],"scene":[],"budget":[],"activityType":[],"style":[],"duration":[]},
+                 "operations":[{"field":"budget","op":"CLEAR","values":[],"raw":"不限"}],
+                 "temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},
+                 "confidence":0.95}
                 """.formatted(
                 now.toLocalDateTime(),
                 now.toLocalDate(),
