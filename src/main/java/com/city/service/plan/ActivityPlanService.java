@@ -41,23 +41,23 @@ public class ActivityPlanService {
 
     /**
      * 从规范化 TimeConstraint 推导一天内的规划时段。
-     * 周六/周日保留星期标签；其他具体日期使用上午/下午/晚上。
+     * 对明确时间范围按实际覆盖区间拆分，例如 12:00~23:00 => 下午、晚上；
+     * 周六/周日若有明确日期，则保留星期标签。
      */
     public List<String> resolveActivityTimes(SlotBundle slots, TimeConstraint timeConstraint) {
         return defaultActivityTimes(timeConstraint);
     }
 
     private List<String> defaultActivityTimes(TimeConstraint timeConstraint) {
-        if (timeConstraint != null && timeConstraint.hasTime() && !timeConstraint.hasDate()) {
-            LocalTime start = timeConstraint.startTime();
-            if (!start.isBefore(LocalTime.of(12, 0)) && start.isBefore(LocalTime.of(18, 0))) {
-                return List.of("下午");
+        if (timeConstraint != null && timeConstraint.hasTime()) {
+            List<String> dayPeriods = periodsCoveredByTimeRange(
+                    timeConstraint.startTime(),
+                    timeConstraint.endTime());
+            if (!dayPeriods.isEmpty()) {
+                return decoratePeriodsWithDate(dayPeriods, timeConstraint);
             }
-            if (!start.isBefore(LocalTime.of(18, 0))) {
-                return List.of("晚上");
-            }
-            return List.of("上午");
         }
+
         if (timeConstraint == null || !timeConstraint.hasDate()) {
             return List.of("周六上午", "周六下午", "周六晚上");
         }
@@ -66,6 +66,46 @@ public class ActivityPlanService {
             case SUNDAY -> List.of("周日上午", "周日下午", "周日晚上");
             default -> DEFAULT_DAY_PERIODS;
         };
+    }
+
+    /**
+     * 根据用户可用时间范围选择所有发生真实重叠的日内时段。
+     * 区间按 [start, end) 处理：12:00~18:00 只算下午，不会误带晚上。
+     */
+    private List<String> periodsCoveredByTimeRange(LocalTime start, LocalTime end) {
+        if (start == null || end == null || !start.isBefore(end)) {
+            return List.of();
+        }
+        List<String> periods = new ArrayList<>();
+        if (overlaps(start, end, LocalTime.of(8, 0), LocalTime.of(12, 0))) {
+            periods.add("上午");
+        }
+        if (overlaps(start, end, LocalTime.of(12, 0), LocalTime.of(18, 0))) {
+            periods.add("下午");
+        }
+        if (overlaps(start, end, LocalTime.of(18, 0), LocalTime.of(23, 0))) {
+            periods.add("晚上");
+        }
+        return List.copyOf(periods);
+    }
+
+    private boolean overlaps(LocalTime start, LocalTime end, LocalTime periodStart, LocalTime periodEnd) {
+        return start.isBefore(periodEnd) && end.isAfter(periodStart);
+    }
+
+    private List<String> decoratePeriodsWithDate(List<String> periods, TimeConstraint timeConstraint) {
+        if (timeConstraint == null || !timeConstraint.hasDate() || timeConstraint.dateStart() == null) {
+            return periods;
+        }
+        String prefix = switch (timeConstraint.dateStart().getDayOfWeek()) {
+            case SATURDAY -> "周六";
+            case SUNDAY -> "周日";
+            default -> "";
+        };
+        if (prefix.isBlank()) {
+            return periods;
+        }
+        return periods.stream().map(period -> prefix + period).toList();
     }
 
     /** 复制共享正向槽位；规划时段通过 TimeConstraint 处理，不写回 SlotBundle。 */
