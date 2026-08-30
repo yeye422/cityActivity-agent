@@ -26,6 +26,8 @@ public class ActivityRequest {
     private List<String> activityType;
     private List<String> style;
     private List<String> duration;
+    /** 明确活动预计耗时（分钟），用于多时段规划；可为空。 */
+    private Integer durationMinutes;
     private LocalDate validFrom;
     private LocalDate validTo;
     private LocalTime validStartTime;
