@@ -103,6 +103,7 @@ class CityOrchestratorServiceTest {
                 SlotBundle.empty(),
                 unconstrainedSlots,
                 timeConstraint,
+                null,
                 "",
                 null,
                 List.of(14L, 15L)
