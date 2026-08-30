@@ -43,4 +43,40 @@ class IntentReviseServiceTest {
 
         assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
     }
+
+    @Test
+    void shouldNotUseHalfDayKeywordAloneAsPlanSignal() {
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_PLAN, SlotBundle.empty(), 0.95, List.of());
+
+        IntentResult revised = service.revise(null, raw, "想找个半天的展览");
+
+        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+    }
+
+    @Test
+    void shouldNotUseAllDayAvailabilityAsPlanSignal() {
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_PLAN, SlotBundle.empty(), 0.95, List.of());
+
+        IntentResult revised = service.revise(null, raw, "周六全天都行，推荐几个");
+
+        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+    }
+
+    @Test
+    void shouldPromoteExplicitPlanningActionToActivityPlan() {
+        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.95, List.of());
+
+        IntentResult revised = service.revise(null, raw, "帮我安排周六一天");
+
+        assertEquals(Intent.ACTIVITY_PLAN, revised.intent());
+    }
+
+    @Test
+    void shouldPromoteExplicitItineraryRequestToActivityPlan() {
+        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.95, List.of());
+
+        IntentResult revised = service.revise(null, raw, "给我做个一日行程");
+
+        assertEquals(Intent.ACTIVITY_PLAN, revised.intent());
+    }
 }
