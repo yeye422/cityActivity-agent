@@ -44,10 +44,6 @@ public class ActivityService {
         return activityMapper.findPublicActivities().stream().map(this::toActivityItem).toList();
     }
 
-    /**
-     * PERSONAL 模式空库前置检查。
-     * 由 Orchestrator#handleTurn 调用，count > 0 才继续推荐链路。
-     */
     public boolean hasPersonalActivities(Long userId) {
         return activityMapper.countPersonalActivities(userId) > 0;
     }
@@ -123,10 +119,6 @@ public class ActivityService {
         return rows.stream().map(this::toActivityItem).toList();
     }
 
-    /**
-     * budget 标签表达的是“价格上限”，不是互斥类别。
-     * 例如用户选择 200元内，应允许召回 免费、100元内、200元内，而不是只做 200元内 精确标签重叠。
-     */
     private List<String> expandBudgetUpperBound(List<String> budgets) {
         if (budgets == null || budgets.isEmpty()) {
             return List.of();
@@ -146,6 +138,9 @@ public class ActivityService {
             throw new CityException("活动名称不能为空");
         }
         SlotBundle slots = request.toSlots();
+        if (request.durationMinutes() != null && (request.durationMinutes() <= 0 || request.durationMinutes() > 24 * 60)) {
+            throw new CityException("活动预计耗时必须在 1~1440 分钟之间");
+        }
         if ((request.validFrom() == null) != (request.validTo() == null)) {
             throw new CityException("有效日期请同时填写开始和结束日期");
         }
@@ -177,6 +172,7 @@ public class ActivityService {
         row.setStyle(jsonService.toJsonArray(slots.style()));
         row.setDuration(jsonService.toJsonArray(slots.duration()));
         row.setFeature(jsonService.toJsonArray(slots.feature()));
+        row.setDurationMinutes(request.durationMinutes());
         row.setValidFrom(request.validFrom());
         row.setValidTo(request.validTo());
         row.setValidStartTime(request.validStartTime());
@@ -209,6 +205,7 @@ public class ActivityService {
                 row.getValidTo(),
                 row.getValidStartTime(),
                 row.getValidEndTime(),
+                row.getDurationMinutes(),
                 0
         );
     }
