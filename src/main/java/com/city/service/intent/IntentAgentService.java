@@ -315,7 +315,14 @@ public class IntentAgentService {
 
     /** 仅在 Agent 调用或结构解析失败后执行。 */
     private IntentResult fallback(String userInput, Map<String, List<String>> options) {
-        return IntentResult.fallback(fallbackIntent(userInput), fallbackSlots(userInput, options), 0.2);
+        return new IntentResult(
+                fallbackIntent(userInput),
+                fallbackSlots(userInput, options),
+                0.2,
+                fallbackOperations(userInput, options),
+                TemporalMutation.keep(),
+                true
+        );
     }
 
     private SlotBundle fallbackSlots(String userInput, Map<String, List<String>> options) {
@@ -328,6 +335,44 @@ public class IntentAgentService {
             hits.forEach(values::add);
         }
         return parseSlots(node, options);
+    }
+
+    /** 模型失败时才把少量明确的“不限/不要”表达转换成结构化 operations。 */
+    private List<ConstraintOperation> fallbackOperations(String userInput, Map<String, List<String>> options) {
+        String text = userInput == null ? "" : userInput.replaceAll("\\s+", "");
+        if (text.isBlank()) return List.of();
+
+        List<ConstraintOperation> result = new ArrayList<>();
+        for (String field : SlotOptionService.SLOT_NAMES) {
+            if (fallbackClear(text, field)) {
+                result.add(new ConstraintOperation(field, ConstraintOperationType.CLEAR, List.of(), text));
+                continue;
+            }
+            for (String value : options.getOrDefault(field, List.of())) {
+                if (text.contains("不要" + value)
+                        || text.contains("不想" + value)
+                        || text.contains("不想看" + value)
+                        || text.contains("别" + value)) {
+                    result.add(new ConstraintOperation(
+                            field,
+                            ConstraintOperationType.REMOVE,
+                            List.of(value),
+                            text
+                    ));
+                }
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private boolean fallbackClear(String text, String field) {
+        return switch (field) {
+            case "city" -> text.contains("城市不限") || text.contains("地点不限");
+            case "budget" -> text.contains("预算不限") || text.contains("不限制预算");
+            case "style" -> text.contains("风格不限");
+            case "activityType" -> text.contains("类型不限") || text.contains("活动不限");
+            default -> false;
+        };
     }
 
     /** 关键词 Intent 判断只存在于模型失败后的 fallback 路径。 */
