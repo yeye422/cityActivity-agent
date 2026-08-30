@@ -6,6 +6,15 @@
 
 City Activity Agent 是一个基于 AI 的城市活动推荐系统，根据用户偏好、时间、场景和预算生成活动建议。
 
+当前普通活动条件采用九维槽位模型：
+
+```text
+city / location / experienceGoal / companion / budget /
+activityType / style / duration / feature
+```
+
+其中 `duration` 只表示活动自身时长筛选标签；`feature` 表示室内、户外、近地铁、少排队、交通方便等客观属性。活动的明确预计耗时使用独立 `duration_minutes`，具体日期/时间与具体可参加场次使用 `activity_session`。
+
 ## 技术栈
 
 - Java
@@ -20,21 +29,47 @@ City Activity Agent 是一个基于 AI 的城市活动推荐系统，根据用�
 - 活动搜索
 - 活动排序
 - 用户偏好匹配
+- 多时段活动规划
+- 具体场次约束规划
 - Agent 编排
 
 ## 数据库初始化
 
-首次部署执行：
+首次部署建议按下面顺序执行：
 
 ```bash
 mysql < database_init_final.sql
-# 继续执行评估闭环、会话、Trace 和反馈表迁移
 mysql city_db < src/main/resources/db/evaluation_loop_migration.sql
+mysql city_db < src/main/resources/db/activity_venue_session_migration.sql
+mysql city_db < src/main/resources/db/city_seed.sql
+# 可选：补充更多带具体场次的演示活动
+mysql city_db < src/main/resources/db/activity_catalog_seed.sql
 ```
 
-如果数据库已经存在但报 `Table 'city_db.activity_item' doesn't exist`，重新执行以上两条命令；评估迁移现在会在活动表缺失时自动补建表，但不会自动插入示例活动数据。
+`database_init_final.sql` 已直接使用九维槽位列和 `duration_minutes`。
+`activity_venue_session_migration.sql` 会创建 `venue` 和 `activity_session`；只有执行该迁移并存在目标日期的 OPEN 场次时，具体 `sessionId/startAt/endAt` 才会作为 PlanAgent 的硬规划依据。
 
-如果历史数据仍在 `diet_db.meal_item`，先执行活动表/评估迁移，再执行 `src/main/resources/db/diet_to_city_copy.sql`。该脚本采用跨库复制，不会删除 `diet_db` 数据；由于旧表没有城市和区域字段，迁移时暂以“西安/近地铁”填充，需按实际数据修正。
+已有旧数据库（仍使用 `mood / scene`，并把“室内/交通方便”等混在 `duration` 或 `location`）时，先执行：
+
+```bash
+mysql city_db < src/main/resources/db/activity_slot_model_v3.sql
+mysql city_db < src/main/resources/db/activity_venue_session_migration.sql
+```
+
+`activity_slot_model_v3.sql` 会完成：
+
+```text
+mood  -> experience_goal
+scene -> companion
+新增 feature
+location 中的“近地铁” -> feature
+duration 中的“室内/户外/近距离/少排队/交通方便” -> feature
+半天/全天继续保留为 duration 时长标签
+```
+
+旧 SessionState JSON 中的 `mood/scene` 也会在读取时兼容映射到 `experienceGoal/companion`，下一次保存后统一使用新字段名。
+
+如果数据库已经存在但报 `Table 'city_db.activity_item' doesn't exist`，重新执行初始化脚本；评估迁移会在活动表缺失时自动补建相关表，但不会自动插入完整演示活动数据。
 
 固定回归评估接口：
 
@@ -47,6 +82,32 @@ Body: {"includeLlmJudge":false,"limit":35}
 
 线上高价值失败样本可在人工标注后通过 `POST /api/v1/city/evaluations/cases/promote` 晋级为数据库评测用例：请求体传入 `traceId` 和完整 `caseDefinition`（至少包含 `id`、`message` 或 `messages` 及 expected 标签）。下一次回归会自动合并固定 JSON 评测集与 `evaluation_case` 表中的晋级样本。
 
+## 规划时间模型
+
+用户要求半天/一天规划时，Java 会先把可用时间拆成较细候选窗口，例如：
+
+```text
+08:00-10:00
+10:00-12:00
+12:00-14:00
+14:00-16:00
+16:00-18:00
+18:00-20:00
+20:00-23:00
+```
+
+这些窗口只是候选召回锚点，不是活动时长。PlanAgent 会同时看到：
+
+```text
+具体场次 startAt/endAt（如果有）
+明确 durationMinutes（如果有）
+duration 标签推导的预计耗时（无明确分钟数时）
+活动级 validStartTime/validEndTime 可安排窗口
+九维槽位与 matchScore
+```
+
+优先级是：具体场次 > 明确耗时 > 标签估算 > 类型软估算。Java 最后验证 activityId、sessionId、重复活动和确定性时间冲突。
+
 ## 本地运行
 
 ```bash
@@ -57,16 +118,16 @@ mvn spring-boot:run
 
 主要配置文件：
 
-```
+```text
 src/main/resources/application.yml
 ```
 
 ## 项目结构
 
-```
+```text
 src/
 ├── main/java        # 后端代码
-├── main/resources   # 配置与 Mapper
+├── main/resources   # 配置、Prompt、Mapper、数据库迁移
 
-database_init_final.sql # 最终数据库初始化脚本
+database_init_final.sql # 全新数据库初始化脚本
 ```
