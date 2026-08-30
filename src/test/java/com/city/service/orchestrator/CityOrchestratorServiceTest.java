@@ -3,6 +3,7 @@ package com.city.service.orchestrator;
 import com.city.enums.Intent;
 import com.city.enums.SessionPhase;
 import com.city.enums.SourceMode;
+import com.city.model.ResponseResult;
 import com.city.model.SessionState;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
@@ -16,6 +17,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CityOrchestratorServiceTest {
 
@@ -73,6 +75,18 @@ class CityOrchestratorServiceTest {
                 CityOrchestratorService.recommendationQueryKey(state(time, Set.of("budget", "style"))),
                 CityOrchestratorService.recommendationQueryKey(state(time, Set.of("style", "budget")))
         );
+    }
+
+    @Test
+    void publicFallbackNoticeShouldPrependWithoutDroppingResponseData() {
+        ResponseResult original = new ResponseResult("推荐正文", List.of(), "WAIT_USER");
+
+        ResponseResult decorated = CityOrchestratorService.prependPublicFallbackNotice(original);
+
+        assertTrue(decorated.speechText().startsWith("你的个人活动库暂时没有匹配项，我先从公共活动中帮你挑了几个。"));
+        assertTrue(decorated.speechText().endsWith("推荐正文"));
+        assertEquals(original.displayBlocks(), decorated.displayBlocks());
+        assertEquals(original.nextAction(), decorated.nextAction());
     }
 
     private SessionState state(TimeConstraint timeConstraint, Set<String> unconstrainedSlots) {
