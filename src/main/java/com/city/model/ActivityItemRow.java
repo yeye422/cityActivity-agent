@@ -21,7 +21,7 @@ public class ActivityItemRow {
     private String style;
     private String duration;
     private String feature;
-    private String feature;
+    private Integer durationMinutes;
     private LocalDate validFrom;
     private LocalDate validTo;
     private LocalTime validStartTime;
