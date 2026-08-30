@@ -15,10 +15,6 @@ import java.util.Set;
 @Service
 public class ClarifyRuleService {
 
-    /**
-     * 计算推荐前仍需澄清的最小信息。
-     * unconstrainedSlots 用于区分“尚未回答”和“用户明确说不限”。
-     */
     public List<String> missingSlots(SlotBundle slots,
                                      TimeConstraint timeConstraint,
                                      Set<String> unconstrainedSlots) {
@@ -38,16 +34,19 @@ public class ClarifyRuleService {
         return missing;
     }
 
+    /** 九维中任一较强偏好已出现时，不因预算缺失机械追问。 */
     private boolean hasStrongActivityPreference(SlotBundle slots) {
         return !slots.activityType().isEmpty()
                 || !slots.style().isEmpty()
+                || !slots.experienceGoal().isEmpty()
                 || !slots.companion().isEmpty()
-                || !slots.duration().isEmpty();
+                || !slots.duration().isEmpty()
+                || !slots.feature().isEmpty();
     }
 
     public String fallbackQuestion(List<String> missingSlots, TimeConstraint timeConstraint) {
         if (missingSlots == null || missingSlots.isEmpty()) {
-            return "你更想参加哪类活动，预算大概是多少？";
+            return "你更想参加哪类活动，或者更看重什么体验？";
         }
         if (missingSlots.contains("city")) {
             return timeConstraint != null && timeConstraint.hasDate()
