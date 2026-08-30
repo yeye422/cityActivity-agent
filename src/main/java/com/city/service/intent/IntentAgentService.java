@@ -49,7 +49,7 @@ public class IntentAgentService {
             LlmJsonService llmJsonService,
             SlotOptionService slotOptionService,
             AgentTraceService agentTraceService,
-            @Value("${diet.llm.light-model:qwen-turbo}") String modelName
+            @Value("${diet.llm.main-model:qwen-max}") String modelName
     ) {
         this.agentFactory = agentFactory;
         this.llmJsonService = llmJsonService;
