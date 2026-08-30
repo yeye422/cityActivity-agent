@@ -29,6 +29,7 @@ public class ActivityResponse {
     private List<String> activityType;
     private List<String> style;
     private List<String> duration;
+    private Integer durationMinutes;
     private LocalDate validFrom;
     private LocalDate validTo;
     private LocalTime validStartTime;
@@ -49,6 +50,7 @@ public class ActivityResponse {
                 slots.activityType(),
                 slots.style(),
                 slots.duration(),
+                item.durationMinutes(),
                 item.validFrom(),
                 item.validTo(),
                 item.validStartTime(),
