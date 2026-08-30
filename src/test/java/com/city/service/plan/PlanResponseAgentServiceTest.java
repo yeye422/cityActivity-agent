@@ -6,6 +6,7 @@ import com.city.model.ActivityResponse;
 import com.city.model.RecommendResult;
 import com.city.model.RecommendedActivityOption;
 import com.city.model.SlotBundle;
+import com.city.model.WeatherRecommendationContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -21,7 +22,7 @@ class PlanResponseAgentServiceTest {
     @Test
     void displayBlocksShouldUsePlannedActivityFactsAndPreserveTimeFields() {
         PlanResponseAgentService service = new PlanResponseAgentService(
-                null, null, null, "qwen-max");
+                null, null, null, "qwen-turbo");
         SlotBundle activitySlots = slots("西安", "高新");
         SlotBundle querySlots = slots("西安", "查询条件地点");
         ActivityItem activity = new ActivityItem(
@@ -66,7 +67,7 @@ class PlanResponseAgentServiceTest {
     @Test
     void displayBlocksShouldIgnoreRecommendationIdsOutsidePlannedActivities() {
         PlanResponseAgentService service = new PlanResponseAgentService(
-                null, null, null, "qwen-max");
+                null, null, null, "qwen-turbo");
         ActivityItem activity = new ActivityItem(
                 21L,
                 SourceMode.PUBLIC,
@@ -98,6 +99,43 @@ class PlanResponseAgentServiceTest {
         );
 
         assertTrue(blocks.isEmpty());
+    }
+
+    @Test
+    void planPromptShouldExposeCompleteActivityFactsAndWeatherContext() {
+        PlanResponseAgentService service = new PlanResponseAgentService(
+                null, null, null, "qwen-turbo");
+        ActivityItem activity = new ActivityItem(
+                21L,
+                SourceMode.PUBLIC,
+                null,
+                "高新周末即兴喜剧夜",
+                slots("西安", "高新"),
+                LocalDate.of(2026, 8, 25),
+                LocalDate.of(2026, 12, 31),
+                LocalTime.of(19, 30),
+                LocalTime.of(21, 30),
+                0.91
+        );
+        ActivityPlanService.PlannedActivity planned = new ActivityPlanService.PlannedActivity(
+                "晚上", activity, slots("西安", "高新"));
+
+        String prompt = ReflectionTestUtils.invokeMethod(
+                service,
+                "buildUserPrompt",
+                "帮我安排西安晚上活动",
+                SourceMode.PUBLIC,
+                slots("西安", "高新"),
+                List.of(planned),
+                WeatherRecommendationContext.indoorPriority("小雨，优先室内")
+        );
+
+        assertTrue(prompt.contains("activityId=21"));
+        assertTrue(prompt.contains("slots=SlotBundle"));
+        assertTrue(prompt.contains("validFrom=2026-08-25"));
+        assertTrue(prompt.contains("validStartTime=19:30"));
+        assertTrue(prompt.contains("matchScore=0.91"));
+        assertTrue(prompt.contains("小雨，优先室内"));
     }
 
     private SlotBundle slots(String city, String location) {
