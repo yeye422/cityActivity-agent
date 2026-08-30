@@ -16,18 +16,18 @@ public class CityAgentScopeConfig {
     @Value("${agentscope.dashscope.api-key:}")
     private String apiKey;
 
-    /** 主模型用于推荐理由和最终应答，默认使用 qwen-max。 */
+    /** 主模型保留给需要更强推理能力的任务。 */
     @Value("${diet.llm.main-model:qwen-max}")
     private String mainModelName;
 
-    /** 轻量模型用于意图识别和澄清追问，默认使用 qwen-turbo。 */
+    /** 轻量模型用于意图识别和澄清追问。 */
     @Value("${diet.llm.light-model:qwen-turbo}")
     private String lightModelName;
 
-    /**
-     * 主模型 Bean。
-     * RecommendResponseAgent 会优先使用该模型。
-     */
+    /** 推荐理由与最终口语包装使用的轻量响应模型。 */
+    @Value("${diet.llm.response-model:qwen-turbo}")
+    private String responseModelName;
+
     @Bean("DietMainChatModel")
     public Model DietMainChatModel() {
         return DashScopeChatModel.builder()
@@ -36,10 +36,6 @@ public class CityAgentScopeConfig {
                 .build();
     }
 
-    /**
-     * 轻量模型 Bean。
-     * IntentAgent 和 ClarifyAgent 使用它降低延迟和成本。
-     */
     @Bean("DietLightChatModel")
     public Model DietLightChatModel() {
         return DashScopeChatModel.builder()
@@ -47,8 +43,13 @@ public class CityAgentScopeConfig {
                 .modelName(lightModelName)
                 .build();
     }
+
+    /** RecommendResponseAgent / PlanResponseAgent 使用，降低推荐文案生成延迟。 */
+    @Bean("DietResponseChatModel")
+    public Model DietResponseChatModel() {
+        return DashScopeChatModel.builder()
+                .apiKey(apiKey)
+                .modelName(responseModelName)
+                .build();
+    }
 }
-
-
-
-
