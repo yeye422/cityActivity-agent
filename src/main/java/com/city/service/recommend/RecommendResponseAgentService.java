@@ -97,7 +97,29 @@ public class RecommendResponseAgentService {
                 本轮槽位：%s
                 候选活动：%s
                 天气排序说明：%s
-                请输出 JSON，包含 recommendations 数组（每项 activityId + reason）和 speechText，不要编造候选之外的活动。
+
+                请只输出一个合法 JSON 对象，包含：
+                - recommendations：数组，每项包含 activityId 和 reason。
+                - speechText：可以直接展示给用户的完整推荐回答。
+
+                ## 强制要求
+                - 只能推荐“候选活动”中提供的活动，禁止编造候选之外的活动、时间、地点、价格或其他事实。
+                - recommendations 中的每个 activityId 必须来自候选活动；每个 reason 必须说明该活动为什么适合当前用户需求。
+                - speechText 不能只是“推荐以下活动：”“可以考虑这些：”之类的开场句，必须是一段完整可直接发送给用户的推荐内容。
+                - speechText 必须明确写出每一个最终推荐活动的活动名称，并给出对应的具体推荐理由；不能只把理由放在 recommendations.reason 里而不写进 speechText。
+                - speechText 中的活动及理由必须与 recommendations 一一对应，内容保持一致，不要遗漏任何最终推荐项。
+                - 推荐顺序必须严格按照输入的候选活动顺序，不要自行重新排序。
+                - 如果候选有 3 个，speechText 应完整覆盖这 3 个；如果少于 3 个，则覆盖全部候选。
+                - 推荐理由应结合候选活动已有的槽位、时间和当前用户需求，简洁具体，不要泛泛而谈。
+
+                ## 推荐输出风格
+                speechText 建议使用“简短开场 + 编号推荐”的形式，例如：
+                “根据你的需求，我更推荐这几个：
+                1. 活动A：推荐理由。
+                2. 活动B：推荐理由。
+                3. 活动C：推荐理由。”
+
+                最终仍只输出 JSON，不要输出 Markdown 代码块，不要补充 JSON 之外的文字。
                 """.formatted(userInput, sourceMode, slots, topMeals,
                 weather != null && weather.active() ? weather.summary() : "未启用天气排序");
     }
