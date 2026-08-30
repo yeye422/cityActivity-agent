@@ -285,6 +285,11 @@ public class IntentAgentService {
             try {
                 ConstraintOperationType op = ConstraintOperationType.valueOf(opText.toUpperCase(Locale.ROOT));
                 List<String> values = SlotJsonPicker.pick(item, "values", optionsFor(field, options));
+                // 非 CLEAR 操作在字典清洗后若没有合法值，说明模型输出了非法/越界标签。
+                // 直接丢弃，禁止把无效 SET [] 解释成“清空历史条件”。
+                if (op != ConstraintOperationType.CLEAR && values.isEmpty()) {
+                    continue;
+                }
                 result.add(new ConstraintOperation(field, op, values, item.path("raw").asText("")));
             } catch (IllegalArgumentException ignored) {
                 // 单个无效 operation 不影响本轮其他结构化结果。
