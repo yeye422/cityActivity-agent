@@ -87,7 +87,7 @@ public class IntentReviseService {
 
         if (merged.hasConstraint()) {
             operations.add(new ConstraintOperation(
-                    "time", ConstraintOperationType.SET, List.of(), toParserExpression(merged)));
+                    "time", ConstraintOperationType.SET, List.of(), toParserExpression(temporal.raw(), merged)));
         } else {
             operations.add(new ConstraintOperation(
                     "time", ConstraintOperationType.CLEAR, List.of(), temporal.raw() == null ? "" : temporal.raw()));
@@ -97,9 +97,15 @@ public class IntentReviseService {
                 result.intent(), safeSlots(result), result.confidence(), List.copyOf(operations), temporal);
     }
 
-    /** 将完整绝对约束转换为现有 TimeExpressionParser 能稳定识别的表达式。 */
-    private String toParserExpression(TimeConstraint time) {
+    /**
+     * 将完整绝对约束转换为现有 TimeExpressionParser 能稳定识别的表达式。
+     * 前缀保留用户原始时间片段，使 Trace 与既有 expectedTime 回归标注仍可直接比对。
+     */
+    private String toParserExpression(String originalRaw, TimeConstraint time) {
         StringBuilder value = new StringBuilder();
+        if (originalRaw != null && !originalRaw.isBlank()) {
+            value.append(originalRaw.trim()).append(' ');
+        }
         if (time.hasDate()) {
             if (time.dateStart().equals(time.dateEnd())) {
                 value.append(time.dateStart().getYear()).append("年")
@@ -114,10 +120,10 @@ public class IntentReviseService {
             }
         }
         if (time.hasTime()) {
-            if (!value.isEmpty()) value.append(' ');
+            if (!value.isEmpty() && value.charAt(value.length() - 1) != ' ') value.append(' ');
             value.append(time.startTime()).append("到").append(time.endTime());
         }
-        return value.toString();
+        return value.toString().trim();
     }
 
     private boolean hasLastRecommendations(SessionState state) {
