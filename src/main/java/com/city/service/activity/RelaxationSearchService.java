@@ -4,6 +4,7 @@ import com.city.enums.SourceMode;
 import com.city.exception.CityException;
 import com.city.model.ActivityItem;
 import com.city.model.ActivityRankRequest;
+import com.city.model.ActivityRankResult;
 import com.city.model.ActivitySearchRequest;
 import com.city.model.RelaxationOption;
 import com.city.model.SlotBundle;
@@ -31,7 +32,7 @@ public class RelaxationSearchService {
         return options(sourceMode, userId, originalSlots, excludeActivityIds, TimeConstraint.empty());
     }
 
-    /** 放宽偏好时仍必须保留用户指定的日期，不能把“周六”悄悄放宽掉。 */
+    /** 放宽偏好时仍必须保留用户指定的日期和时段，不能把“周六下午”悄悄放宽掉。 */
     public List<RelaxationOption> options(SourceMode sourceMode, Long userId, SlotBundle originalSlots,
                                           List<Long> excludeActivityIds, TimeConstraint timeConstraint) {
         return List.of(1, 2).stream()
@@ -55,20 +56,20 @@ public class RelaxationSearchService {
         SlotBundle query = queryFor(original, level);
         List<ActivityItem> candidates = activitySearchService.search(
                 new ActivitySearchRequest(sourceMode, userId, query, excludeActivityIds, timeConstraint));
-        // 用原始条件评分，使最接近原需求的活动排在前面。
-        List<ActivityItem> ranked = activityRankService.rank(
-                new ActivityRankRequest(candidates, original, excludeActivityIds));
-        return new SearchResult(level, labelFor(level), relaxedSlotsFor(level), query, ranked);
+        // 用原始条件和原始时间评分，使最接近原需求的活动排在前面。
+        ActivityRankResult rankResult = activityRankService.rank(
+                new ActivityRankRequest(candidates, original, timeConstraint, excludeActivityIds));
+        return new SearchResult(level, labelFor(level), relaxedSlotsFor(level), query, rankResult.ranked());
     }
 
     private SlotBundle queryFor(SlotBundle slots, int level) {
         boolean broad = level >= 2;
         return new SlotBundle(
                 slots.city(), slots.location(),
-                List.of(),                                  // level 1 起放宽氛围
+                List.of(),
                 broad ? List.of() : slots.scene(),
                 slots.budget(), slots.activityType(),
-                List.of(),                                  // level 1 起放宽风格
+                List.of(),
                 broad ? List.of() : slots.duration()
         );
     }

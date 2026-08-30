@@ -31,7 +31,7 @@ diet:
   prompt:
     version: v2
   rule:
-    version: v2
+    version: v4
   llm:
     main-model: qwen-max
     light-model: qwen-turbo
