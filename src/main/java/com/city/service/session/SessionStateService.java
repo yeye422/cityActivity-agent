@@ -7,6 +7,7 @@ import com.city.enums.SessionPhase;
 import com.city.model.SessionRow;
 import com.city.model.SessionState;
 import com.city.model.SlotBundle;
+import com.city.model.TimeConstraint;
 import com.city.enums.SourceMode;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -106,11 +107,10 @@ public class SessionStateService {
             JsonNode meta = root.path("_meta");                                             // _meta 存 sourceMode/intent 等
             SourceMode sourceMode = parseSourceMode(meta.path("sourceMode").asText(null), requestSourceMode);
             Intent currentIntent = parseIntent(meta.path("currentIntent").asText(null));
-            // 7 维槽位从 slots JSON 各字段读取
+            // 活动属性槽位从 slots JSON 读取；时间单独保存在 timeConstraint
             SlotBundle slots = new SlotBundle(
                     readStringList(root, "city"),
                     readStringList(root, "location"),
-                    readStringList(root, "activityTime"),
                     readStringList(root, "mood"),
                     readStringList(root, "scene"),
                     readStringList(root, "budget"),
@@ -118,6 +118,13 @@ public class SessionStateService {
                     readStringList(root, "style"),
                     readStringList(root, "duration")
             );
+            SlotBundle excludedSlots = root.path("excludedSlots").isObject()
+                    ? objectMapper.treeToValue(root.path("excludedSlots"), SlotBundle.class)
+                    : SlotBundle.empty();
+            TimeConstraint timeConstraint = root.path("timeConstraint").isObject()
+                    ? objectMapper.treeToValue(root.path("timeConstraint"), TimeConstraint.class)
+                    : TimeConstraint.empty();
+            String recommendationQueryKey = root.path("_meta").path("recommendationQueryKey").asText("");
             return new SessionState(
                     row.getId(),                           // sessionId
                     row.getUserId(),                         // userId
@@ -125,6 +132,9 @@ public class SessionStateService {
                     sourceMode,                              // PERSONAL / PUBLIC
                     currentIntent,                           // 当前意图
                     slots,                                   // 槽位
+                    excludedSlots,
+                    timeConstraint,
+                    recommendationQueryKey,
                     parseLongList(row.getLastRecommendedActivityIds()) // 上轮推荐 ID 列表
             );
         } catch (Exception e) {
@@ -145,23 +155,23 @@ public class SessionStateService {
         return row;
     }
 
-    /**
-     * 将 SlotBundle 7 维 + _meta（sourceMode/currentIntent）序列化为 slots 列 JSON。
-     */
+    /** 将活动属性槽位 + _meta（sourceMode/currentIntent）序列化为 slots 列 JSON。 */
     private String toSlotsJson(SessionState state) {
         ObjectNode root = objectMapper.createObjectNode();
         root.set("city", objectMapper.valueToTree(state.slots().city()));
         root.set("location", objectMapper.valueToTree(state.slots().location()));
-        root.set("activityTime", objectMapper.valueToTree(state.slots().activityTime()));
         root.set("mood", objectMapper.valueToTree(state.slots().mood()));
         root.set("scene", objectMapper.valueToTree(state.slots().scene()));
         root.set("budget", objectMapper.valueToTree(state.slots().budget()));
         root.set("activityType", objectMapper.valueToTree(state.slots().activityType()));
         root.set("style", objectMapper.valueToTree(state.slots().style()));
         root.set("duration", objectMapper.valueToTree(state.slots().duration()));
+        root.set("excludedSlots", objectMapper.valueToTree(state.excludedSlots() == null ? SlotBundle.empty() : state.excludedSlots()));
+        root.set("timeConstraint", objectMapper.valueToTree(state.timeConstraint() == null ? TimeConstraint.empty() : state.timeConstraint()));
         ObjectNode meta = objectMapper.createObjectNode();
         meta.put("sourceMode", state.sourceMode() == null ? null : state.sourceMode().name());
         meta.put("currentIntent", state.currentIntent() == null ? null : state.currentIntent().name());
+        meta.put("recommendationQueryKey", state.recommendationQueryKey());
         root.set("_meta", meta);
         return root.toString();
     }

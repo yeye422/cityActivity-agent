@@ -58,6 +58,20 @@
         LIMIT 1
     </select>
 
+    <select id="findByTraceIds" resultMap="RequestTraceRowMap">
+        SELECT id, trace_id, session_id, user_id, status, event_count,
+        duration_ms, error_message, trace_json, expected_intent,
+        expected_slots, expected_clarify_action, labeled_by, labeled_at,
+        label_note, created_at, updated_at
+        FROM city_request_trace
+        WHERE user_id = #{userId}
+        AND trace_id IN
+        <foreach collection="traceIds" item="traceId" open="(" separator="," close=")">
+            #{traceId}
+        </foreach>
+        ORDER BY created_at ASC, id ASC
+    </select>
+
     <select id="findBySessionId" resultMap="RequestTraceRowMap">
         SELECT id,
         trace_id,

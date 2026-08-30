@@ -9,7 +9,7 @@ import java.util.List;
 /**
  * 槽位合并服务，用于多轮对话中合并历史槽位与本轮新识别的槽位。
  * <p>
- * 合并策略：本轮非空则覆盖，本轮为空则保留历史值。
+ * 合并策略：本轮非空值与历史值取并集，本轮为空则保留历史值。
  */
 @Service
 public class SlotMergeService {
@@ -18,7 +18,7 @@ public class SlotMergeService {
      * 合并历史槽位与新槽位。
      * <p>
      * 规则：
-     * - 如果新槽位的某个字段非空（非 null 且非空列表），则使用新值覆盖
+     * - 如果新槽位的某个字段非空（非 null 且非空列表），则与历史值合并并去重
      * - 如果新槽位的某个字段为空，则保留历史值
      * - 如果历史槽位为 null，则使用新槽位
      *
@@ -41,7 +41,6 @@ public class SlotMergeService {
         return new SlotBundle(
                 mergeList(historicalSlots.city(), newSlots.city()),
                 mergeList(historicalSlots.location(), newSlots.location()),
-                mergeList(historicalSlots.activityTime(), newSlots.activityTime()),
                 mergeList(historicalSlots.mood(), newSlots.mood()),
                 mergeList(historicalSlots.scene(), newSlots.scene()),
                 mergeList(historicalSlots.budget(), newSlots.budget()),
@@ -51,13 +50,10 @@ public class SlotMergeService {
         );
     }
 
-    /**
-     * 合并列表字段：新列表非空则返回新列表，否则返回历史列表。
-     */
+    /** 合并列表字段，默认将多轮补充条件视为并集；显式 SET 由 SlotMutationService 负责覆盖。 */
     private List<String> mergeList(List<String> historical, List<String> newList) {
-        if (newList != null && !newList.isEmpty()) {
-            return new ArrayList<>(newList);
-        }
-        return historical != null ? new ArrayList<>(historical) : List.of();
+        List<String> oldValues = historical == null ? List.of() : historical;
+        if (newList == null || newList.isEmpty()) return new ArrayList<>(oldValues);
+        return java.util.stream.Stream.concat(oldValues.stream(), newList.stream()).distinct().toList();
     }
 }

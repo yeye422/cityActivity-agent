@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 public class FeedbackRow {
     private Long id;
     private Long userId;
+    private String traceId;
     private String sessionId;
     private Long itemId;
     private String action;

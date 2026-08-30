@@ -1,6 +1,8 @@
 package com.city.model;
 
 import java.util.List;
+import java.time.LocalDate;
+import java.time.LocalTime;
 
 import com.city.enums.SourceMode;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
@@ -21,13 +23,16 @@ public class ActivityResponse {
     private String name;
     private List<String> city;
     private List<String> location;
-    private List<String> activityTime;
     private List<String> mood;
     private List<String> scene;
     private List<String> budget;
     private List<String> activityType;
     private List<String> style;
     private List<String> duration;
+    private LocalDate validFrom;
+    private LocalDate validTo;
+    private LocalTime validStartTime;
+    private LocalTime validEndTime;
     private double matchScore;
 
     public static ActivityResponse from(ActivityItem item) {
@@ -38,17 +43,17 @@ public class ActivityResponse {
                 item.name(),
                 slots.city(),
                 slots.location(),
-                slots.activityTime(),
                 slots.mood(),
                 slots.scene(),
                 slots.budget(),
                 slots.activityType(),
                 slots.style(),
                 slots.duration(),
+                item.validFrom(),
+                item.validTo(),
+                item.validStartTime(),
+                item.validEndTime(),
                 item.matchScore()
         );
     }
 }
-
-
-

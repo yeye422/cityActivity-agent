@@ -8,6 +8,7 @@ import com.city.model.RecommendResult;
 import com.city.model.RecommendedActivityOption;
 import com.city.model.ResponseResult;
 import com.city.model.SlotBundle;
+import com.city.model.WeatherRecommendationContext;
 import com.city.service.trace.AgentTraceService;
 import com.city.util.LlmJsonService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -73,6 +74,12 @@ public class RecommendResponseAgentService {
             SourceMode sourceMode,
             SlotBundle slots,
             List<ActivityItem> rankedMeals) {
+        return recommendAndRespond(sessionId, userInput, sourceMode, slots, rankedMeals, WeatherRecommendationContext.inactive());
+    }
+
+    public Result recommendAndRespond(
+            String sessionId, String userInput, SourceMode sourceMode, SlotBundle slots,
+            List<ActivityItem> rankedMeals, WeatherRecommendationContext weather) {
         // 取重排结果 top3 作为 LLM 输入候选（不允许编造候选之外的餐食）
         List<ActivityItem> topMeals = rankedMeals == null ? List.of() : rankedMeals.stream().limit(3).toList();
 
@@ -95,7 +102,7 @@ public class RecommendResponseAgentService {
                     "RecommendResponseAgent",
                     modelName,
                     agent,
-                    buildUserPrompt(userInput, sourceMode, slots, topMeals)
+                    buildUserPrompt(userInput, sourceMode, slots, topMeals, weather)
             );
             // 解析 Agent JSON 输出为 recommendations + speechText
             ParsedOutput parsed = parseOutput(response.getTextContent(), topMeals, slots);
@@ -117,14 +124,17 @@ public class RecommendResponseAgentService {
     /**
      * 构造 RecommendResponseAgent 的输入 prompt。
      */
-    private String buildUserPrompt(String userInput, SourceMode sourceMode, SlotBundle slots, List<ActivityItem> topMeals) {
+    private String buildUserPrompt(String userInput, SourceMode sourceMode, SlotBundle slots, List<ActivityItem> topMeals,
+                                   WeatherRecommendationContext weather) {
         return """
                 用户原话：%s
                 数据源模式：%s
                 本轮槽位：%s
                 候选活动：%s
+                天气排序说明：%s
                 请输出 JSON，包含 recommendations 数组（每项 activityId + reason）和 speechText，不要编造候选之外的活动。
-                """.formatted(userInput, sourceMode, slots, topMeals);
+                """.formatted(userInput, sourceMode, slots, topMeals,
+                weather != null && weather.active() ? weather.summary() : "未启用天气排序");
     }
 
     /**
@@ -217,13 +227,16 @@ public class RecommendResponseAgentService {
                 option.name(),
                 option.matchedSlots().city(),
                 option.matchedSlots().location(),
-                option.matchedSlots().activityTime(),
                 option.matchedSlots().mood(),
                 option.matchedSlots().scene(),
                 option.matchedSlots().budget(),
                 option.matchedSlots().activityType(),
                 option.matchedSlots().style(),
                 option.matchedSlots().duration(),
+                null,
+                null,
+                null,
+                null,
                 option.matchScore()
         );
     }

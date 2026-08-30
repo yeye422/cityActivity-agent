@@ -3,6 +3,7 @@ package com.city.service.clarify;
 import com.city.agent.factory.AgentFactory;
 import com.city.model.ClarifyResult;
 import com.city.model.SlotBundle;
+import com.city.model.TimeConstraint;
 import com.city.service.trace.AgentTraceService;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
@@ -46,12 +47,16 @@ public class ClarifyAgentService {
      * 根据槽位决定是否追问，需要时生成追问文案。
      * 由 Orchestrator#handleRecommendation 调用，返回 ClarifyResult（ASK 或 READY）。
      */
-    public ClarifyResult decide(String sessionId, String userInput, SlotBundle slots) {
-        // 用 Java 规则计算缺失的关键槽位（activityTime、budget 等）
-        List<String> missingSlots = clarifyRuleService.missingSlots(slots);
+    public ClarifyResult decide(String sessionId, String userInput, SlotBundle slots, TimeConstraint timeConstraint) {
+        // 用 Java 规则计算缺失的关键槽位（城市、预算等）
+        List<String> missingSlots = clarifyRuleService.missingSlots(slots, timeConstraint);
         // 无缺失槽位 → 槽位足够，直接 READY，不调用 LLM
         if (missingSlots.isEmpty()) {
             return ClarifyResult.ready();
+        }
+        // 日期已确定时采用模板追问，确保不会被自由生成文案改写为“周末”。
+        if (timeConstraint != null && timeConstraint.hasDate()) {
+            return ClarifyResult.ask(clarifyRuleService.fallbackQuestion(missingSlots, timeConstraint), missingSlots);
         }
         try {
             // 从 AgentFactory 获取当前 session 的 ClarifyAgent 实例
@@ -64,14 +69,18 @@ public class ClarifyAgentService {
             String question = response.getTextContent() == null ? "" : response.getTextContent().trim();
             // LLM 返回空文本时，用 ClarifyRule 模板追问兜底
             if (question.isBlank()) {
-                question = clarifyRuleService.fallbackQuestion(missingSlots);
+                question = clarifyRuleService.fallbackQuestion(missingSlots, timeConstraint);
             }
             // 返回 ASK 结果：携带追问文案和缺失槽位列表
             return ClarifyResult.ask(question, missingSlots);
         } catch (Exception ignored) {
             // LLM 异常时用模板追问兜底，保证用户一定能看到问题
-            return ClarifyResult.ask(clarifyRuleService.fallbackQuestion(missingSlots), missingSlots);
+            return ClarifyResult.ask(clarifyRuleService.fallbackQuestion(missingSlots, timeConstraint), missingSlots);
         }
+    }
+
+    public ClarifyResult decide(String sessionId, String userInput, SlotBundle slots) {
+        return decide(sessionId, userInput, slots, TimeConstraint.empty());
     }
 
     /** 构造 ClarifyAgent 的输入 prompt。 */

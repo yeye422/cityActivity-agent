@@ -13,7 +13,7 @@ import java.util.Set;
 @Service
 public class SlotOptionService {
     public static final List<String> SLOT_NAMES = List.of(
-            "city", "location", "activityTime", "mood", "scene", "budget", "activityType", "style", "duration"
+            "city", "location", "mood", "scene", "budget", "activityType", "style", "duration"
     );
 
     private final SlotOptionMapper slotOptionMapper;
@@ -40,7 +40,6 @@ public class SlotOptionService {
         return new SlotBundle(
                 sanitizeValues("city", safe.city(), options),
                 sanitizeValues("location", safe.location(), options),
-                sanitizeValues("activityTime", safe.activityTime(), options),
                 sanitizeValues("mood", safe.mood(), options),
                 sanitizeValues("scene", safe.scene(), options),
                 sanitizeValues("budget", safe.budget(), options),
@@ -55,7 +54,6 @@ public class SlotOptionService {
         Map<String, List<String>> options = findAllOptions();
         validateSlot("city", safe.city(), options);
         validateSlot("location", safe.location(), options);
-        validateSlot("activityTime", safe.activityTime(), options);
         validateSlot("mood", safe.mood(), options);
         validateSlot("scene", safe.scene(), options);
         validateSlot("budget", safe.budget(), options);

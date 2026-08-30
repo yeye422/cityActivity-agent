@@ -6,6 +6,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.experimental.Accessors;
 
+import java.util.List;
+
 /**
  * IntentAgent 的结构化输出。
  * Orchestrator 会先校验该结果，再根据历史上下文做二次矫正。
@@ -21,13 +23,18 @@ public class IntentResult {
     private SlotBundle slots;
     /** LLM 对分类结果的置信度，规则兜底时通常较低。 */
     private double confidence;
+    /** 当前句对会话约束的增删改补丁；空列表表示使用兼容的 slots 合并。 */
+    private List<ConstraintOperation> operations;
+
+    public IntentResult(Intent intent, SlotBundle slots, double confidence) {
+        this(intent, slots, confidence, List.of());
+    }
 
     /** 构造一个保守的澄清结果，用于 LLM 失败或输出不可解析时兜底。 */
     public static IntentResult clarify(SlotBundle slots) {
         return new IntentResult(Intent.CLARIFY_NEEDED, slots == null ? SlotBundle.empty() : slots, 0.2);
     }
 }
-
 
 
 

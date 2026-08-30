@@ -1,0 +1,42 @@
+/* Hallmark · pre-emit critique: P5 H4 E5 S5 R5 V4 */
+:root {
+    --color-paper: oklch(98% 0.012 92);
+    --color-paper-soft: oklch(96% 0.018 92);
+    --color-surface: oklch(100% 0 0);
+    --color-surface-raised: oklch(99% 0.008 92);
+    --color-ink: oklch(24% 0.026 245);
+    --color-ink-soft: oklch(42% 0.024 245);
+    --color-ink-muted: oklch(55% 0.02 245);
+    --color-rule: oklch(86% 0.018 210);
+    --color-rule-strong: oklch(75% 0.03 210);
+    --color-accent: oklch(47% 0.105 186);
+    --color-accent-strong: oklch(38% 0.09 186);
+    --color-accent-soft: oklch(93% 0.035 186);
+    --color-signal: oklch(60% 0.15 45);
+    --color-signal-soft: oklch(94% 0.035 45);
+    --color-info: oklch(48% 0.12 265);
+    --color-info-soft: oklch(94% 0.03 265);
+    --color-warning: oklch(62% 0.13 70);
+    --color-danger: oklch(48% 0.16 28);
+    --color-success: oklch(49% 0.12 155);
+    --color-focus: oklch(55% 0.15 250);
+    --font-display: "Songti SC", "STSong", "Noto Serif SC", serif;
+    --font-body: "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+    --font-numeric: "SFMono-Regular", Consolas, monospace;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --space-7: 48px;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --rule: 1px;
+    --shadow-raised: 0 14px 34px oklch(24% 0.026 245 / 0.08);
+    --shadow-float: 0 22px 52px oklch(24% 0.026 245 / 0.12);
+    --dur-fast: 140ms;
+    --dur-base: 180ms;
+    --ease-out: cubic-bezier(.2, .8, .2, 1);
+}

@@ -9,8 +9,7 @@ import lombok.experimental.Accessors;
 /**
  * 城市活动槽位。
  *
- * 注意：字段名沿用原餐食推荐系统的命名（activityTime、activityType 等），
- * 但实际含义已调整为城市周末活动相关，请参考各字段注释。
+ * 时间条件不属于活动属性槽位，统一由 TimeConstraint 表达。
  */
 @Data
 @Accessors(fluent = true)
@@ -22,8 +21,6 @@ public class SlotBundle {
     /** 活动位置/区域，如：曲江、小寨、高新、钟楼、近地铁 */
     private List<String> location;
 
-    /** 活动时间，如：周六上午、周六下午、周六晚上、周日上午、周日下午、周日晚上 */
-    private List<String> activityTime;
 
     /** 活动状态，如：放松、社交、解压、治愈、刺激 */
     private List<String> mood;
@@ -43,10 +40,9 @@ public class SlotBundle {
     /** 活动时长，如：室内、近距离、少排队、交通方便 */
     private List<String> duration;
 
-    public SlotBundle(List<String> city, List<String> location, List<String> activityTime, List<String> mood, List<String> scene, List<String> budget, List<String> activityType, List<String> style, List<String> duration) {
+    public SlotBundle(List<String> city, List<String> location, List<String> mood, List<String> scene, List<String> budget, List<String> activityType, List<String> style, List<String> duration) {
         this.city = normalize(city);
         this.location = normalize(location);
-        this.activityTime = normalize(activityTime);
         this.mood = normalize(mood);
         this.scene = normalize(scene);
         this.budget = normalize(budget);
@@ -56,13 +52,12 @@ public class SlotBundle {
     }
 
     public static SlotBundle empty() {
-        return new SlotBundle(List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+        return new SlotBundle(List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
     }
 
     public boolean isEmpty() {
         return city.isEmpty()
                 && location.isEmpty()
-                && activityTime.isEmpty()
                 && mood.isEmpty()
                 && scene.isEmpty()
                 && budget.isEmpty()
@@ -82,6 +77,3 @@ public class SlotBundle {
                 .toList();
     }
 }
-
-
-

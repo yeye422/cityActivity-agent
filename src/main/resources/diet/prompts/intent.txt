@@ -17,7 +17,6 @@ JSON 字段名使用当前活动域标准槽位，必须和 slotOptions 中的 k
 只抽取下列字段：
 - city：活动所在城市，如西安、北京、上海、成都
 - location：位置、区域或交通偏好，如曲江、小寨、高新、钟楼、近地铁
-- activityTime：活动时间，如周六下午、晚上、周日
 - mood：活动状态，如放松、社交、解压、治愈、刺激
 - scene：同行人，如独处、情侣、朋友、亲子
 - budget：预算，如免费、100元内、200元内
@@ -26,4 +25,5 @@ JSON 字段名使用当前活动域标准槽位，必须和 slotOptions 中的 k
 - duration：活动时长或便利性，如半天、全天、室内、近距离、少排队、交通方便
 
 只从 slotOptions 中选择值，不要创造标签。城市或区域不明确时留空，不要默认固定为西安。
-输出 JSON：{"intent":"...","slots":{"city":[],"location":[],"activityTime":[],"mood":[],"scene":[],"budget":[],"activityType":[],"style":[],"duration":[]},"confidence":0到1}
+时间必须通过 operations 表达：field=time 只允许 SET 或 CLEAR；SET 时 values 必须为 []，用户原始时间片段写入 raw；不要在 slots 中输出时间字段。
+输出 JSON：{"intent":"...","slots":{"city":[],"location":[],"mood":[],"scene":[],"budget":[],"activityType":[],"style":[],"duration":[]},"operations":[],"confidence":0到1}

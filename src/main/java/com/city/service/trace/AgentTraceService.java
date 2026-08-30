@@ -11,6 +11,7 @@ import io.agentscope.core.message.MsgRole;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -45,11 +46,17 @@ public class AgentTraceService {
 
     /** Jackson 序列化工具，将 payload 和 trace_json 转为 JSON 字符串。 */
     private final ObjectMapper objectMapper;
+    private final String promptVersion;
+    private final String ruleVersion;
 
     /** 构造器注入 Mapper 和 ObjectMapper。 */
-    public AgentTraceService(AgentTraceMapper agentTraceMapper, ObjectMapper objectMapper) {
+    public AgentTraceService(AgentTraceMapper agentTraceMapper, ObjectMapper objectMapper,
+                             @Value("${diet.prompt.version:v1}") String promptVersion,
+                             @Value("${diet.rule.version:v1}") String ruleVersion) {
         this.agentTraceMapper = agentTraceMapper;
         this.objectMapper = objectMapper;
+        this.promptVersion = promptVersion;
+        this.ruleVersion = ruleVersion;
     }
 
     /**
@@ -60,6 +67,7 @@ public class AgentTraceService {
         // 创建 TraceScope 实例，持有 traceId/sessionId/userId 和事件列表
         TraceScope scope = new TraceScope(traceId, sessionId, userId);
         // 将 scope 绑定到当前线程，record 方法通过 currentScope.get() 读取
+        //
         currentScope.set(scope);
         // 返回 scope 供 try-with-resources 在 finally 中 close
         return scope;
@@ -120,6 +128,13 @@ public class AgentTraceService {
     /** 按 traceId 查询单条链路追踪记录（供调试 API 使用）。 */
     public RequestTraceRow findByTraceId(Long userId, String traceId) {
         return agentTraceMapper.findByTraceId(userId, traceId);
+    }
+
+    /** 按指定 Trace ID 批量读取评测样本，供回归评测避免混入其他请求。 */
+    public List<RequestTraceRow> findByTraceIds(Long userId, List<String> traceIds) {
+        if (traceIds == null || traceIds.isEmpty()) return List.of();
+        return agentTraceMapper.findByTraceIds(userId, traceIds.stream()
+                .filter(id -> id != null && !id.isBlank()).distinct().toList());
     }
 
     /** 按 sessionId 查询最近 N 条链路追踪，limit 会被 clamp 到 [1, MAX_LIMIT]。 */
@@ -237,6 +252,8 @@ public class AgentTraceService {
         trace.put("sessionId", scope.sessionId());
         trace.put("userId", scope.userId());
         trace.put("status", scope.status());
+        trace.put("promptVersion", promptVersion);
+        trace.put("ruleVersion", ruleVersion);
         trace.put("durationMs", row.getDurationMs());
         trace.put("events", scope.events());       // 全部 TraceEvent 列表
         // 将 trace Map 序列化为 JSON 字符串写入 trace_json 列

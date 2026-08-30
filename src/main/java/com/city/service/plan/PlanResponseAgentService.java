@@ -93,7 +93,7 @@ public class PlanResponseAgentService {
     ) {
         StringBuilder mealSection = new StringBuilder();
         for (ActivityPlanService.PlannedActivity planned : plannedMeals) {
-            mealSection.append("\n- 时段=").append(planned.activityTime());
+            mealSection.append("\n- 时段=").append(planned.period());
             if (planned.matched()) {
                 ActivityItem activity = planned.activity();
                 mealSection.append("，候选=[activityId=").append(activity.id())
@@ -109,7 +109,7 @@ public class PlanResponseAgentService {
                 数据源模式：%s
                 共享槽位：%s
                 各时段候选：%s
-                请输出 JSON，包含 mealPlans 数组（每项 activityTime + activityId + reason）和 speechText；activityId 必须来自对应时段候选。
+                请输出 JSON，包含 mealPlans 数组（每项 period + activityId + reason）和 speechText；activityId 必须来自对应时段候选。
                 """.formatted(userInput, sourceMode, sharedSlots, mealSection);
     }
 
@@ -119,10 +119,10 @@ public class PlanResponseAgentService {
         JsonNode plansNode = root.path("mealPlans");
         if (plansNode.isArray()) {
             plansNode.forEach(node -> {
-                String activityTime = node.path("activityTime").asText("").trim();
+                String period = node.path("period").asText("").trim();
                 String reason = node.path("reason").asText("").trim();
-                if (!activityTime.isBlank() && !reason.isBlank()) {
-                    reasonsByActivityTime.put(activityTime, reason);
+                if (!period.isBlank() && !reason.isBlank()) {
+                    reasonsByActivityTime.put(period, reason);
                 }
             });
         }
@@ -134,7 +134,7 @@ public class PlanResponseAgentService {
             }
             ActivityItem activity = planned.activity();
             // 以 Java 已选活动为准，避免 LLM 跨时段挪用 activityId
-            String reason = reasonsByActivityTime.getOrDefault(planned.activityTime(), templateReason(planned, sharedSlots));
+            String reason = reasonsByActivityTime.getOrDefault(planned.period(), templateReason(planned, sharedSlots));
             options.add(toOption(activity, reason, planned.querySlots()));
         }
 
@@ -164,18 +164,18 @@ public class PlanResponseAgentService {
     private String templateReason(ActivityPlanService.PlannedActivity planned, SlotBundle sharedSlots) {
         String name = planned.activity().name();
         if (sharedSlots != null && !sharedSlots.budget().isEmpty()) {
-            return name + "比较符合你提到的" + String.join("、", sharedSlots.budget()) + "诉求，适合作为" + planned.activityTime() + "。";
+            return name + "比较符合你提到的" + String.join("、", sharedSlots.budget()) + "诉求，适合作为" + planned.period() + "。";
         }
         if (sharedSlots != null && !sharedSlots.style().isEmpty()) {
-            return name + "比较贴近你想要的" + String.join("、", sharedSlots.style()) + "活动风格，适合" + planned.activityTime() + "。";
+            return name + "比较贴近你想要的" + String.join("、", sharedSlots.style()) + "活动风格，适合" + planned.period() + "。";
         }
-        return name + "和你的偏好匹配度较高，适合安排在" + planned.activityTime() + "。";
+        return name + "和你的偏好匹配度较高，适合安排在" + planned.period() + "。";
     }
 
     private String templateSpeech(List<ActivityPlanService.PlannedActivity> plannedMeals, RecommendResult recommendResult) {
         StringBuilder builder = new StringBuilder("为你规划了一套时间安排：");
         for (ActivityPlanService.PlannedActivity planned : plannedMeals) {
-            builder.append("\n- ").append(planned.activityTime()).append("：");
+            builder.append("\n- ").append(planned.period()).append("：");
             if (planned.matched()) {
                 String reason = recommendResult.recommendations().stream()
                         .filter(option -> option.itemId().equals(planned.activity().id()))
@@ -205,13 +205,16 @@ public class PlanResponseAgentService {
                         option.name(),
                         option.matchedSlots().city(),
                         option.matchedSlots().location(),
-                        option.matchedSlots().activityTime(),
                         option.matchedSlots().mood(),
                         option.matchedSlots().scene(),
                         option.matchedSlots().budget(),
                         option.matchedSlots().activityType(),
                         option.matchedSlots().style(),
                         option.matchedSlots().duration(),
+                        null,
+                        null,
+                        null,
+                        null,
                         option.matchScore()
                 ))
                 .toList();

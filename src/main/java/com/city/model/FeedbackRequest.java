@@ -13,6 +13,7 @@ import lombok.experimental.Accessors;
 @AllArgsConstructor
 @NoArgsConstructor
 public class FeedbackRequest {
+    private String traceId;
     private String sessionId;
     private Long itemId;
     private String action;

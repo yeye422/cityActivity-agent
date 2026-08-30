@@ -23,4 +23,17 @@ public class ActivitySearchRequest {
     private SlotBundle slots;
     /** 需要从结果中排除的上一轮推荐活动。 */
     private List<Long> excludeActivityIds;
+    /** 用户指定的绝对日期/时段。 */
+    private TimeConstraint timeConstraint;
+    /** 用户明确排除的标签。 */
+    private SlotBundle excludedSlots;
+
+    public ActivitySearchRequest(SourceMode sourceMode, Long userId, SlotBundle slots, List<Long> excludeActivityIds,
+                                 TimeConstraint timeConstraint) {
+        this(sourceMode, userId, slots, excludeActivityIds, timeConstraint, SlotBundle.empty());
+    }
+
+    public ActivitySearchRequest(SourceMode sourceMode, Long userId, SlotBundle slots, List<Long> excludeActivityIds) {
+        this(sourceMode, userId, slots, excludeActivityIds, TimeConstraint.empty(), SlotBundle.empty());
+    }
 }

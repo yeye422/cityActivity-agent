@@ -13,6 +13,11 @@ public interface AgentTraceMapper {
 
     RequestTraceRow findByTraceId(@Param("userId") Long userId, @Param("traceId") String traceId);
 
+    List<RequestTraceRow> findByTraceIds(
+            @Param("userId") Long userId,
+            @Param("traceIds") List<String> traceIds
+    );
+
     List<RequestTraceRow> findBySessionId(
             @Param("userId") Long userId,
             @Param("sessionId") String sessionId,
@@ -37,7 +42,6 @@ public interface AgentTraceMapper {
             @Param("labelNote") String labelNote
     );
 }
-
 
 
 

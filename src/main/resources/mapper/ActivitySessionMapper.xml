@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.city.mapper.ActivitySessionMapper">
+    <select id="findAvailableByActivityId" resultType="com.city.model.ActivitySessionRow">
+        SELECT s.id AS session_id, s.activity_id, v.id AS venue_id, v.name AS venue_name,
+               v.venue_type, v.city, v.district, v.address,
+               s.start_at, s.end_at, s.price, s.remaining_seats, s.status,
+               s.registration_url, v.price_note
+        FROM activity_session s
+        JOIN venue v ON v.id = s.venue_id AND v.active = 1
+        WHERE s.activity_id = #{activityId}
+          AND s.status IN ('OPEN', 'FULL')
+        <if test="date != null">
+          AND s.start_at &gt;= #{date}
+          AND s.start_at &lt; DATE_ADD(#{date}, INTERVAL 1 DAY)
+        </if>
+        ORDER BY CASE s.status WHEN 'OPEN' THEN 0 ELSE 1 END,
+                 s.start_at ASC, s.remaining_seats DESC
+    </select>
+
+    <select id="findActivityIdsWithSessions" resultType="long">
+        SELECT DISTINCT activity_id
+        FROM activity_session
+        WHERE activity_id IN
+        <foreach collection="activityIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="findAvailableActivityIds" resultType="long">
+        SELECT DISTINCT activity_id
+        FROM activity_session
+        WHERE activity_id IN
+        <foreach collection="activityIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+          AND status = 'OPEN'
+          AND (remaining_seats IS NULL OR remaining_seats &gt; 0)
+        <if test="dateStart != null and dateEnd != null">
+          AND start_at &lt; DATE_ADD(#{dateEnd}, INTERVAL 1 DAY)
+          AND end_at &gt;= #{dateStart}
+        </if>
+        <if test="timeStart != null and timeEnd != null">
+          AND TIME(start_at) &lt; #{timeEnd}
+          AND TIME(end_at) &gt; #{timeStart}
+        </if>
+    </select>
+</mapper>

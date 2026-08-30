@@ -1,6 +1,7 @@
 package com.city.service.intent;
 
 import com.city.enums.Intent;
+import com.city.enums.SessionPhase;
 import com.city.model.IntentResult;
 import com.city.model.SessionState;
 import com.city.model.SlotBundle;
@@ -26,24 +27,34 @@ public class IntentReviseService {
 
         // 规则一：活动安全风险优先前置拦截，即使 LLM 置信度较低也走保守风险链路
         if (safeResult.intent() == Intent.HEALTH_RISK || containsSafetyRiskKeyword(userInput)) {
-            return new IntentResult(Intent.HEALTH_RISK, safeSlots(safeResult), safeResult.confidence());
+            return revised(Intent.HEALTH_RISK, safeResult);
         }
 
-        // 规则二：没有历史推荐时，调整意图没有可排除对象，降级为推荐主链路并由澄清规则继续判断
+        // 规则二：规划请求在澄清阶段需要保留原规划意图。
+        // 例如第一轮“帮我安排一天行程”因缺少城市进入 CLARIFY，下一轮用户只回复“西安”时，
+        // IntentAgent 往往只能识别成普通推荐/继续补充条件，此处根据持久化会话状态恢复 ACTIVITY_PLAN。
+        if (state != null
+                && state.phase() == SessionPhase.CLARIFY
+                && state.currentIntent() == Intent.ACTIVITY_PLAN
+                && (safeResult.intent() == Intent.MEAL_RECOMMENDATION || safeResult.intent() == Intent.CLARIFY_NEEDED)) {
+            return revised(Intent.ACTIVITY_PLAN, safeResult);
+        }
+
+        // 规则三：没有历史推荐时，调整意图没有可排除对象，降级为推荐主链路并由澄清规则继续判断
         if (safeResult.intent() == Intent.MEAL_ADJUST && !hasLastRecommendations(state)) {
-            return new IntentResult(Intent.MEAL_RECOMMENDATION, safeSlots(safeResult), safeResult.confidence());
+            return revised(Intent.MEAL_RECOMMENDATION, safeResult);
         }
 
-        // 规则三：含半日或一日安排关键词时强制进入活动规划分支
+        // 规则四：含半日或一日安排关键词时强制进入活动规划分支
         if (containsActivityPlanKeyword(userInput)
                 && safeResult.intent() != Intent.MEAL_ADJUST
                 && safeResult.intent() != Intent.ACTIVITY_PLAN) {
-            return new IntentResult(Intent.ACTIVITY_PLAN, safeSlots(safeResult), safeResult.confidence());
+            return revised(Intent.ACTIVITY_PLAN, safeResult);
         }
 
         // 规则四：推荐意图低置信度时先进入澄清链路；健康风险已在上方优先处理，不在这里降级
         if (safeResult.intent() == Intent.MEAL_RECOMMENDATION && safeResult.confidence() < LOW_CONFIDENCE_THRESHOLD) {
-            return new IntentResult(Intent.CLARIFY_NEEDED, safeSlots(safeResult), safeResult.confidence());
+            return revised(Intent.CLARIFY_NEEDED, safeResult);
         }
 
         // 无矫正规则命中，原样返回 LLM 结果
@@ -58,6 +69,11 @@ public class IntentReviseService {
     /** slots 为空时使用空槽位，避免后续合并逻辑出现 NPE。 */
     private SlotBundle safeSlots(IntentResult result) {
         return result.slots() == null ? SlotBundle.empty() : result.slots();
+    }
+
+    private IntentResult revised(Intent intent, IntentResult result) {
+        return new IntentResult(intent, safeSlots(result), result.confidence(),
+                result.operations() == null ? java.util.List.of() : result.operations());
     }
 
     /** 活动安全关键词命中时，Java 规则直接前置拦截。 */

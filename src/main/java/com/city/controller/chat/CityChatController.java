@@ -3,6 +3,7 @@ package com.city.controller.chat;
 import com.city.constants.CityConstants;
 import com.city.model.ChatRequest;
 import com.city.model.ChatResponse;
+import com.city.model.RelaxationRequest;
 import com.city.service.orchestrator.CityOrchestratorService;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -39,5 +40,13 @@ public class CityChatController {
     ) {
         // 委托 Orchestrator 执行完整状态机，直接返回 ChatResponse
         return orchestratorService.dietChat(userId, request);
+    }
+
+    @PostMapping("/chat/relax")
+    public ChatResponse showRelaxedRecommendation(
+            @RequestHeader(value = CityConstants.USER_ID, defaultValue = "1") Long userId,
+            @RequestBody RelaxationRequest request
+    ) {
+        return orchestratorService.showRelaxedRecommendation(userId, request);
     }
 }

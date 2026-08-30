@@ -11,13 +11,16 @@
         <result property="name" column="name"/>
         <result property="city" column="city"/>
         <result property="location" column="location"/>
-        <result property="activityTime" column="activity_time"/>
         <result property="mood" column="mood"/>
         <result property="scene" column="scene"/>
         <result property="budget" column="budget"/>
         <result property="activityType" column="activity_type"/>
         <result property="style" column="style"/>
         <result property="duration" column="duration"/>
+        <result property="validFrom" column="valid_from"/>
+        <result property="validTo" column="valid_to"/>
+        <result property="validStartTime" column="valid_start_time"/>
+        <result property="validEndTime" column="valid_end_time"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
     </resultMap>
@@ -29,13 +32,16 @@
         name,
         city,
         location,
-        activity_time,
         mood,
         scene,
         budget,
         activity_type,
         style,
         duration,
+        valid_from,
+        valid_to,
+        valid_start_time,
+        valid_end_time,
         created_at,
         updated_at
     </sql>
@@ -46,11 +52,11 @@
             keyProperty="id">
         INSERT INTO activity_item (
         source_type, owner_user_id, name,
-        city, location, activity_time, mood, scene, budget, activity_type, style, duration,
+        city, location, mood, scene, budget, activity_type, style, duration, valid_from, valid_to, valid_start_time, valid_end_time,
         created_at, updated_at
         ) VALUES (
         #{sourceType}, #{ownerUserId}, #{name},
-        #{city}, #{location}, #{activityTime}, #{mood}, #{scene}, #{budget}, #{activityType}, #{style}, #{duration},
+        #{city}, #{location}, #{mood}, #{scene}, #{budget}, #{activityType}, #{style}, #{duration}, #{validFrom}, #{validTo}, #{validStartTime}, #{validEndTime},
         NOW(), NOW()
         )
     </insert>
@@ -60,13 +66,16 @@
         SET name = #{name},
         city = #{city},
         location = #{location},
-        activity_time = #{activityTime},
         mood = #{mood},
         scene = #{scene},
         budget = #{budget},
         activity_type = #{activityType},
         style = #{style},
         duration = #{duration},
+        valid_from = #{validFrom},
+        valid_to = #{validTo},
+        valid_start_time = #{validStartTime},
+        valid_end_time = #{validEndTime},
         updated_at = NOW()
         WHERE id = #{id}
         AND source_type = 'PERSONAL'
@@ -127,13 +136,24 @@
             </choose>
             AND (#{cityJson} = '[]' OR JSON_OVERLAPS(city, #{cityJson}))
             AND (#{locationJson} = '[]' OR JSON_OVERLAPS(location, #{locationJson}))
-            AND (#{activityTimeJson} = '[]' OR JSON_OVERLAPS(activity_time, #{activityTimeJson}))
             AND (#{moodJson} = '[]' OR JSON_OVERLAPS(mood, #{moodJson}))
             AND (#{sceneJson} = '[]' OR JSON_OVERLAPS(scene, #{sceneJson}))
             AND (#{budgetJson} = '[]' OR JSON_OVERLAPS(budget, #{budgetJson}))
             AND (#{activityTypeJson} = '[]' OR JSON_OVERLAPS(activity_type, #{activityTypeJson}))
             AND (#{styleJson} = '[]' OR JSON_OVERLAPS(style, #{styleJson}))
             AND (#{durationJson} = '[]' OR JSON_OVERLAPS(duration, #{durationJson}))
+            AND (#{targetDateStart} IS NULL OR valid_from IS NULL OR valid_to IS NULL
+                OR (valid_from &lt;= #{targetDateEnd} AND valid_to &gt;= #{targetDateStart}))
+            AND (#{targetTimeStart} IS NULL OR valid_start_time IS NULL OR valid_end_time IS NULL
+                OR (valid_start_time &lt; #{targetTimeEnd} AND valid_end_time &gt; #{targetTimeStart}))
+            AND (#{excludeCityJson} = '[]' OR NOT JSON_OVERLAPS(city, #{excludeCityJson}))
+            AND (#{excludeLocationJson} = '[]' OR NOT JSON_OVERLAPS(location, #{excludeLocationJson}))
+            AND (#{excludeMoodJson} = '[]' OR NOT JSON_OVERLAPS(mood, #{excludeMoodJson}))
+            AND (#{excludeSceneJson} = '[]' OR NOT JSON_OVERLAPS(scene, #{excludeSceneJson}))
+            AND (#{excludeBudgetJson} = '[]' OR NOT JSON_OVERLAPS(budget, #{excludeBudgetJson}))
+            AND (#{excludeActivityTypeJson} = '[]' OR NOT JSON_OVERLAPS(activity_type, #{excludeActivityTypeJson}))
+            AND (#{excludeStyleJson} = '[]' OR NOT JSON_OVERLAPS(style, #{excludeStyleJson}))
+            AND (#{excludeDurationJson} = '[]' OR NOT JSON_OVERLAPS(duration, #{excludeDurationJson}))
         </where>
         ORDER BY updated_at DESC
         LIMIT #{limit}

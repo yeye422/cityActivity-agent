@@ -1,0 +1,45 @@
+-- 第二层“地点/场次”模型：活动仍是第一层推荐对象，场次才连接到具体场地。
+CREATE TABLE IF NOT EXISTS venue (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    name VARCHAR(128) NOT NULL,
+    venue_type VARCHAR(64) NOT NULL,
+    city VARCHAR(64) NOT NULL,
+    district VARCHAR(64) NULL,
+    address VARCHAR(255) NULL,
+    latitude DECIMAL(10,7) NULL,
+    longitude DECIMAL(10,7) NULL,
+    business_start_time TIME NULL,
+    business_end_time TIME NULL,
+    supported_activities JSON NULL,
+    transport_tags JSON NULL,
+    environment_tags JSON NULL,
+    price_note VARCHAR(255) NULL,
+    reservation_required TINYINT(1) NOT NULL DEFAULT 0,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_venue_city_name (city, name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS activity_session (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    activity_id BIGINT NOT NULL,
+    venue_id BIGINT NOT NULL,
+    start_at DATETIME NOT NULL,
+    end_at DATETIME NOT NULL,
+    price DECIMAL(10,2) NULL,
+    capacity INT NULL,
+    remaining_seats INT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'OPEN',
+    registration_url VARCHAR(512) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_session_activity_time (activity_id, start_at),
+    KEY idx_session_venue_time (venue_id, start_at),
+    CONSTRAINT fk_session_activity FOREIGN KEY (activity_id) REFERENCES activity_item(id),
+    CONSTRAINT fk_session_venue FOREIGN KEY (venue_id) REFERENCES venue(id),
+    CONSTRAINT chk_session_time CHECK (end_at > start_at),
+    CONSTRAINT chk_session_status CHECK (status IN ('OPEN', 'FULL', 'CANCELLED', 'ENDED'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

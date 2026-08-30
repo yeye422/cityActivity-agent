@@ -30,6 +30,12 @@ public class SessionState {
     private Intent currentIntent;
     /** 多轮累积后的标准 7 槽位。 */
     private SlotBundle slots;
+    /** 用户明确排除的标签，例如“不要展览”。 */
+    private SlotBundle excludedSlots;
+    /** 最近一次明确时间表达解析出的绝对日期/时段。 */
+    private TimeConstraint timeConstraint;
+    /** 生成上一批推荐时使用的完整检索约束摘要。 */
+    private String recommendationQueryKey;
     /** 本会话已推荐过的餐食 ID（累积），用于“换一批”时排除重复。 */
     private List<Long> lastRecommendedActivityIds;
 
@@ -45,28 +51,46 @@ public class SessionState {
                 sourceMode,
                 null,
                 SlotBundle.empty(),
+                SlotBundle.empty(),
+                TimeConstraint.empty(),
+                "",
                 List.of()
         );
     }
 
     /** 返回更新阶段后的新状态。 */
     public SessionState withPhase(SessionPhase newPhase) {
-        return new SessionState(sessionId, userId, newPhase, sourceMode, currentIntent, slots, lastRecommendedActivityIds);
+        return new SessionState(sessionId, userId, newPhase, sourceMode, currentIntent, slots, excludedSlots, timeConstraint, recommendationQueryKey, lastRecommendedActivityIds);
     }
 
     /** 返回更新意图后的新状态。 */
     public SessionState withIntent(Intent newIntent) {
-        return new SessionState(sessionId, userId, phase, sourceMode, newIntent, slots, lastRecommendedActivityIds);
+        return new SessionState(sessionId, userId, phase, sourceMode, newIntent, slots, excludedSlots, timeConstraint, recommendationQueryKey, lastRecommendedActivityIds);
     }
 
     /** 返回更新槽位后的新状态。 */
     public SessionState withSlots(SlotBundle newSlots) {
-        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, newSlots, lastRecommendedActivityIds);
+        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, newSlots, excludedSlots, timeConstraint, recommendationQueryKey, lastRecommendedActivityIds);
+    }
+
+    public SessionState withExcludedSlots(SlotBundle value) {
+        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, slots,
+                value == null ? SlotBundle.empty() : value, timeConstraint, recommendationQueryKey, lastRecommendedActivityIds);
+    }
+
+    public SessionState withTimeConstraint(TimeConstraint value) {
+        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, slots, excludedSlots,
+                value == null ? timeConstraint : value, recommendationQueryKey, lastRecommendedActivityIds);
+    }
+
+    public SessionState withRecommendationQueryKey(String value) {
+        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, slots, excludedSlots,
+                timeConstraint, value == null ? "" : value, lastRecommendedActivityIds);
     }
 
     /** 返回更新推荐历史后的新状态（覆盖）。 */
     public SessionState withLastRecommendations(List<Long> newLastRecommendations) {
-        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, slots, newLastRecommendations == null ? List.of() : List.copyOf(newLastRecommendations));
+        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, slots, excludedSlots, timeConstraint, recommendationQueryKey, newLastRecommendations == null ? List.of() : List.copyOf(newLastRecommendations));
     }
 
     /** 将本轮推荐 ID 追加到累积历史，去重并保持插入顺序。 */
@@ -76,11 +100,11 @@ public class SessionState {
         }
         LinkedHashSet<Long> merged = new LinkedHashSet<>(lastRecommendedActivityIds == null ? List.of() : lastRecommendedActivityIds);
         merged.addAll(newIds);
-        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, slots, List.copyOf(merged));
+        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent, slots, excludedSlots, timeConstraint, recommendationQueryKey, List.copyOf(merged));
     }
 
     /** 返回更新数据源模式后的新状态，主要用于首次绑定 sourceMode。 */
     public SessionState withSourceMode(SourceMode newSourceMode) {
-        return new SessionState(sessionId, userId, phase, newSourceMode, currentIntent, slots, lastRecommendedActivityIds);
+        return new SessionState(sessionId, userId, phase, newSourceMode, currentIntent, slots, excludedSlots, timeConstraint, recommendationQueryKey, lastRecommendedActivityIds);
     }
 }

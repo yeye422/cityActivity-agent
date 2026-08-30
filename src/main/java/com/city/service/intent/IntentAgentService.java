@@ -10,12 +10,19 @@ import com.city.service.trace.AgentTraceService;
 import com.city.util.LlmJsonService;
 import com.city.util.SlotJsonPicker;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.Locale;
+import com.city.enums.ConstraintOperationType;
+import com.city.model.ConstraintOperation;
 
 /**
  * IntentAgent 调用服务。
@@ -74,21 +81,71 @@ public class IntentAgentService {
             return parseResult(response.getTextContent(), userInput, slotOptions);
         } catch (Exception ignored) {
             // LLM 超时/JSON 解析失败时不抛异常，走关键词 fallback 保证 Orchestrator 可继续
-            return fallback(userInput);
+            Map<String, List<String>> fallbackOptions;
+            try { fallbackOptions = slotOptionService.findAllOptions(); }
+            catch (Exception unavailable) { fallbackOptions = Map.of(); }
+            return fallback(userInput, fallbackOptions);
         }
     }
 
     /** 构造传给 IntentAgent 的用户 prompt，包含上下文和输出格式约束。 */
     private String buildUserPrompt(Long userId, String sessionId, String userInput, SlotBundle knownSlots, List<ConversationTurn> recentHistory, Map<String, List<String>> slotOptions) {
         return """
+                你是“城市活动推荐”的语义解析器，不推荐活动、不解释、不闲聊，只提取本轮用户意图和筛选条件变化。
+
+                ## 输入上下文
                 userId: %s
                 sessionId: %s
-                recentHistory: %s
-                knownSlots: %s
-                slotOptions: %s
-                当前这一句: %s
-                请输出 JSON，字段为 intent、slots、confidence。
-                slots 必须从 slotOptions 对应字段的候选值中选择；无法映射则输出 null 或空数组，不要创造标签。
+                最近对话: %s
+                当前已生效条件: %s
+                可用标准标签: %s
+                当前用户消息: %s
+
+                ## 任务
+                输出且只输出一个合法 JSON 对象，不使用 Markdown、代码块或额外文字。
+                JSON 顶层只能包含 intent、slots、operations、confidence 四个字段。
+
+                ## intent 枚举
+                - MEAL_RECOMMENDATION：首次请求推荐、继续补充条件，或意图不明确但仍在询问活动。
+                - MEAL_ADJUST：修改、追加、删除、清除条件，或明确要求“换一批”。
+                - ACTIVITY_PLAN：要求半天、一天、行程或活动安排。
+                - HEALTH_RISK：深夜独行、偏远地点、极端天气等安全风险。
+                - OTHER：与城市活动无关。
+                - CLARIFY_NEEDED：无法判断用户是否在请求活动推荐。
+
+                ## slots 规则
+                slots 只放本轮能从“可用标准标签”精确映射的正向标签；字段必须完整输出：
+                city、location、mood、scene、budget、activityType、style、duration。
+                未提及的字段输出 []。禁止创造标签、禁止把历史条件重复抄进 slots。
+                今天、明天、后天、明确日期、周几、周末、上午/下午/晚上由后端解析；不要写入 slots。
+
+                ## operations 规则
+                operations 是“对当前已生效条件”的补丁，数组中每一项必须严格是：
+                {"field":"字段名","op":"SET|ADD|REMOVE|CLEAR","values":["标准标签"],"raw":"用户原始片段"}
+                values 是唯一合法的数组字段，禁止 value、items、valueList；raw 必须是字符串。
+                field 只能是 city、location、mood、scene、budget、activityType、style、duration、time。
+                - SET：将该字段替换为 values，例如“改成北京”“只看电影”。
+                - ADD：保留旧值并加入 values，例如“电影和展览都可以”。
+                - REMOVE：排除 values，例如“不要展览”“别太热闹”。
+                - CLEAR：取消该字段全部限制，values 必须为 []，例如“预算不限”“城市不限”。
+                - field 为 time 时只可使用 SET 或 CLEAR，values 必须为 []，原表达写入 raw。
+                - 无明确变更时 operations 必须为 []。
+                - 同一字段若出现 CLEAR，不能再输出该字段其他操作；若同时出现 SET 和 ADD，以 SET 为准。
+                - “换一批”本身不产生 slots 或 operations，只输出 intent=MEAL_ADJUST。
+
+                ## 通用正确输出示例
+                用户：“改成北京，电影和展览都可以，不要太热闹，预算不限”
+                {
+                  "intent":"MEAL_ADJUST",
+                  "slots":{"city":["北京"],"location":[],"mood":[],"scene":[],"budget":[],"activityType":["电影","展览"],"style":[],"duration":[]},
+                  "operations":[
+                    {"field":"city","op":"SET","values":["北京"],"raw":"改成北京"},
+                    {"field":"activityType","op":"ADD","values":["电影","展览"],"raw":"电影和展览都可以"},
+                    {"field":"style","op":"REMOVE","values":["热闹"],"raw":"不要太热闹"},
+                    {"field":"budget","op":"CLEAR","values":[],"raw":"预算不限"}
+                  ],
+                  "confidence":0.92
+                }
                 """.formatted(userId, sessionId, recentHistory, knownSlots, slotOptions, userInput);
     }
 
@@ -110,7 +167,7 @@ public class IntentAgentService {
         double confidence = root.path("confidence").asDouble(0.5);
 
         // 组装并返回 IntentResult
-        return new IntentResult(intent, slots, confidence);
+        return new IntentResult(intent, slots, confidence, parseOperations(root.path("operations"), slotOptions));
     }
 
     /** 将 JSON 中的 intent 字符串解析为 Intent 枚举。 */
@@ -129,7 +186,6 @@ public class IntentAgentService {
         return new SlotBundle(
                 SlotJsonPicker.pick(node, "city", options),              // 城市标签
                 SlotJsonPicker.pick(node, "location", options),          // 位置/区域标签
-                SlotJsonPicker.pick(node, "activityTime", options),      // 活动时间标签
                 SlotJsonPicker.pick(node, "mood", options),          // 活动状态标签
                 SlotJsonPicker.pick(node, "scene", options),         // 同行人标签
                 SlotJsonPicker.pick(node, "budget", options),    // 预算标签
@@ -139,13 +195,45 @@ public class IntentAgentService {
         );
     }
 
+    private List<ConstraintOperation> parseOperations(JsonNode node, Map<String, List<String>> options) {
+        if (!node.isArray()) return List.of();
+        List<ConstraintOperation> result = new ArrayList<>();
+        for (JsonNode item : node) {
+            String field = item.path("field").asText("").trim();
+            String opText = item.path("op").asText("").trim();
+            if (!(SlotOptionService.SLOT_NAMES.contains(field) || "time".equals(field))) continue;
+            try {
+                ConstraintOperationType op = ConstraintOperationType.valueOf(opText.toUpperCase(Locale.ROOT));
+                List<String> values = "time".equals(field) ? List.of() : SlotJsonPicker.pick(item, "values", optionsFor(field, options));
+                result.add(new ConstraintOperation(field, op, values, item.path("raw").asText("")));
+            } catch (IllegalArgumentException ignored) {
+                // 单个操作无效不影响本轮其他语义。
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private Map<String, List<String>> optionsFor(String field, Map<String, List<String>> options) {
+        return Map.of("values", options.getOrDefault(field, List.of()));
+    }
+
     /** LLM 完全失败时的保守兜底 IntentResult，confidence 固定 0.2。 */
-    private IntentResult fallback(String userInput) {
+    private IntentResult fallback(String userInput, Map<String, List<String>> options) {
         return new IntentResult(
                 fallbackIntent(userInput),                                                          // 关键词推断意图
-                SlotBundle.empty(),                                                                 // 槽位置空
+                fallbackSlots(userInput, options),                                                   // 基于字典提取多值槽位
                 0.2                                                                                 // 低置信度
         );
+    }
+
+    private SlotBundle fallbackSlots(String userInput, Map<String, List<String>> options) {
+        ObjectNode node = JsonNodeFactory.instance.objectNode();
+        for (Map.Entry<String, List<String>> entry : options.entrySet()) {
+            List<String> hits = entry.getValue().stream().filter(value -> userInput != null && userInput.contains(value)).toList();
+            ArrayNode values = node.putArray(entry.getKey());
+            hits.forEach(values::add);
+        }
+        return parseSlots(node, options);
     }
 
     /** 关键词规则推断意图，按优先级依次匹配。 */

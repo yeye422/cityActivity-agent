@@ -81,19 +81,25 @@
         getUserId,
         setUserId,
         createSession: () => request("/sessions", { method: "POST" }),
+        resolveLocation: (payload) => request("/location/resolve", { method: "POST", body: payload }),
+        weather: (city) => request(`/weather${toQuery({ city })}`),
         chat: (payload) => request("/chat", { method: "POST", body: payload }),
+        relaxedRecommendation: (payload) => request("/chat/relax", { method: "POST", body: payload }),
         listPersonalActivities: () => request("/activities/personal"),
         createPersonalActivity: (payload) => request("/activities/personal", { method: "POST", body: payload }),
         updatePersonalActivity: (activityId, payload) => request(`/activities/personal/${encodeURIComponent(activityId)}`, { method: "PUT", body: payload }),
         deletePersonalActivity: (activityId) => request(`/activities/personal/${encodeURIComponent(activityId)}`, { method: "DELETE" }),
         listPublicActivities: () => request("/activities/public"),
+        listActivitySessions: (activityId, date) => request(`/activities/${encodeURIComponent(activityId)}/sessions${toQuery({ date })}`),
         slotOptions: () => request("/slot-options"),
         saveFeedback: (payload) => request("/feedback", { method: "POST", body: payload }),
         listTraces: (params) => request(`/debug/traces${toQuery(params)}`),
         getTrace: (traceId) => request(`/debug/traces/${encodeURIComponent(traceId)}`),
         listSessionTraces: (sessionId, limit) => request(`/debug/sessions/${encodeURIComponent(sessionId)}/traces${toQuery({ limit })}`),
         labelTrace: (traceId, payload) => request(`/debug/traces/${encodeURIComponent(traceId)}/label`, { method: "PUT", body: payload }),
-        evaluate: (payload) => request("/evaluations", { method: "POST", body: payload })
+        evaluate: (payload) => request("/evaluations", { method: "POST", body: payload }),
+        regressionEvaluate: (payload) => request("/evaluations/regression", { method: "POST", body: payload }),
+        promoteEvaluationCase: (payload) => request("/evaluations/cases/promote", { method: "POST", body: payload })
     };
 })();
 

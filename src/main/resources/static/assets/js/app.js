@@ -40,7 +40,6 @@
     const SLOT_LABELS = {
         city: "城市",
         location: "位置区域",
-        activityTime: "活动时间",
         mood: "活动氛围",
         scene: "同行人",
         budget: "预算",
@@ -51,7 +50,6 @@
     const SLOT_TONES = {
         city: "city",
         location: "location",
-        activityTime: "time",
         mood: "mood",
         scene: "scene",
         budget: "budget",
@@ -67,13 +65,13 @@
         "HEALTH_RISK",
         "OTHER"
     ];
-    const PUBLIC_FILTER_KEYS = ["city", "location", "activityTime", "activityType"];
+    const PUBLIC_FILTER_KEYS = ["city", "location", "activityType"];
     const QUICK_PROMPTS = [
-        "周六和朋友在西安，预算 200 元内，不想太累",
-        "北京周六晚上想看轻松一点的演出",
+        "和朋友在西安，预算 200 元内，不想太累",
+        "北京晚上想看轻松一点的演出",
         "上海周日一个人想找室内活动",
         "换一批，不要户外",
-        "帮我安排西安周六下午到晚上的活动"
+        "帮我安排西安下午到晚上的活动"
     ];
     const SOURCE_LABELS = {
         PERSONAL: "个人库",
@@ -85,17 +83,24 @@
         slotOptions: null,
         personalActivities: [],
         publicActivities: [],
+        activitySessions: {},
+        loadingSessions: {},
         publicFilters: {
             city: "",
             location: "",
-            activityTime: "",
-            activityType: ""
+            activityType: "",
+            activeDate: ""
         },
         editingActivity: null,
         chat: {
             sourceMode: "PERSONAL",
             sessionId: null,
             sending: false,
+            city: "",
+            location: "",
+            locating: false,
+            weather: null,
+            weatherLoading: false,
             messages: [
                 {
                     role: "assistant",
@@ -111,6 +116,7 @@
         },
         evaluation: {
             report: null,
+            regression: null,
             loading: false,
             form: defaultRangeForm()
         }
@@ -229,10 +235,10 @@
         app.innerHTML = `
             <section class="workspace">
                 <div class="section lead-panel">
-                    <div class="eyebrow">城市活动 Copilot</div>
-                    <h1>把一句周末想法，整理成能直接选择的活动方案。</h1>
+                    <div class="eyebrow">从想法到出发</div>
+                    <h1>把一句想法，整理成今天就能选择的活动。</h1>
                     <form id="homePromptForm" class="prompt-box">
-                        <textarea name="message" placeholder="例如：周六下午和朋友在西安，预算 200 元内，想轻松一点" required></textarea>
+                        <textarea name="message" placeholder="例如：下午和朋友在西安，预算 200 元内，想轻松一点" required></textarea>
                         <button class="btn primary cta" type="submit">开始推荐</button>
                     </form>
                     <div class="quick-strip">
@@ -265,7 +271,7 @@
                     </div>
                     <a class="btn primary cta" href="#/city/chat">进入对话推荐</a>
                 </div>
-                ${recentActivities.length ? renderActivityList(recentActivities, { feedback: true, sessionId: state.chat.sessionId }) : renderEmptyState("写下时间、预算、同行人或活动氛围，推荐结果会出现在这里。")}
+                ${recentActivities.length ? renderActivityList(recentActivities, { feedback: true, sessionId: state.chat.sessionId, traceId: latestRecommendationTraceId() }) : renderEmptyState("写下时间、预算、同行人或活动氛围，推荐结果会出现在这里。")}
             </section>
         `;
         loadHomeStats();
@@ -286,12 +292,11 @@
                     <span class="badge">示例结果</span>
                     <span class="score">匹配 86%</span>
                 </div>
-                <h3>周六下午城市艺术展</h3>
+                <h3>城市艺术展</h3>
                 <p class="muted">适合朋友同行，预算轻，室内不累，能快速形成半日安排。</p>
                 <div class="chips">
                     <span class="chip selected tag-chip tag-city">城市 西安</span>
                     <span class="chip selected tag-chip tag-location">区域 曲江</span>
-                    <span class="chip selected tag-chip tag-activityTime">时间 周六下午</span>
                     <span class="chip selected tag-chip tag-budget">预算 200内</span>
                     <span class="chip selected tag-chip tag-scene">同行 朋友</span>
                 </div>
@@ -328,13 +333,16 @@
     }
     function renderChat() {
         const latestActivities = latestRecommendedActivities();
+        const cityOptions = state.slotOptions && state.slotOptions.city ? state.slotOptions.city : [];
+        const weather = state.chat.weather;
+        const hasConversation = state.chat.messages.some((message) => message.role === "user");
         app.innerHTML = `
             <section class="chat-layout">
-                <div class="section chat-window">
+                <div class="section chat-window ${hasConversation ? "has-conversation" : "is-new-chat"}">
                     <div class="card-title">
                         <div>
                             <div class="eyebrow">对话推荐</div>
-                            <h2>描述你的周末需求</h2>
+                            <h2>说说你想怎么度过这段时间</h2>
                             <p>${state.chat.sessionId ? `会话 ${escapeHtml(state.chat.sessionId)}` : "发送第一条消息后自动创建会话"}</p>
                         </div>
                         <div class="inline-actions">
@@ -343,9 +351,20 @@
                             <button class="btn ghost" data-action="new-session">新会话</button>
                         </div>
                     </div>
-                    <div id="messages" class="messages">${state.chat.messages.map(renderMessage).join("")}</div>
+                    <div class="location-bar" aria-label="当前推荐城市">
+                        <label class="location-field" for="chatCity">城市
+                            <select id="chatCity" data-action="select-city" ${state.chat.sending ? "disabled" : ""}>
+                                <option value="">请选择城市</option>
+                                ${cityOptions.map((city) => `<option value="${escapeHtml(city)}" ${state.chat.city === city ? "selected" : ""}>${escapeHtml(city)}</option>`).join("")}
+                            </select>
+                        </label>
+                        <button class="btn soft" type="button" data-action="locate-city" ${state.chat.locating || state.chat.sending ? "disabled" : ""}>${state.chat.locating ? "定位中..." : "定位当前城市"}</button>
+                        <span class="location-hint">${state.chat.city ? `当前：${escapeHtml(state.chat.city)}${state.chat.location ? ` · ${escapeHtml(state.chat.location)}` : ""}` : "城市将用于筛选推荐"}</span>
+                        ${renderWeatherSummary(weather, state.chat.city, state.chat.weatherLoading)}
+                    </div>
+                    <div id="messages" class="messages ${hasConversation ? "" : "messages-intro"}">${state.chat.messages.map(renderMessage).join("")}</div>
                     <form id="chatForm" class="composer">
-                        <textarea name="message" placeholder="例如：周六和朋友在西安，预算 200 元内，不想太累" required></textarea>
+                        <textarea name="message" placeholder="例如：和朋友在西安，预算 200 元内，不想太累" required></textarea>
                         <button class="btn primary cta" type="submit">${state.chat.sending ? "发送中..." : "发送"}</button>
                     </form>
                 </div>
@@ -357,7 +376,7 @@
                             <p>${latestActivities.length ? "选择喜欢、采纳或不合适，系统会记录你的偏好。" : "推荐结果会在这里集中展示，便于比较。"}</p>
                         </div>
                     </div>
-                    ${latestActivities.length ? renderActivityList(latestActivities, { feedback: true, sessionId: state.chat.sessionId }) : renderEmptyState("先发送一句需求，例如“周日一个人想找室内活动”。")}
+                    ${latestActivities.length ? renderActivityList(latestActivities, { feedback: true, sessionId: state.chat.sessionId, traceId: latestRecommendationTraceId() }) : renderEmptyState("先发送一句需求，例如“周日一个人想找室内活动”。")}
                     <div class="subtle-divider"></div>
                     <div class="support-panel">
                         <div class="card-title">
@@ -380,7 +399,38 @@
                 </aside>
             </section>
         `;
+        if (!state.slotOptions) {
+            ensureSlotOptions().then(() => currentRoute() === "/city/chat" && renderChat()).catch(() => {});
+        }
+        if (state.chat.city && (!weather || weather.city !== state.chat.city) && !state.chat.weatherLoading) {
+            loadChatWeather(state.chat.city);
+        }
         scrollMessagesToBottom();
+    }
+
+    function renderWeatherSummary(weather, city, loading) {
+        if (!city) return "";
+        if (loading) return `<span class="weather-summary" aria-live="polite">天气加载中…</span>`;
+        if (!weather) return "";
+        if (!weather.available) {
+            return `<span class="weather-summary is-unavailable" title="可检查服务端日志获取完整信息">天气不可用：${escapeHtml(weather.message || "请求失败")}</span>`;
+        }
+        const today = weather.daily && weather.daily[0];
+        const range = today ? `，${escapeHtml(today.tempMin)}–${escapeHtml(today.tempMax)}℃` : "";
+        return `<span class="weather-summary" title="${escapeHtml(weather.updateTime || "")}" aria-label="${escapeHtml(city)}天气">天气：${escapeHtml(weather.text)} ${escapeHtml(weather.temperature)}℃${range}</span>`;
+    }
+
+    async function loadChatWeather(city) {
+        state.chat.weatherLoading = true;
+        try {
+            const weather = await CityApi.weather(city);
+            if (state.chat.city === city) state.chat.weather = weather;
+        } catch (error) {
+            if (state.chat.city === city) state.chat.weather = { available: false, city };
+        } finally {
+            state.chat.weatherLoading = false;
+            if (currentRoute() === "/city/chat") renderChat();
+        }
     }
     function renderMessage(message) {
         // 打字指示器
@@ -401,13 +451,26 @@
         const missingSlots = message.missingSlots && message.missingSlots.length
             ? `<div class="chips">${message.missingSlots.map((slot) => `<span class="chip selected">${escapeHtml(SLOT_LABELS[slot] || slot)}</span>`).join("")}</div>`
             : "";
+        const relaxationChoices = message.relaxationOptions && message.relaxationOptions.length
+            ? `<div class="relaxation-panel" aria-label="相近活动方案">
+                <p>你可以决定是否放宽偏好：</p>
+                <div class="relaxation-actions">
+                    ${message.relaxationOptions.map((option) => `<button class="btn soft" data-action="show-relaxed" data-level="${escapeHtml(option.level)}">${escapeHtml(option.label)}（${escapeHtml(option.candidateCount)}项）</button>`).join("")}
+                    <button class="btn ghost" data-action="keep-strict">保持严格条件</button>
+                    <button class="btn ghost" data-action="adjust-conditions">调整条件</button>
+                </div>
+              </div>`
+            : "";
         const trace = message.traceId
             ? `<span>traceId：<a href="#/admin/traces" data-action="open-trace" data-trace-id="${escapeHtml(message.traceId)}">${escapeHtml(message.traceId)}</a></span>`
             : "";
+        const constraints = renderAppliedConstraints(message);
         return `
             <article class="message ${message.role}">
                 <div class="bubble">${escapeHtml(message.text)}</div>
+                ${constraints}
                 ${missingSlots}
+                ${relaxationChoices}
                 ${trace ? `<div class="message-meta">${trace}</div>` : ""}
             </article>
         `;
@@ -455,7 +518,10 @@
                 sessionId: state.chat.sessionId,
                 message,
                 sourceMode: state.chat.sourceMode,
-                context: {}
+                context: {
+                    city: state.chat.city,
+                    location: state.chat.location
+                }
             });
             state.chat.sessionId = response.sessionId || state.chat.sessionId;
 
@@ -469,7 +535,11 @@
                 activities: response.displayBlocks || [],
                 missingSlots: response.missingSlots || [],
                 traceId: response.traceId,
-                sessionId: response.sessionId || state.chat.sessionId
+                sessionId: response.sessionId || state.chat.sessionId,
+                relaxationOptions: response.relaxationOptions || [],
+                appliedSlots: response.appliedSlots,
+                excludedSlots: response.excludedSlots,
+                timeConstraint: response.timeConstraint
             });
         } catch (error) {
             // 移除打字指示器
@@ -490,6 +560,78 @@
             }
         ];
         renderChat();
+    }
+    async function showRelaxedRecommendation(level) {
+        if (state.chat.sending || !state.chat.sessionId) return;
+        state.chat.sending = true;
+        state.chat.messages.push({ role: "assistant", text: "", typing: true });
+        renderChat();
+        try {
+            const response = await CityApi.relaxedRecommendation({
+                sessionId: state.chat.sessionId,
+                sourceMode: state.chat.sourceMode,
+                level: Number(level)
+            });
+            state.chat.messages.pop();
+            state.chat.messages.push({
+                role: "assistant",
+                text: response.speechText || "已为你展示相近活动。",
+                activities: response.displayBlocks || [],
+                traceId: response.traceId,
+                sessionId: response.sessionId || state.chat.sessionId,
+                appliedSlots: response.appliedSlots,
+                excludedSlots: response.excludedSlots,
+                timeConstraint: response.timeConstraint
+            });
+        } catch (error) {
+            state.chat.messages.pop();
+            showToast(error.message || "相近活动加载失败", "error");
+        } finally {
+            state.chat.sending = false;
+            renderChat();
+        }
+    }
+    function setChatCity(city, location) {
+        const nextCity = String(city || "").trim();
+        const nextLocation = String(location || "").trim();
+        if (nextCity === state.chat.city && nextLocation === state.chat.location) {
+            return;
+        }
+        state.chat.city = nextCity;
+        state.chat.location = nextLocation;
+        state.chat.weather = null;
+        resetChat();
+        showToast(nextCity ? `已切换到${nextCity}` : "已清除城市筛选");
+    }
+    function locateCity() {
+        if (!navigator.geolocation) {
+            showToast("当前浏览器不支持定位，请手动选择城市", "error");
+            return;
+        }
+        state.chat.locating = true;
+        renderChat();
+        navigator.geolocation.getCurrentPosition(async (position) => {
+            try {
+                const result = await CityApi.resolveLocation({
+                    longitude: position.coords.longitude,
+                    latitude: position.coords.latitude
+                });
+                const knownCities = state.slotOptions && state.slotOptions.city ? state.slotOptions.city : [];
+                if (!knownCities.includes(result.city)) {
+                    throw new Error(`暂不支持${result.city}的活动推荐，请手动选择城市`);
+                }
+                setChatCity(result.city, result.location);
+            } catch (error) {
+                showToast(error.message || "定位失败，请手动选择城市", "error");
+            } finally {
+                state.chat.locating = false;
+                if (currentRoute() === "/city/chat") renderChat();
+            }
+        }, () => {
+            state.chat.locating = false;
+            renderChat();
+            showToast("未获得定位权限，请手动选择城市", "error");
+        }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 });
     }
     async function renderPersonalActivities() {
         if (!state.slotOptions) {
@@ -530,7 +672,7 @@
                 <div>
                     <div class="eyebrow">${activity.id ? "编辑" : "新增"}</div>
                     <h3>${title}</h3>
-                    <p>给活动补上城市、区域、时间、预算和类型标签，后续推荐会更准。</p>
+                    <p>日期和每日时段均可选；不填写表示长期有效、全天可用。</p>
                 </div>
             </div>
             <form id="activityForm" class="form-grid">
@@ -538,6 +680,22 @@
                 <div class="field full">
                     <label for="activityName">活动名称</label>
                     <input id="activityName" name="name" value="${escapeHtml(activity.name || "")}" placeholder="例如：周末艺术展" required>
+                </div>
+                <div class="field">
+                    <label for="validFrom">有效开始日期（可选）</label>
+                    <input id="validFrom" type="date" name="validFrom" value="${escapeHtml(activity.validFrom || "")}">
+                </div>
+                <div class="field">
+                    <label for="validTo">有效结束日期（可选）</label>
+                    <input id="validTo" type="date" name="validTo" value="${escapeHtml(activity.validTo || "")}">
+                </div>
+                <div class="field">
+                    <label for="validStartTime">每日有效开始时间（可选）</label>
+                    <input id="validStartTime" type="time" name="validStartTime" value="${escapeHtml(activity.validStartTime || "")}">
+                </div>
+                <div class="field">
+                    <label for="validEndTime">每日有效结束时间（可选）</label>
+                    <input id="validEndTime" type="time" name="validEndTime" value="${escapeHtml(activity.validEndTime || "")}">
                 </div>
                 ${Object.entries(SLOT_LABELS).map(([key, label]) => renderSlotPicker(key, label, activity[key] || [])).join("")}
                 <div class="field full">
@@ -552,7 +710,7 @@
     function renderSlotPicker(key, label, selected) {
         const options = state.slotOptions && state.slotOptions[key] ? state.slotOptions[key] : [];
         const selectedSet = new Set(selected || []);
-        const required = key === "activityTime";
+        const required = false;
         return `
             <div class="field">
                 <label for="slot-${escapeHtml(key)}">${escapeHtml(label)}${required ? "（必选）" : ""}</label>
@@ -577,13 +735,16 @@
             name: "",
             city: [],
             location: [],
-            activityTime: [],
             mood: [],
             scene: [],
             budget: [],
             activityType: [],
             style: [],
             duration: []
+            ,validFrom: ""
+            ,validTo: ""
+            ,validStartTime: ""
+            ,validEndTime: ""
         };
     }
     function renderActivityList(activities, options) {
@@ -591,6 +752,13 @@
             return renderEmptyState((options && options.emptyMessage) || "暂无活动。可以先添加几个常去的地方。");
         }
         return `<div class="activity-grid">${activities.map((activity) => renderActivityCard(activity, options || {})).join("")}</div>`;
+    }
+
+    function latestRecommendationTraceId() {
+        for (let i = state.chat.messages.length - 1; i >= 0; i--) {
+            if (state.chat.messages[i].traceId) return state.chat.messages[i].traceId;
+        }
+        return "";
     }
 
     function renderSkeletonCards(count = 4) {
@@ -615,6 +783,7 @@
         const itemId = activity.id || activity.itemId;
         return `
             <article class="activity-card">
+                <div class="activity-date-rail" aria-label="活动时间">${escapeHtml(activitySchedule(activity))}</div>
                 <header>
                     <div>
                         <h3>${escapeHtml(activity.name)}</h3>
@@ -623,7 +792,9 @@
                     ${activity.matchScore ? `<span class="score">匹配 ${Math.round(activity.matchScore * 100)}%</span>` : ""}
                 </header>
                 <p class="activity-reason">${escapeHtml(activityReason(activity))}</p>
+                <p class="activity-availability ${activityHasVerifiedWindow(activity) ? "is-verified" : "is-unverified"}">${escapeHtml(activityAvailability(activity))}</p>
                 ${tags.length ? `<div class="chips">${tags.map((tag) => `<span class="chip selected tag-chip tag-${escapeHtml(tag.key)}">${escapeHtml(tag.text)}</span>`).join("")}</div>` : `<p class="muted">暂无标签</p>`}
+                ${renderSessionChooser(itemId)}
                 ${editable ? `
                     <div class="button-row">
                         <button class="btn soft" data-action="edit-activity" data-id="${escapeHtml(itemId)}">编辑</button>
@@ -632,22 +803,118 @@
                 ` : ""}
                 ${feedback ? `
                     <div class="button-row">
-                        <button class="btn primary cta" data-action="feedback" data-action-value="ADOPT" data-item-id="${escapeHtml(itemId)}" data-session-id="${escapeHtml(options.sessionId || "")}">采纳</button>
-                        <button class="btn soft" data-action="feedback" data-action-value="LIKE" data-item-id="${escapeHtml(itemId)}" data-session-id="${escapeHtml(options.sessionId || "")}">喜欢</button>
-                        <button class="btn ghost" data-action="feedback" data-action-value="DISLIKE" data-item-id="${escapeHtml(itemId)}" data-session-id="${escapeHtml(options.sessionId || "")}">不合适</button>
+                        <button class="btn primary cta" data-action="feedback" data-action-value="ADOPT" data-item-id="${escapeHtml(itemId)}" data-session-id="${escapeHtml(options.sessionId || "")}" data-trace-id="${escapeHtml(options.traceId || "")}">采纳</button>
+                        <button class="btn soft" data-action="feedback" data-action-value="LIKE" data-item-id="${escapeHtml(itemId)}" data-session-id="${escapeHtml(options.sessionId || "")}" data-trace-id="${escapeHtml(options.traceId || "")}">喜欢</button>
+                        <button class="btn ghost" data-action="feedback" data-action-value="DISLIKE" data-item-id="${escapeHtml(itemId)}" data-session-id="${escapeHtml(options.sessionId || "")}" data-trace-id="${escapeHtml(options.traceId || "")}">不合适</button>
                     </div>
                 ` : ""}
             </article>
         `;
     }
+    function renderAppliedConstraints(message) {
+        const slots = message.appliedSlots || {};
+        const excluded = message.excludedSlots || {};
+        const applied = Object.keys(SLOT_LABELS).flatMap((key) => (slots[key] || []).map((value) => `${SLOT_LABELS[key]}：${value}`));
+        const removed = Object.keys(SLOT_LABELS).flatMap((key) => (excluded[key] || []).map((value) => `排除${SLOT_LABELS[key]}：${value}`));
+        const time = message.timeConstraint && message.timeConstraint.dateStart
+            ? [`日期：${message.timeConstraint.dateStart}${message.timeConstraint.dateEnd && message.timeConstraint.dateEnd !== message.timeConstraint.dateStart ? ` 至 ${message.timeConstraint.dateEnd}` : ""}${message.timeConstraint.startTime ? ` ${message.timeConstraint.startTime}–${message.timeConstraint.endTime}` : ""}`]
+            : [];
+        const all = [...time, ...applied, ...removed];
+        return all.length ? `<div class="applied-constraints"><span>当前条件</span>${all.map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join("")}</div>` : "";
+    }
+    function renderSessionChooser(activityId) {
+        if (!activityId) return "";
+        const sessions = state.activitySessions[activityId];
+        const loading = state.loadingSessions[activityId];
+        const expanded = Array.isArray(sessions);
+        return `
+            <div class="session-chooser">
+                <button class="btn soft" type="button" data-action="toggle-sessions" data-id="${escapeHtml(activityId)}" aria-expanded="${expanded}">
+                    ${loading ? "加载可选场次..." : expanded ? "收起可选场次" : "查看可选地点与场次"}
+                </button>
+                ${expanded ? renderSessionList(sessions) : ""}
+            </div>`;
+    }
+    function renderSessionList(sessions) {
+        if (!sessions.length) return `<p class="session-empty">暂未录入可参加的具体场次；该结果仍是活动方向推荐。</p>`;
+        return `<div class="session-list">${sessions.map((session) => {
+            const time = `${formatDateTime(session.startAt)}–${formatTime(session.endAt)}`;
+            const cost = session.price !== null && session.price !== undefined ? `¥${session.price}` : (session.priceNote || "费用待确认");
+            const seats = session.status === "FULL" ? "已满" : session.remainingSeats === null || session.remainingSeats === undefined ? "余位待确认" : `余 ${session.remainingSeats} 位`;
+            const status = session.status === "FULL" ? "已满" : "可参加";
+            return `<article class="session-item">
+                <div><strong>${escapeHtml(session.venueName)}</strong><span class="session-status ${session.status === "FULL" ? "is-full" : ""}">${escapeHtml(status)}</span></div>
+                <p class="session-meta">${escapeHtml(time)} · ${escapeHtml(cost)} · ${escapeHtml(seats)}</p>
+                ${session.address ? `<p class="muted">${escapeHtml(session.address)}</p>` : ""}
+                ${session.registrationUrl && session.status === "OPEN" ? `<a class="text-link" href="${escapeHtml(session.registrationUrl)}" target="_blank" rel="noopener noreferrer">查看报名方式</a>` : ""}
+            </article>`;
+        }).join("")}</div>`;
+    }
+    function formatDateTime(value) {
+        if (!value) return "时间待确认";
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? String(value).replace("T", " ") : `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+    }
+    function formatTime(value) {
+        if (!value) return "";
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? String(value).slice(11, 16) : `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+    }
+    function activitySchedule(activity) {
+        if (activity.validFrom && activity.validTo) {
+            if (activity.validFrom === activity.validTo) return activity.validFrom.slice(5).replace("-", "/");
+            return `${activity.validFrom.slice(5).replace("-", "/")}起`;
+        }
+        return activity.period || "待确认";
+    }
+    function activityHasVerifiedWindow(activity) {
+        return Boolean(activity.validFrom && activity.validTo);
+    }
+    function activityAvailability(activity) {
+        if (!activityHasVerifiedWindow(activity)) {
+            return "日期待确认：这是活动方向推荐，查看场次后再确认能否参加。";
+        }
+        const date = activity.validFrom === activity.validTo
+            ? activity.validFrom
+            : `${activity.validFrom} 至 ${activity.validTo}`;
+        const time = activity.validStartTime && activity.validEndTime
+            ? ` · 每日 ${activity.validStartTime}–${activity.validEndTime}`
+            : " · 每日时段待确认";
+        return `已验证有效期：${date}${time}`;
+    }
+    async function toggleActivitySessions(activityId) {
+        if (!activityId || state.loadingSessions[activityId]) return;
+        if (Array.isArray(state.activitySessions[activityId])) {
+            delete state.activitySessions[activityId];
+            render();
+            return;
+        }
+        state.loadingSessions[activityId] = true;
+        render();
+        try {
+            state.activitySessions[activityId] = await CityApi.listActivitySessions(activityId, state.publicFilters.activeDate);
+        } catch (error) {
+            showToast(error.message || "场次加载失败", "error");
+        } finally {
+            delete state.loadingSessions[activityId];
+            render();
+        }
+    }
     function activityTags(activity) {
         return activityTagItems(activity).map((tag) => tag.text);
     }
     function activityTagItems(activity) {
-        return Object.keys(SLOT_LABELS).flatMap((key) => slotValues(activity, key).map((value) => ({
+        const slotTags = Object.keys(SLOT_LABELS).flatMap((key) => slotValues(activity, key).map((value) => ({
             key: SLOT_TONES[key] || key,
             text: `${shortSlotLabel(key)} ${value}`
         })));
+        if (activity.validFrom && activity.validTo) {
+            slotTags.unshift({ key: "date", text: `有效期 ${activity.validFrom} 至 ${activity.validTo}` });
+        }
+        if (activity.validStartTime && activity.validEndTime) {
+            slotTags.unshift({ key: "date", text: `每日 ${activity.validStartTime}–${activity.validEndTime}` });
+        }
+        return slotTags;
     }
     function slotValues(activity, key) {
         const direct = activity[key];
@@ -660,7 +927,6 @@
         const labels = {
             city: "城市",
             location: "区域",
-            activityTime: "时间",
             mood: "氛围",
             scene: "同行",
             budget: "预算",
@@ -688,9 +954,7 @@
             const cached = cache.get('personalActivities');
             if (cached) {
                 state.personalActivities = cached;
-                if (currentRoute() === "/city/activities/personal") {
-                    document.getElementById("personalActivityList").innerHTML = renderActivityList(state.personalActivities, { editable: true });
-                }
+                refreshPersonalActivityList();
                 return;
             }
         }
@@ -705,11 +969,18 @@
             state.personalActivities = await CityApi.listPersonalActivities();
             cache.set('personalActivities', state.personalActivities);
             state.home.loaded = false;
-            if (currentRoute() === "/city/activities/personal") {
-                document.getElementById("personalActivityList").innerHTML = renderActivityList(state.personalActivities, { editable: true });
-            }
+            refreshPersonalActivityList();
         } catch (error) {
             showToast(error.message || "我的收藏活动加载失败", "error");
+        }
+    }
+    function refreshPersonalActivityList() {
+        if (currentRoute() !== "/city/activities/personal") {
+            return;
+        }
+        const listEl = document.getElementById("personalActivityList");
+        if (listEl) {
+            listEl.innerHTML = renderActivityList(state.personalActivities, { editable: true });
         }
     }
     async function ensureSlotOptions() {
@@ -729,8 +1000,20 @@
             showToast("请填写活动名称", "error");
             return;
         }
-        if (!payload.activityTime.length) {
-            showToast("请至少选择一个活动时间标签", "error");
+        if (Boolean(payload.validFrom) !== Boolean(payload.validTo)) {
+            showToast("有效日期请同时填写开始和结束日期", "error");
+            return;
+        }
+        if (payload.validFrom && payload.validFrom > payload.validTo) {
+            showToast("结束日期不能早于开始日期", "error");
+            return;
+        }
+        if (Boolean(payload.validStartTime) !== Boolean(payload.validEndTime)) {
+            showToast("每日时段请同时填写开始和结束时间", "error");
+            return;
+        }
+        if (payload.validStartTime && payload.validStartTime >= payload.validEndTime) {
+            showToast("每日结束时间必须晚于开始时间", "error");
             return;
         }
         const restore = setLoading(form.querySelector("button[type=submit]"), "保存中...");
@@ -751,7 +1034,11 @@
     function activityPayloadFromForm(form) {
         const formData = new FormData(form);
         const payload = {
-            name: String(formData.get("name") || "").trim()
+            name: String(formData.get("name") || "").trim(),
+            validFrom: String(formData.get("validFrom") || ""),
+            validTo: String(formData.get("validTo") || ""),
+            validStartTime: String(formData.get("validStartTime") || ""),
+            validEndTime: String(formData.get("validEndTime") || "")
         };
         Object.keys(SLOT_LABELS).forEach((key) => {
             payload[key] = formData.getAll(key).filter(Boolean);
@@ -789,7 +1076,7 @@
                     <div>
                         <div class="eyebrow">公共活动库</div>
                         <h2>城市活动库</h2>
-                        <p>公共活动按城市和区域组织，不再默认固定单一城市。</p>
+                        <p>按城市、类型和有效日期查看活动；过期活动会自动从日期筛选中排除。</p>
                     </div>
                     <a class="btn primary" href="#/city/chat">去智能推荐</a>
                 </div>
@@ -807,6 +1094,10 @@
         return `
             <form id="publicFilterForm" class="filter-panel" aria-label="筛选城市活动库">
                 ${PUBLIC_FILTER_KEYS.map((key) => renderPublicFilterSelect(key)).join("")}
+                <label class="filter-field">
+                    <span>活动日期</span>
+                    <input type="date" name="activeDate" value="${escapeHtml(state.publicFilters.activeDate || "")}">
+                </label>
                 <div class="filter-actions">
                     <button class="btn primary" type="submit">筛选</button>
                     <button class="btn ghost" type="button" data-action="reset-public-filters">重置</button>
@@ -839,19 +1130,25 @@
         return state.publicActivities.filter((activity) => PUBLIC_FILTER_KEYS.every((key) => {
             const value = state.publicFilters[key];
             return !value || slotValues(activity, key).includes(value);
-        }));
+        }) && isActiveOn(activity, state.publicFilters.activeDate));
+    }
+    function isActiveOn(activity, date) {
+        if (!date || !activity.validFrom || !activity.validTo) return true;
+        return activity.validFrom <= date && date <= activity.validTo;
     }
     function applyPublicFilters(form) {
         const formData = new FormData(form);
         PUBLIC_FILTER_KEYS.forEach((key) => {
             state.publicFilters[key] = String(formData.get(key) || "");
         });
+        state.publicFilters.activeDate = String(formData.get("activeDate") || "");
         renderPublicActivities();
     }
     function resetPublicFilters() {
         PUBLIC_FILTER_KEYS.forEach((key) => {
             state.publicFilters[key] = "";
         });
+        state.publicFilters.activeDate = "";
         renderPublicActivities();
     }
     async function ensurePublicActivities(force) {
@@ -987,6 +1284,7 @@
         `;
     }
     function renderTraceDetail(trace) {
+        const promotedMessage = traceInitialMessage(trace);
         return `
             <div class="card-title">
                 <div>
@@ -1022,18 +1320,35 @@
                     </div>
                     <div class="field full">
                         <label>预期槽位 JSON</label>
-                        <textarea name="expectedSlots" placeholder='{"activityTime":["周六下午"],"activityType":["展览"]}'>${escapeHtml(safeJson(trace.expectedSlots))}</textarea>
+                        <textarea name="expectedSlots" placeholder='{"activityType":["展览"],"operations":[{"field":"time","op":"SET","value":"周六下午"}]}'>${escapeHtml(safeJson(trace.expectedSlots))}</textarea>
                     </div>
                     <div class="field full">
                         <label>备注</label>
                         <textarea name="labelNote" placeholder="标注说明">${escapeHtml(trace.labelNote || "")}</textarea>
                     </div>
                     <div class="field full">
+                        <label>评测样本消息</label>
+                        <textarea name="promotionMessage" placeholder="用于下一次回归的用户消息">${escapeHtml(promotedMessage)}</textarea>
+                    </div>
+                    <div class="field full">
+                        <label>预期缺失槽位 JSON（可选）</label>
+                        <input name="expectedMissingSlots" placeholder='例如：["city"]'>
+                    </div>
+                    <div class="field full">
                         <button class="btn primary" type="submit">保存标注</button>
+                        <button class="btn soft" type="button" data-action="promote-trace" data-trace-id="${escapeHtml(trace.traceId)}">晋级为评测用例</button>
                     </div>
                 </form>
             </div>
         `;
+    }
+    function traceInitialMessage(trace) {
+        try {
+            const root = JSON.parse(trace.traceJson || "{}");
+            const event = (root.events || []).find((item) => item.eventType === "REQUEST_RECEIVED");
+            const payload = typeof event?.inputPayload === "string" ? JSON.parse(event.inputPayload) : event?.inputPayload;
+            return payload?.message || payload?.userInput || "";
+        } catch (_) { return ""; }
     }
     async function searchTraces(form) {
         const formData = new FormData(form);
@@ -1131,6 +1446,7 @@
                     </div>
                     <div class="field full">
                         <button class="btn primary" type="submit">${state.evaluation.loading ? "评估中..." : "生成评估报告"}</button>
+                        <button class="btn soft" type="button" data-action="run-regression">运行固定回归集</button>
                     </div>
                 </form>
             </section>
@@ -1150,6 +1466,7 @@
                 ${statCard("已标注", report.labeledTraces, "有人工标签的 Trace 数")}
                 ${statCard("平均分", report.avgScore === null || report.avgScore === undefined ? "-" : Number(report.avgScore).toFixed(2), "综合评分")}
             </div>
+            ${state.evaluation.regression ? `<p class="muted">回归集版本 ${escapeHtml(state.evaluation.regression.evalSetVersion || "v1")} · 基线 ${escapeHtml(state.evaluation.regression.baselineVersion || "首次运行")} · 变化 ${state.evaluation.regression.scoreDelta == null ? "-" : Number(state.evaluation.regression.scoreDelta).toFixed(2)} · ${state.evaluation.regression.passed === false ? "未通过" : "通过"}</p>` : ""}
             <div class="subtle-divider"></div>
             <div class="grid two">
                 <div>
@@ -1257,6 +1574,7 @@
         try {
             await guard(async () => {
                 await CityApi.saveFeedback({
+                    traceId: button.dataset.traceId || "",
                     sessionId: button.dataset.sessionId || state.chat.sessionId,
                     itemId,
                     action: button.dataset.actionValue,
@@ -1279,6 +1597,49 @@
             button.textContent = oldText;
         }
     }
+    async function promoteTraceCase(traceId) {
+        const trace = state.traces.selected;
+        if (!trace || trace.traceId !== traceId) return;
+        const form = document.querySelector("#traceLabelForm");
+        const data = new FormData(form);
+        const message = (data.get("promotionMessage") || "").trim();
+        if (!message) { showToast("请先填写评测样本消息", "error"); return; }
+        let expectedSlots = null;
+        const slotsText = (data.get("expectedSlots") || "").trim();
+        if (slotsText) { try { expectedSlots = JSON.parse(slotsText); } catch (_) { showToast("预期槽位必须是合法 JSON", "error"); return; } }
+        const definition = {
+            id: `online_${Date.now()}`,
+            message,
+            sourceMode: "PUBLIC",
+            expectedIntent: data.get("expectedIntent") || undefined,
+            expectedSlots: expectedSlots || undefined,
+            expectedClarifyAction: data.get("expectedClarifyAction") || undefined
+        };
+        const missingText = (data.get("expectedMissingSlots") || "").trim();
+        if (missingText) { try { definition.expectedMissingSlots = JSON.parse(missingText); } catch (_) { showToast("预期缺失槽位必须是合法 JSON", "error"); return; } }
+        await guard(async () => {
+            await CityApi.promoteEvaluationCase({ traceId, caseDefinition: definition });
+        }, "已晋级为评测用例，下次回归会自动纳入");
+    }
+    async function runRegression() {
+        if (state.evaluation.loading) return;
+        state.evaluation.loading = true;
+        renderEvaluations();
+        try {
+            const regression = await CityApi.regressionEvaluate({
+                includeLlmJudge: state.evaluation.form.includeLlmJudge,
+                limit: state.evaluation.form.limit
+            });
+            state.evaluation.report = regression.report || regression;
+            state.evaluation.regression = regression.report ? regression : null;
+            showToast(regression.passed === false ? "固定回归集发现回归" : "固定回归集评估完成");
+        } catch (error) {
+            showToast(error.message || "固定回归评估失败", "error");
+        } finally {
+            state.evaluation.loading = false;
+            renderEvaluations();
+        }
+    }
     function handleClick(event) {
         const target = event.target.closest("[data-action]");
         if (!target) {
@@ -1290,6 +1651,21 @@
             resetChat();
         } else if (action === "new-session") {
             resetChat();
+        } else if (action === "locate-city") {
+            locateCity();
+        } else if (action === "toggle-sessions") {
+            toggleActivitySessions(target.dataset.id);
+        } else if (action === "show-relaxed") {
+            showRelaxedRecommendation(target.dataset.level);
+        } else if (action === "keep-strict") {
+            state.chat.messages.push({ role: "assistant", text: "已保持严格条件，不会展示相近活动。你可以调整任意条件后重新搜索。" });
+            renderChat();
+        } else if (action === "adjust-conditions") {
+            const input = document.querySelector("#chatForm textarea[name=message]");
+            if (input) {
+                input.focus();
+                input.placeholder = "例如：不要求安静，或者换成周日下午";
+            }
         } else if (action === "quick-message") {
             const input = document.querySelector("#chatForm textarea[name=message], #homePromptForm textarea[name=message]");
             if (input) {
@@ -1312,10 +1688,14 @@
             resetPublicFilters();
         } else if (action === "select-trace") {
             selectTrace(target.dataset.traceId);
+        } else if (action === "promote-trace") {
+            promoteTraceCase(target.dataset.traceId);
         } else if (action === "open-trace") {
             state.traces.filters.sessionId = "";
             navigate("/admin/traces");
             selectTrace(target.dataset.traceId);
+        } else if (action === "run-regression") {
+            runRegression();
         }
     }
     function handleSubmit(event) {
@@ -1347,6 +1727,11 @@
             runEvaluation(form);
         }
     }
+    app.addEventListener("change", (event) => {
+        if (event.target.id === "chatCity") {
+            setChatCity(event.target.value, "");
+        }
+    });
     function initUserField() {
         userIdInput.value = CityApi.setUserId(CityApi.getUserId());
         userIdInput.addEventListener("change", () => {

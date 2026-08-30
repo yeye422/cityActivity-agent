@@ -16,21 +16,33 @@ import com.city.model.ChatRequest;
 import com.city.model.ChatResponse;
 import com.city.model.RecommendResult;
 import com.city.model.ResponseResult;
+import com.city.model.RelaxationOption;
+import com.city.model.RelaxationRequest;
 import com.city.enums.SessionPhase;
 import com.city.model.SessionState;
 import com.city.model.SlotBundle;
+import com.city.model.WeatherRecommendationContext;
+import com.city.model.TimeConstraint;
 import com.city.enums.SourceMode;
 import com.city.service.clarify.ClarifyAgentService;
 import com.city.service.activity.ActivityRankService;
 import com.city.service.activity.ActivitySearchService;
 import com.city.service.activity.ActivityService;
+import com.city.service.activity.RelaxationSearchService;
 import com.city.service.plan.ActivityPlanService;
 import com.city.service.plan.PlanResponseAgentService;
 import com.city.service.recommend.RecommendResponseAgentService;
 import com.city.service.session.SessionService;
 import com.city.service.session.SessionStateService;
 import com.city.service.slot.SlotMergeService;
+import com.city.service.slot.SlotOptionService;
+import com.city.service.slot.SlotMutationService;
+import com.city.model.SlotMutation;
+import com.city.model.ConstraintOperation;
+import com.city.enums.ConstraintOperationType;
 import com.city.service.trace.AgentTraceService;
+import com.city.service.weather.WeatherRecommendationService;
+import com.city.service.time.TimeExpressionParser;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -77,6 +89,8 @@ public class CityOrchestratorService {
      * 槽位合并服务，多轮对话中合并历史槽位与本轮槽位。
      */
     private final SlotMergeService slotMergeService;
+    private final SlotOptionService slotOptionService;
+    private final SlotMutationService slotMutationService;
 
     /**
      * 澄清 Agent 服务，槽位不足时生成追问文案。
@@ -112,6 +126,9 @@ public class CityOrchestratorService {
      * 餐食服务，用于 PERSONAL 模式空库前置检查。
      */
     private final ActivityService activityService;
+    private final RelaxationSearchService relaxationSearchService;
+    private final WeatherRecommendationService weatherRecommendationService;
+    private final TimeExpressionParser timeExpressionParser;
 
     /**
      * 健康风险守卫，拦截医疗承诺/极端节食等高风险表述。
@@ -137,6 +154,8 @@ public class CityOrchestratorService {
             IntentAgentService intentAgentService,
             IntentReviseService intentReviseService,
             SlotMergeService slotMergeService,
+            SlotOptionService slotOptionService,
+            SlotMutationService slotMutationService,
             ClarifyAgentService clarifyAgentService,
             ActivitySearchService activitySearchService,
             ActivityRankService activityRankService,
@@ -144,6 +163,9 @@ public class CityOrchestratorService {
             ActivityPlanService activityPlanService,
             PlanResponseAgentService planResponseAgentService,
             ActivityService activityService,
+            RelaxationSearchService relaxationSearchService,
+            WeatherRecommendationService weatherRecommendationService,
+            TimeExpressionParser timeExpressionParser,
             RiskGuardService riskGuardService,
             AgentTraceService agentTraceService
     ) {
@@ -152,6 +174,8 @@ public class CityOrchestratorService {
         this.intentAgentService = intentAgentService;                   // 注入意图识别服务
         this.intentReviseService = intentReviseService;                 // 注入意图矫正服务
         this.slotMergeService = slotMergeService;                       // 注入槽位合并服务
+        this.slotOptionService = slotOptionService;                     // 注入槽位字典服务
+        this.slotMutationService = slotMutationService;
         this.clarifyAgentService = clarifyAgentService;                 // 注入澄清 Agent 服务
         this.activitySearchService = activitySearchService;                     // 注入餐食检索服务
         this.activityRankService = activityRankService;                         // 注入餐食重排服务
@@ -159,6 +183,9 @@ public class CityOrchestratorService {
         this.activityPlanService = activityPlanService;                         // 注入多餐规划服务
         this.planResponseAgentService = planResponseAgentService;       // 注入规划应答 Agent 服务
         this.activityService = activityService;                                 // 注入餐食服务
+        this.relaxationSearchService = relaxationSearchService;                 // 注入相近活动回退检索
+        this.weatherRecommendationService = weatherRecommendationService;       // 注入天气排序上下文
+        this.timeExpressionParser = timeExpressionParser;
         this.riskGuardService = riskGuardService;             // 注入健康守卫
         this.agentTraceService = agentTraceService;                     // 注入链路追踪服务
     }
@@ -182,6 +209,7 @@ public class CityOrchestratorService {
         SessionState initialState = sessionStateService.loadOrCreate(request.sessionId(), userId, request.sourceMode());
 
         // 开启 Trace 上下文；try-with-resources 结束时 TraceScope#close 会将整轮事件写入 agent_traces 表
+        // 创建 TraceScope,进入 try. 执行整个请求,离开 try, 自动调用 close()
         try (AgentTraceService.TraceScope ignored = agentTraceService.openTrace(traceId, initialState.sessionId(), userId)) {
             try {
                 // 记录请求开始时间（纳秒），用于最后计算整轮耗时
@@ -208,12 +236,37 @@ public class CityOrchestratorService {
         }
     }
 
+    /** 用户确认后才执行放宽检索；原始会话槽位不会被修改。 */
+    public ChatResponse showRelaxedRecommendation(Long userId, RelaxationRequest request) {
+        if (request == null || request.sessionId() == null || request.sessionId().isBlank() || request.sourceMode() == null) {
+            throw new CityException("相近活动请求参数不完整");
+        }
+        String traceId = "trace_" + UUID.randomUUID().toString().replace("-", "");
+        SessionState state = sessionStateService.loadOrCreate(request.sessionId(), userId, request.sourceMode());
+        try (AgentTraceService.TraceScope ignored = agentTraceService.openTrace(traceId, state.sessionId(), userId)) {
+            RelaxationSearchService.SearchResult result = relaxationSearchService.find(
+                    state.sourceMode(), userId, state.slots(), List.of(), state.timeConstraint(), request.level());
+            agentTraceService.recordEvent("RELAXATION_SELECTED", "SEARCH", request,
+                    traceMap("level", result.level(), "relaxedSlots", result.relaxedSlots(), "querySlots", result.querySlots(), "candidateCount", result.ranked().size()));
+            if (result.ranked().isEmpty()) {
+                throw new CityException("该相近活动方案暂时没有结果，请调整条件");
+            }
+            return completeRecommendation(state.sessionId(), userId, "查看相近活动：" + result.label(), traceId, state, List.of(), result);
+        }
+    }
+
     /**
      * 在会话锁内执行完整状态机：记消息 → 前置校验 → 意图识别 → 路由分发。
      */
     private ChatResponse handleTurn(Long userId, ChatRequest request, String traceId, SessionState state) {
         // 从会话状态中取出 sessionId，后续落库和 Agent 调用都依赖它
         String sessionId = state.sessionId();
+        SlotBundle contextSlots = contextSlots(request.context());
+        // 页面上下文是用户的明确选择：城市/区域覆盖历史值，不能与历史城市做并集。
+        if (!contextSlots.isEmpty()) {
+            state = applyContextSlots(state, contextSlots);
+            agentTraceService.recordEvent("CONTEXT_SLOTS_APPLIED", "SLOT", request.context(), contextSlots);
+        }
         // 从会话状态中取出数据源模式（PERSONAL / PUBLIC）
         SourceMode sourceMode = state.sourceMode();
 
@@ -233,6 +286,9 @@ public class CityOrchestratorService {
             state = state.withSourceMode(SourceMode.PUBLIC);
         }
 
+        // 先保留原文解析结果作为 Agent 失败或未返回 time 操作时的兜底。
+        TimeConstraint textParsedTime = timeExpressionParser.parse(request.message());
+
         // 意图识别：调用 IntentAgent：传入 sessionId、userId、用户原文、历史槽位、最近 3 条对话摘要
         IntentResult rawIntent = intentAgentService.recognize(sessionId, userId, request.message(), state.slots(), sessionService.recentConversationTurns(sessionId, userId, 3));
         // Trace 事件：INTENT_RECOGNIZED | 阶段 INTENT | 输入=用户原文 | 输出=IntentResult（intent/slots/confidence）
@@ -240,6 +296,14 @@ public class CityOrchestratorService {
 
         // 调用 IntentReviseService，结合历史 phase/slots/lastRecommendedActivityIds 二次矫正意图
         IntentResult intent = intentReviseService.revise(state, rawIntent, request.message());
+        TimeConstraint parsedTime = resolveTimeConstraint(intent, request.message(), textParsedTime);
+        if (parsedTime.hasConstraint()) {
+            state = state.withTimeConstraint(parsedTime);
+            agentTraceService.recordEvent("TIME_CONSTRAINT_RESOLVED", "TIME", parsedTime.raw(), parsedTime);
+        } else if (hasTimeClearOperation(intent) || timeExpressionParser.clearRequested(request.message())) {
+            state = state.withTimeConstraint(TimeConstraint.empty());
+            agentTraceService.recordEvent("TIME_CONSTRAINT_CLEARED", "TIME", request.message(), TimeConstraint.empty());
+        }
         // Trace 事件：INTENT_REVISED | 阶段 INTENT | 输入=矫正前 rawIntent | 输出=矫正后 intent
         agentTraceService.recordEvent("INTENT_REVISED", "INTENT", rawIntent, intent);
 
@@ -262,22 +326,87 @@ public class CityOrchestratorService {
         };
     }
 
+    /** 优先使用 IntentAgent 提取的 time 操作，原文解析仅作兼容兜底。 */
+    private TimeConstraint resolveTimeConstraint(IntentResult intent, String userInput, TimeConstraint textParsedTime) {
+        if (intent != null && intent.operations() != null) {
+            for (ConstraintOperation operation : intent.operations()) {
+                if (operation == null || !"time".equals(operation.field()) || operation.op() == null) continue;
+                if (operation.op() == ConstraintOperationType.CLEAR) return TimeConstraint.empty();
+                if (operation.op() == ConstraintOperationType.SET) {
+                    String raw = operation.raw() == null || operation.raw().isBlank() ? userInput : operation.raw();
+                    TimeConstraint resolved = timeExpressionParser.parse(raw);
+                    return resolved.hasConstraint() ? resolved : textParsedTime;
+                }
+            }
+        }
+        return textParsedTime;
+    }
+
+    private boolean hasTimeClearOperation(IntentResult intent) {
+        return intent != null && intent.operations() != null
+                && intent.operations().stream().anyMatch(operation -> operation != null
+                && "time".equals(operation.field())
+                && operation.op() == ConstraintOperationType.CLEAR);
+    }
+
+    /** 页面城市选择优先写入会话槽位，避免依赖模型从短回复中猜测城市。 */
+    private SlotBundle contextSlots(Map<String, Object> context) {
+        if (context == null || context.isEmpty()) {
+            return SlotBundle.empty();
+        }
+        String city = contextValue(context, "city");
+        String location = contextValue(context, "location");
+        return slotOptionService.sanitize(new SlotBundle(
+                city.isBlank() ? List.of() : List.of(city),
+                location.isBlank() ? List.of() : List.of(location),
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of()
+        ));
+    }
+
+    /**
+     * 应用前端显式选择的上下文槽位。
+     * 城市和位置属于页面级单选/定位条件，传入时覆盖历史值；未传入的维度保持不变。
+     */
+    private SessionState applyContextSlots(SessionState state, SlotBundle contextSlots) {
+        SlotBundle historical = state.slots() == null ? SlotBundle.empty() : state.slots();
+        SlotBundle context = contextSlots == null ? SlotBundle.empty() : contextSlots;
+        SlotBundle applied = new SlotBundle(
+                context.city().isEmpty() ? historical.city() : context.city(),
+                context.location().isEmpty() ? historical.location() : context.location(),
+                historical.mood(),
+                historical.scene(),
+                historical.budget(),
+                historical.activityType(),
+                historical.style(),
+                historical.duration()
+        );
+        return state.withSlots(applied);
+    }
+
+    private String contextValue(Map<String, Object> context, String key) {
+        Object value = context.get(key);
+        return value == null ? "" : String.valueOf(value).trim();
+    }
+
     /**
      * 推荐主链路：合并槽位 → ClarifyAgent 判追问 → 槽位足够则进入 completeRecommendation。
      */
     private ChatResponse handleRecommendation(String sessionId, Long userId, String userInput, String traceId, SessionState state, IntentResult intent) {
         // 将历史 slots 与 IntentAgent 本轮识别的 slots 合并（本轮非空覆盖，本轮空保留历史）
         SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
+        SlotMutation mutation = slotMutationService.apply(intent.operations(), userInput, mergedSlots, state.excludedSlots());
+        mergedSlots = mutation.included();
 
         // Trace 事件：SLOTS_MERGED | 阶段 SLOT | 输入=stateSlots+intentSlots | 输出=mergedSlots
         agentTraceService.recordEvent("SLOTS_MERGED", "SLOT", Map.of("stateSlots", state.slots(), "intentSlots", intent.slots()), mergedSlots);
 
         // 基于合并槽位构建工作态：意图固定为 MEAL_RECOMMENDATION
-        SessionState workingState = state.withIntent(Intent.MEAL_RECOMMENDATION).withSlots(mergedSlots);
+        SessionState workingState = state.withIntent(Intent.MEAL_RECOMMENDATION).withSlots(mergedSlots)
+                .withExcludedSlots(mutation.excluded());
 
         // 【重要】不能完全依靠agent的意图识别,在进入推荐之前,规则层面上也需要判断是否有足够的信息
         // 调用 ClarifyAgent：规则层先判缺失槽位，不足则 LLM 生成追问文案
-        ClarifyResult clarify = clarifyAgentService.decide(sessionId, userInput, mergedSlots);
+        ClarifyResult clarify = clarifyAgentService.decide(sessionId, userInput, mergedSlots, workingState.timeConstraint());
         // Trace 事件：CLARIFY_DECISION | 阶段 CLARIFY | 输入=mergedSlots | 输出=ClarifyResult（ASK/READY）
         agentTraceService.recordEvent("CLARIFY_DECISION", "CLARIFY", mergedSlots, clarify);
 
@@ -300,7 +429,8 @@ public class CityOrchestratorService {
         sessionService.appendMessage(sessionId, "assistant", clarify.questionToAsk(), Intent.CLARIFY_NEEDED.name(), traceId);
 
         // 构造澄清型 ChatResponse，携带 missingSlots 供前端展示
-        ChatResponse response = ChatResponse.clarify(sessionId, traceId, clarify.questionToAsk(), clarify.missingSlots());
+        ChatResponse response = withConversationContext(
+                ChatResponse.clarify(sessionId, traceId, clarify.questionToAsk(), clarify.missingSlots()), clarifyState);
 
         // Trace 事件：RESPONSE_READY | 阶段 CLARIFY | 输入=clarify | 输出=ChatResponse
         agentTraceService.recordEvent("RESPONSE_READY", "CLARIFY", clarify, response);
@@ -315,34 +445,52 @@ public class CityOrchestratorService {
     private ChatResponse handleAdjust(String sessionId, Long userId, String userInput, String traceId, SessionState state, IntentResult intent) {
         // 合并历史槽位与本轮 IntentAgent 识别的槽位
         SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
-
-        // 从会话状态取出本会话已推荐过的 activityId 列表，供换一批时累积排除
-        List<Long> excludeActivityIds = state.lastRecommendedActivityIds() == null ? List.of() : state.lastRecommendedActivityIds();
-
-        // Trace 事件：ADJUST_CONTEXT_RESOLVED | 阶段 ADJUST | 输入=intent | 输出=mergedSlots+excludeActivityIds
-        agentTraceService.recordEvent("ADJUST_CONTEXT_RESOLVED", "ADJUST", intent, traceMap("mergedSlots", mergedSlots, "excludeActivityIds", excludeActivityIds));
+        SlotMutation mutation = slotMutationService.apply(intent.operations(), userInput, mergedSlots, state.excludedSlots());
+        mergedSlots = mutation.included();
 
         // 构建调整态工作会话：意图=MEAL_ADJUST，phase=RECOMMEND
         SessionState workingState = state.withIntent(Intent.MEAL_ADJUST)
                 .withSlots(mergedSlots)
+                .withExcludedSlots(mutation.excluded())
                 .withPhase(SessionPhase.RECOMMEND);
+
+        // 只有检索约束完全相同的“换一批”才排除上一批；日期、城市、预算、类型或排除条件变化都开启新结果集。
+        String currentQueryKey = recommendationQueryKey(workingState);
+        boolean queryChanged = !currentQueryKey.equals(state.recommendationQueryKey());
+        List<Long> excludeActivityIds = queryChanged || state.lastRecommendedActivityIds() == null
+                ? List.of()
+                : state.lastRecommendedActivityIds();
+        agentTraceService.recordEvent("ADJUST_CONTEXT_RESOLVED", "ADJUST", intent,
+                traceMap("mergedSlots", mergedSlots, "excludeActivityIds", excludeActivityIds, "queryChanged", queryChanged));
 
         // 进入推荐流水线，仅排除已推荐餐食，实现换一批
         return completeRecommendation(sessionId, userId, userInput, traceId, workingState, excludeActivityIds);
     }
 
     /**
-     * 多餐规划链路：合并槽位 → 解析餐次 → 按餐次拆分检索重排 → 规划应答包装。
+     * 活动规划链路：合并槽位 → 先做完整性澄清 → 解析时段 → 按时段拆分检索重排 → 规划应答包装。
      */
     private ChatResponse handlePlan(String sessionId, Long userId, String userInput, String traceId, SessionState state, IntentResult intent) {
-        // 合并历史槽位与本轮槽位（共享活动风格/健康诉求等；activityTime 会在拆分时按餐次覆盖）
+        // 合并历史槽位与本轮槽位。规划请求也必须先复用普通推荐的最小信息完整性规则，
+        // 避免“帮我安排一天行程”在缺少城市等关键约束时直接进入检索。
         SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
-        List<String> planActivityTimes = activityPlanService.resolveActivityTimes(mergedSlots);
-        // 规划态 slots 显式写入目标餐次，便于后续轮次与 Trace 观察
+        SessionState planContextState = state.withIntent(Intent.ACTIVITY_PLAN).withSlots(mergedSlots);
+
+        ClarifyResult clarify = clarifyAgentService.decide(
+                sessionId, userInput, mergedSlots, planContextState.timeConstraint());
+        agentTraceService.recordEvent("PLAN_CLARIFY_DECISION", "CLARIFY", mergedSlots, clarify);
+
+        if (clarify.action() == ClarifyAction.ASK) {
+            // 保留 currentIntent=ACTIVITY_PLAN。下一轮用户只补“西安/200以内”等条件时，
+            // IntentReviseService 会根据 CLARIFY + ACTIVITY_PLAN 恢复到规划链路。
+            return completeAsk(sessionId, traceId, planContextState, clarify);
+        }
+
+        List<String> planActivityTimes = activityPlanService.resolveActivityTimes(mergedSlots, planContextState.timeConstraint());
+        // 规划态 slots 显式写入目标时段，便于后续轮次与 Trace 观察
         SlotBundle planSlots = new SlotBundle(
                 mergedSlots.city(),
                 mergedSlots.location(),
-                planActivityTimes,
                 mergedSlots.mood(),
                 mergedSlots.scene(),
                 mergedSlots.budget(),
@@ -350,7 +498,7 @@ public class CityOrchestratorService {
                 mergedSlots.style(),
                 mergedSlots.duration()
         );
-        // Trace 事件：PLAN_CONTEXT_RESOLVED | 阶段 PLAN | 输入=intent | 输出=planSlots+activityTimes
+        // Trace 事件：PLAN_CONTEXT_RESOLVED | 阶段 PLAN | 输入=intent | 输出=planSlots+periods
         agentTraceService.recordEvent(
                 "PLAN_CONTEXT_RESOLVED",
                 "PLAN",
@@ -358,7 +506,7 @@ public class CityOrchestratorService {
                 traceMap("mergedSlots", mergedSlots, "planActivityTimes", planActivityTimes, "planSlots", planSlots)
         );
 
-        SessionState workingState = state.withIntent(Intent.ACTIVITY_PLAN).withSlots(planSlots).withPhase(SessionPhase.PLAN);
+        SessionState workingState = planContextState.withSlots(planSlots).withPhase(SessionPhase.PLAN);
         return completePlan(sessionId, userId, userInput, traceId, workingState, planActivityTimes);
     }
 
@@ -372,12 +520,12 @@ public class CityOrchestratorService {
                                       SessionState state,
                                       List<String> planActivityTimes) {
         List<ActivityPlanService.PlannedActivity> plannedMeals = activityPlanService.planActivities(
-                state.sourceMode(), userId, state.slots(), planActivityTimes);
+                state.sourceMode(), userId, state.slots(), planActivityTimes, state.timeConstraint());
 
         List<Map<String, Object>> planTrace = new ArrayList<>();
         for (ActivityPlanService.PlannedActivity planned : plannedMeals) {
             planTrace.add(traceMap(
-                    "activityTime", planned.activityTime(),
+                    "period", planned.period(),
                     "matched", planned.matched(),
                     "activityId", planned.matched() ? planned.activity().id() : null,
                     "mealName", planned.matched() ? planned.activity().name() : null
@@ -429,14 +577,25 @@ public class CityOrchestratorService {
         }
 
         List<Long> lastIds = recommend.recommendations().stream().map(option -> option.itemId()).toList();
-        SessionState savedState = state.appendLastRecommendations(lastIds);
+        String queryKey = recommendationQueryKey(state);
+        SessionState savedState = queryKey.equals(state.recommendationQueryKey())
+                ? state.appendLastRecommendations(lastIds)
+                : state.withLastRecommendations(lastIds);
+        savedState = savedState.withRecommendationQueryKey(queryKey);
         sessionStateService.save(savedState);
         sessionService.appendMessage(sessionId, "assistant", response.speechText(), Intent.ACTIVITY_PLAN.name(), traceId);
 
-        ChatResponse chatResponse = ChatResponse.answer(
-                sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction());
+        ChatResponse chatResponse = withConversationContext(ChatResponse.answer(
+                sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction()), savedState);
         agentTraceService.recordEvent("RESPONSE_READY", "RESPONSE", savedState, chatResponse);
         return chatResponse;
+    }
+
+    /** 用持久化的规范化约束判断本轮是否仍是同一个推荐结果集。 */
+    private String recommendationQueryKey(SessionState state) {
+        if (state == null) return "";
+        return String.valueOf(state.sourceMode()) + "|" + state.slots() + "|" + state.excludedSlots()
+                + "|" + state.timeConstraint();
     }
 
     /**
@@ -463,13 +622,26 @@ public class CityOrchestratorService {
      * 完整推荐流水线：检索 → 重排 → LLM 生成理由与口语回复 → Guard 审查 → 持久化并返回。
      */
     private ChatResponse completeRecommendation(String sessionId, Long userId, String userInput, String traceId, SessionState state, List<Long> excludeActivityIds) {
+        return completeRecommendation(sessionId, userId, userInput, traceId, state, excludeActivityIds, null);
+    }
+
+    private ChatResponse completeRecommendation(String sessionId, Long userId, String userInput, String traceId,
+                                                 SessionState state, List<Long> excludeActivityIds,
+                                                 RelaxationSearchService.SearchResult selectedRelaxation) {
+        // 只对“今天/明天/后天”的请求使用短期预报，周末等无明确日期的需求不猜测天气。
+        WeatherRecommendationContext weather = weatherRecommendationService.resolve(userInput, state.slots());
+        agentTraceService.recordEvent("WEATHER_CONTEXT_RESOLVED", "RANK", state.slots(), weather);
         // 构造检索请求：sourceMode + userId + 当前 slots + excludeActivityIds（检索层暂不使用 exclude，在 Rank 层过滤）
-        List<ActivityItem> candidates = activitySearchService.search(new ActivitySearchRequest(state.sourceMode(), userId, state.slots(), excludeActivityIds));
+        List<ActivityItem> candidates = selectedRelaxation == null
+                ? activitySearchService.search(new ActivitySearchRequest(state.sourceMode(), userId, state.slots(), excludeActivityIds, state.timeConstraint(), state.excludedSlots()))
+                : selectedRelaxation.ranked();
         // Trace 事件：ACTIVITY_SEARCHED | 阶段 SEARCH | 输入=slots | 输出=候选数量+candidates 列表
         agentTraceService.recordEvent("ACTIVITY_SEARCHED", "SEARCH", state.slots(), Map.of("candidateCount", candidates.size(), "candidates", candidates));
 
         // 构造排序请求：候选列表 + slots + excludeActivityIds，返回 top10
-        List<ActivityItem> ranked = activityRankService.rank(new ActivityRankRequest(candidates, state.slots(), excludeActivityIds));
+        List<ActivityItem> ranked = selectedRelaxation == null
+                ? activityRankService.rank(new ActivityRankRequest(candidates, state.slots(), excludeActivityIds), weather)
+                : activityRankService.rank(new ActivityRankRequest(candidates, state.slots(), excludeActivityIds), weather);
         // Trace 事件：ACTIVITY_RANKED | 阶段 RANK | 输入=excludeActivityIds | 输出=重排后数量+ranked 列表
         agentTraceService.recordEvent("ACTIVITY_RANKED", "RANK", Map.of("excludeActivityIds", excludeActivityIds), Map.of("rankedCount", ranked.size(), "ranked", ranked));
 
@@ -483,13 +655,13 @@ public class CityOrchestratorService {
 
                 // 用公共库重新搜索
                 List<ActivityItem> publicCandidates = activitySearchService.search(
-                    new ActivitySearchRequest(SourceMode.PUBLIC, userId, state.slots(), excludeActivityIds));
+                    new ActivitySearchRequest(SourceMode.PUBLIC, userId, state.slots(), excludeActivityIds, state.timeConstraint(), state.excludedSlots()));
                 agentTraceService.recordEvent("ACTIVITY_SEARCHED_PUBLIC_FALLBACK", "SEARCH", state.slots(),
                     Map.of("candidateCount", publicCandidates.size(), "candidates", publicCandidates));
 
                 // 重新排序
                 List<ActivityItem> publicRanked = activityRankService.rank(
-                    new ActivityRankRequest(publicCandidates, state.slots(), excludeActivityIds));
+                    new ActivityRankRequest(publicCandidates, state.slots(), excludeActivityIds), weather);
                 agentTraceService.recordEvent("ACTIVITY_RANKED_PUBLIC_FALLBACK", "RANK",
                     Map.of("excludeActivityIds", excludeActivityIds),
                     Map.of("rankedCount", publicRanked.size(), "ranked", publicRanked));
@@ -510,8 +682,15 @@ public class CityOrchestratorService {
                 }
             } else {
                 // PUBLIC 模式没结果
+                List<RelaxationOption> options = relaxationSearchService.options(
+                        state.sourceMode(), userId, state.slots(), excludeActivityIds, state.timeConstraint());
+                if (!options.isEmpty()) {
+                    String message = "没有完全匹配的活动。你可以选择查看放宽部分偏好后的相近活动，或保持当前严格条件。";
+                    agentTraceService.recordEvent("RELAXATION_OPTIONS_READY", "RECOMMEND", state.slots(), options);
+                    return completeRelaxationChoice(sessionId, traceId, state, message, options);
+                }
                 ResponseResult empty = ResponseResult.textOnly(
-                    "暂时没有找到很匹配的活动，你可以补充时间段、活动类型或氛围偏好试试。");
+                    "当前城市暂时没有符合核心条件的活动。你可以切换城市，或调整时间和活动类型后再试。");
                 agentTraceService.recordEvent("NO_ACTIVITY_MATCHED", "RECOMMEND", state, empty);
                 return completeTextOnly(sessionId, traceId, state, state.currentIntent(), empty);
             }
@@ -519,7 +698,7 @@ public class CityOrchestratorService {
 
         // 调用 RecommendResponseAgent：top3 候选 + 用户原文 + slots → 推荐理由 + speechText + 卡片
         RecommendResponseAgentService.Result merged = recommendResponseAgentService.recommendAndRespond(
-                sessionId, userInput, state.sourceMode(), state.slots(), ranked);
+                sessionId, userInput, state.sourceMode(), state.slots(), ranked, weather);
 
         // 从结果中取出 RecommendResult（含 recommendations 列表和 needDisclaimer 标记）
         RecommendResult recommend = merged.recommend();
@@ -529,6 +708,15 @@ public class CityOrchestratorService {
 
         // 从结果中取出 ResponseResult（含 speechText、displayBlocks、nextAction）
         ResponseResult response = merged.response();
+        if (weather.active()) {
+            response = new ResponseResult(weather.summary() + "\n" + response.speechText(),
+                    response.displayBlocks(), response.nextAction());
+        }
+        if (selectedRelaxation != null) {
+            response = new ResponseResult(
+                    "没有完全匹配的活动，已" + selectedRelaxation.label() + "。以下结果按原始需求的接近程度排序。\n" + response.speechText(),
+                    response.displayBlocks(), response.nextAction());
+        }
         // Trace 事件：RESPONSE_AGENT_RESULT | 阶段 RESPONSE | 输入=recommend | 输出=ResponseResult
         agentTraceService.recordEvent("RESPONSE_AGENT_RESULT", "RESPONSE", recommend, response);
 
@@ -550,8 +738,12 @@ public class CityOrchestratorService {
 
         // 从推荐结果中提取本轮推荐的 activityId 列表，追加到 lastRecommendedActivityIds 供下轮调整累积排除
         List<Long> lastIds = recommend.recommendations().stream().map(option -> option.itemId()).toList();
-        // 基于当前 state 累积更新 lastRecommendedActivityIds 字段
-        SessionState savedState = state.appendLastRecommendations(lastIds);
+        String queryKey = recommendationQueryKey(state);
+        // 约束已变化时以本次结果重置排除历史；只有相同约束的“换一批”才累积排除。
+        SessionState savedState = queryKey.equals(state.recommendationQueryKey())
+                ? state.appendLastRecommendations(lastIds)
+                : state.withLastRecommendations(lastIds);
+        savedState = savedState.withRecommendationQueryKey(queryKey);
 
         // 将更新后的会话状态 UPDATE 到 diet_sessions 表
         sessionStateService.save(savedState);
@@ -560,13 +752,33 @@ public class CityOrchestratorService {
         sessionService.appendMessage(sessionId, "assistant", response.speechText(), state.currentIntent().name(), traceId);
 
         // 构造最终 ChatResponse：含 speechText、餐食卡片 displayBlocks、nextAction=WAIT_USER
-        ChatResponse chatResponse = ChatResponse.answer(sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction());
+        ChatResponse chatResponse = withConversationContext(
+                ChatResponse.answer(sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction()), savedState);
 
         // Trace 事件：RESPONSE_READY | 阶段 RESPONSE | 输入=savedState | 输出=ChatResponse
         agentTraceService.recordEvent("RESPONSE_READY", "RESPONSE", savedState, chatResponse);
 
         // 返回带推荐卡片的完整响应
         return chatResponse;
+    }
+
+    private ChatResponse completeRelaxationChoice(String sessionId, String traceId, SessionState state,
+                                                   String message, List<RelaxationOption> options) {
+        SessionState savedState = state.withIntent(Intent.MEAL_RECOMMENDATION);
+        sessionStateService.save(savedState);
+        sessionService.appendMessage(sessionId, "assistant", message, Intent.MEAL_RECOMMENDATION.name(), traceId);
+        ChatResponse response = withConversationContext(ChatResponse.relaxation(sessionId, traceId, message, options), savedState);
+        agentTraceService.recordEvent("RESPONSE_READY", "RESPONSE", savedState, response);
+        return response;
+    }
+
+    /** 将最终会话约束随响应返回，使前端不必猜测系统当前记住了什么。 */
+    private ChatResponse withConversationContext(ChatResponse response, SessionState state) {
+        if (response == null || state == null) return response;
+        response.appliedSlots(state.slots());
+        response.excludedSlots(state.excludedSlots());
+        response.timeConstraint(state.timeConstraint());
+        return response;
     }
 
     /**

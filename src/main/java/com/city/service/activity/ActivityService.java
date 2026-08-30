@@ -6,6 +6,7 @@ import com.city.model.ActivityItem;
 import com.city.model.ActivityItemRow;
 import com.city.model.ActivityRequest;
 import com.city.model.SlotBundle;
+import com.city.model.TimeConstraint;
 import com.city.enums.SourceMode;
 import com.city.service.slot.SlotOptionService;
 import com.city.util.JsonService;
@@ -81,19 +82,38 @@ public class ActivityService {
      * 由 ActivitySearchService#search 调用；MySQL JSON_OVERLAPS 召回后 Java 侧 overlap 打分。
      */
     public List<ActivityItem> search(SourceMode sourceMode, Long userId, SlotBundle slots) {
+        return search(sourceMode, userId, slots, TimeConstraint.empty());
+    }
+
+    public List<ActivityItem> search(SourceMode sourceMode, Long userId, SlotBundle slots, TimeConstraint timeConstraint) {
+        return search(sourceMode, userId, slots, timeConstraint, SlotBundle.empty());
+    }
+
+    public List<ActivityItem> search(SourceMode sourceMode, Long userId, SlotBundle slots, TimeConstraint timeConstraint, SlotBundle excludedSlots) {
         // MyBatis 执行 JSON_OVERLAPS 检索，9 维槽位各传 JSON 数组，最多拉 SEARCH_LIMIT=50 条
         List<ActivityItemRow> rows = activityMapper.search(
                 sourceMode,                                      // PERSONAL 或 PUBLIC，决定查哪张数据
                 userId,                                          // PERSONAL 时过滤 owner_user_id
                 jsonService.toJsonArray(slots.city()),           // 城市标签 JSON 数组
                 jsonService.toJsonArray(slots.location()),       // 位置/区域标签 JSON 数组
-                jsonService.toJsonArray(slots.activityTime()),       // 活动时间标签 JSON 数组
                 jsonService.toJsonArray(slots.mood()),           // 心情标签 JSON 数组
                 jsonService.toJsonArray(slots.scene()),          // 场景标签 JSON 数组
                 jsonService.toJsonArray(slots.budget()),     // 预算标签 JSON 数组
                 jsonService.toJsonArray(slots.activityType()),        // 菜系 JSON 数组
                 jsonService.toJsonArray(slots.style()),          // 活动风格 JSON 数组
                 jsonService.toJsonArray(slots.duration()),    // 活动时长 JSON 数组
+                timeConstraint != null && timeConstraint.hasDate() ? timeConstraint.dateStart() : null,
+                timeConstraint != null && timeConstraint.hasDate() ? timeConstraint.dateEnd() : null,
+                timeConstraint != null && timeConstraint.hasTime() ? timeConstraint.startTime() : null,
+                timeConstraint != null && timeConstraint.hasTime() ? timeConstraint.endTime() : null,
+                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.city()),
+                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.location()),
+                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.mood()),
+                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.scene()),
+                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.budget()),
+                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.activityType()),
+                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.style()),
+                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.duration()),
                 SEARCH_LIMIT                                     // DB 层最多返回 50 行
         );
         // Row → ActivityItem
@@ -105,8 +125,17 @@ public class ActivityService {
             throw new CityException("活动名称不能为空");
         }
         SlotBundle slots = request.toSlots();
-        if (slots.activityTime().isEmpty()) {
-            throw new CityException("活动时间至少选择一个标签");
+        if ((request.validFrom() == null) != (request.validTo() == null)) {
+            throw new CityException("有效日期请同时填写开始和结束日期");
+        }
+        if (request.validFrom() != null && request.validFrom().isAfter(request.validTo())) {
+            throw new CityException("有效结束日期不能早于开始日期");
+        }
+        if ((request.validStartTime() == null) != (request.validEndTime() == null)) {
+            throw new CityException("每日有效时段请同时填写开始和结束时间");
+        }
+        if (request.validStartTime() != null && !request.validStartTime().isBefore(request.validEndTime())) {
+            throw new CityException("每日结束时间必须晚于开始时间");
         }
         slotOptionService.validate(slots);
     }
@@ -120,13 +149,16 @@ public class ActivityService {
         row.setName(request.name().trim());
         row.setCity(jsonService.toJsonArray(slots.city()));
         row.setLocation(jsonService.toJsonArray(slots.location()));
-        row.setActivityTime(jsonService.toJsonArray(slots.activityTime()));
         row.setMood(jsonService.toJsonArray(slots.mood()));
         row.setScene(jsonService.toJsonArray(slots.scene()));
         row.setBudget(jsonService.toJsonArray(slots.budget()));
         row.setActivityType(jsonService.toJsonArray(slots.activityType()));
         row.setStyle(jsonService.toJsonArray(slots.style()));
         row.setDuration(jsonService.toJsonArray(slots.duration()));
+        row.setValidFrom(request.validFrom());
+        row.setValidTo(request.validTo());
+        row.setValidStartTime(request.validStartTime());
+        row.setValidEndTime(request.validEndTime());
         return row;
     }
 
@@ -137,7 +169,6 @@ public class ActivityService {
         SlotBundle slots = new SlotBundle(
                 jsonService.fromJsonArray(row.getCity()),
                 jsonService.fromJsonArray(row.getLocation()),
-                jsonService.fromJsonArray(row.getActivityTime()),
                 jsonService.fromJsonArray(row.getMood()),
                 jsonService.fromJsonArray(row.getScene()),
                 jsonService.fromJsonArray(row.getBudget()),
@@ -151,6 +182,10 @@ public class ActivityService {
                 row.getOwnerUserId(),
                 row.getName(),
                 slots,
+                row.getValidFrom(),
+                row.getValidTo(),
+                row.getValidStartTime(),
+                row.getValidEndTime(),
                 0
         );
     }

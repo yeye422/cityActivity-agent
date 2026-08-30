@@ -11,6 +11,7 @@ import java.util.List;
 public interface FeedbackMapper {
     int insert(
             @Param("userId") Long userId,
+            @Param("traceId") String traceId,
             @Param("sessionId") String sessionId,
             @Param("itemId") Long itemId,
             @Param("action") String action,

@@ -7,6 +7,7 @@
     <resultMap id="FeedbackRowMap" type="com.city.model.FeedbackRow">
         <id property="id" column="id"/>
         <result property="userId" column="user_id"/>
+        <result property="traceId" column="trace_id"/>
         <result property="sessionId" column="session_id"/>
         <result property="itemId" column="item_id"/>
         <result property="action" column="action"/>
@@ -17,15 +18,16 @@
 
     <insert id="insert">
         INSERT INTO city_feedback (
-        user_id, session_id, item_id, action, rating, reason, created_at
+        user_id, trace_id, session_id, item_id, action, rating, reason, created_at
         ) VALUES (
-        #{userId}, #{sessionId}, #{itemId}, #{action}, #{rating}, #{reason}, NOW()
+        #{userId}, #{traceId}, #{sessionId}, #{itemId}, #{action}, #{rating}, #{reason}, NOW()
         )
     </insert>
 
     <select id="findBySessions" resultMap="FeedbackRowMap">
         SELECT id,
         user_id,
+        trace_id,
         session_id,
         item_id,
         action,
