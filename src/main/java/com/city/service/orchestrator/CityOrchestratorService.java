@@ -45,8 +45,10 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -256,7 +258,15 @@ public class CityOrchestratorService {
                 historical.mood(), historical.scene(), historical.budget(), historical.activityType(),
                 historical.style(), historical.duration()
         );
-        return state.withSlots(applied);
+        Set<String> unconstrained = new LinkedHashSet<>(
+                state.unconstrainedSlots() == null ? Set.of() : state.unconstrainedSlots());
+        if (!context.city().isEmpty()) {
+            unconstrained.remove("city");
+        }
+        if (!context.location().isEmpty()) {
+            unconstrained.remove("location");
+        }
+        return state.withSlots(applied).withUnconstrainedSlots(unconstrained);
     }
 
     private String contextValue(Map<String, Object> context, String key) {
@@ -266,18 +276,26 @@ public class CityOrchestratorService {
 
     private ChatResponse handleRecommendation(String sessionId, Long userId, String userInput, String traceId, SessionState state, IntentResult intent) {
         SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
-        SlotMutation mutation = slotMutationService.apply(intent.operations(), userInput, mergedSlots, state.excludedSlots());
+        SlotMutation mutation = slotMutationService.apply(
+                intent.operations(), userInput, mergedSlots, state.excludedSlots(), state.unconstrainedSlots());
         mergedSlots = mutation.included();
-        agentTraceService.recordEvent("SLOTS_MERGED", "SLOT", Map.of("stateSlots", state.slots(), "intentSlots", intent.slots()), mergedSlots);
+        agentTraceService.recordEvent("SLOTS_MERGED", "SLOT",
+                traceMap("stateSlots", state.slots(), "intentSlots", intent.slots()),
+                traceMap("mergedSlots", mergedSlots, "unconstrainedSlots", mutation.unconstrained()));
 
-        SessionState workingState = state.withIntent(Intent.MEAL_RECOMMENDATION).withSlots(mergedSlots)
-                .withExcludedSlots(mutation.excluded());
-        ClarifyResult clarify = clarifyAgentService.decide(sessionId, userInput, mergedSlots, workingState.timeConstraint());
-        agentTraceService.recordEvent("CLARIFY_DECISION", "CLARIFY", mergedSlots, clarify);
+        SessionState workingState = state.withIntent(Intent.MEAL_RECOMMENDATION)
+                .withSlots(mergedSlots)
+                .withExcludedSlots(mutation.excluded())
+                .withUnconstrainedSlots(mutation.unconstrained());
+        ClarifyResult clarify = clarifyAgentService.decide(
+                sessionId, userInput, mergedSlots, workingState.timeConstraint(), workingState.unconstrainedSlots());
+        agentTraceService.recordEvent("CLARIFY_DECISION", "CLARIFY",
+                traceMap("slots", mergedSlots, "unconstrainedSlots", workingState.unconstrainedSlots()), clarify);
         if (clarify.action() == ClarifyAction.ASK) {
             return completeAsk(sessionId, traceId, workingState, clarify);
         }
-        return completeRecommendation(sessionId, userId, userInput, traceId, workingState.withPhase(SessionPhase.RECOMMEND), List.of());
+        return completeRecommendation(sessionId, userId, userInput, traceId,
+                workingState.withPhase(SessionPhase.RECOMMEND), List.of());
     }
 
     private ChatResponse completeAsk(String sessionId, String traceId, SessionState workingState, ClarifyResult clarify) {
@@ -292,11 +310,13 @@ public class CityOrchestratorService {
 
     private ChatResponse handleAdjust(String sessionId, Long userId, String userInput, String traceId, SessionState state, IntentResult intent) {
         SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
-        SlotMutation mutation = slotMutationService.apply(intent.operations(), userInput, mergedSlots, state.excludedSlots());
+        SlotMutation mutation = slotMutationService.apply(
+                intent.operations(), userInput, mergedSlots, state.excludedSlots(), state.unconstrainedSlots());
         mergedSlots = mutation.included();
         SessionState workingState = state.withIntent(Intent.MEAL_ADJUST)
                 .withSlots(mergedSlots)
                 .withExcludedSlots(mutation.excluded())
+                .withUnconstrainedSlots(mutation.unconstrained())
                 .withPhase(SessionPhase.RECOMMEND);
 
         String currentQueryKey = recommendationQueryKey(workingState);
@@ -305,16 +325,26 @@ public class CityOrchestratorService {
                 ? List.of()
                 : state.lastRecommendedActivityIds();
         agentTraceService.recordEvent("ADJUST_CONTEXT_RESOLVED", "ADJUST", intent,
-                traceMap("mergedSlots", mergedSlots, "excludeActivityIds", excludeActivityIds, "queryChanged", queryChanged));
+                traceMap("mergedSlots", mergedSlots,
+                        "unconstrainedSlots", workingState.unconstrainedSlots(),
+                        "excludeActivityIds", excludeActivityIds,
+                        "queryChanged", queryChanged));
         return completeRecommendation(sessionId, userId, userInput, traceId, workingState, excludeActivityIds);
     }
 
     private ChatResponse handlePlan(String sessionId, Long userId, String userInput, String traceId, SessionState state, IntentResult intent) {
         SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
-        SessionState planContextState = state.withIntent(Intent.ACTIVITY_PLAN).withSlots(mergedSlots);
+        SlotMutation mutation = slotMutationService.apply(
+                intent.operations(), userInput, mergedSlots, state.excludedSlots(), state.unconstrainedSlots());
+        mergedSlots = mutation.included();
+        SessionState planContextState = state.withIntent(Intent.ACTIVITY_PLAN)
+                .withSlots(mergedSlots)
+                .withExcludedSlots(mutation.excluded())
+                .withUnconstrainedSlots(mutation.unconstrained());
         ClarifyResult clarify = clarifyAgentService.decide(
-                sessionId, userInput, mergedSlots, planContextState.timeConstraint());
-        agentTraceService.recordEvent("PLAN_CLARIFY_DECISION", "CLARIFY", mergedSlots, clarify);
+                sessionId, userInput, mergedSlots, planContextState.timeConstraint(), planContextState.unconstrainedSlots());
+        agentTraceService.recordEvent("PLAN_CLARIFY_DECISION", "CLARIFY",
+                traceMap("slots", mergedSlots, "unconstrainedSlots", planContextState.unconstrainedSlots()), clarify);
         if (clarify.action() == ClarifyAction.ASK) {
             return completeAsk(sessionId, traceId, planContextState, clarify);
         }
@@ -326,7 +356,10 @@ public class CityOrchestratorService {
         );
         agentTraceService.recordEvent(
                 "PLAN_CONTEXT_RESOLVED", "PLAN", intent,
-                traceMap("mergedSlots", mergedSlots, "planActivityTimes", planActivityTimes, "planSlots", planSlots)
+                traceMap("mergedSlots", mergedSlots,
+                        "unconstrainedSlots", planContextState.unconstrainedSlots(),
+                        "planActivityTimes", planActivityTimes,
+                        "planSlots", planSlots)
         );
         SessionState workingState = planContextState.withSlots(planSlots).withPhase(SessionPhase.PLAN);
         return completePlan(sessionId, userId, userInput, traceId, workingState, planActivityTimes);
@@ -403,7 +436,7 @@ public class CityOrchestratorService {
     private String recommendationQueryKey(SessionState state) {
         if (state == null) return "";
         return String.valueOf(state.sourceMode()) + "|" + state.slots() + "|" + state.excludedSlots()
-                + "|" + state.timeConstraint();
+                + "|" + state.unconstrainedSlots() + "|" + state.timeConstraint();
     }
 
     private ChatResponse handleHealthRisk(String sessionId, String traceId, SessionState state) {
