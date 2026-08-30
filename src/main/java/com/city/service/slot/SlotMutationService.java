@@ -22,11 +22,10 @@ public class SlotMutationService {
         this.options = options;
     }
 
-    public SlotMutation apply(String input, SlotBundle current, SlotBundle currentExcluded) {
-        return apply(input, current, currentExcluded, Set.of());
-    }
-
-    public SlotMutation apply(String input, SlotBundle current, SlotBundle currentExcluded, Set<String> currentUnconstrained) {
+    public SlotMutation apply(String input,
+                              SlotBundle current,
+                              SlotBundle currentExcluded,
+                              Set<String> currentUnconstrained) {
         String text = input == null ? "" : input.replaceAll("\\s+", "");
         SlotBundle included = current == null ? SlotBundle.empty() : current;
         SlotBundle excluded = currentExcluded == null ? SlotBundle.empty() : currentExcluded;
@@ -52,10 +51,6 @@ public class SlotMutationService {
     }
 
     /** 先执行经字典过滤的 LLM 结构化操作，再用关键词规则补齐模型遗漏。 */
-    public SlotMutation apply(List<ConstraintOperation> operations, String input, SlotBundle current, SlotBundle currentExcluded) {
-        return apply(operations, input, current, currentExcluded, Set.of());
-    }
-
     public SlotMutation apply(List<ConstraintOperation> operations,
                               String input,
                               SlotBundle current,
