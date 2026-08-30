@@ -15,26 +15,6 @@ import java.util.Set;
 @Service
 public class ClarifyRuleService {
 
-    public boolean hasEnoughSlots(SlotBundle slots) {
-        return missingSlots(slots).isEmpty();
-    }
-
-    public boolean hasEnoughSlots(SlotBundle slots, TimeConstraint timeConstraint) {
-        return missingSlots(slots, timeConstraint).isEmpty();
-    }
-
-    public boolean hasEnoughSlots(SlotBundle slots, TimeConstraint timeConstraint, Set<String> unconstrainedSlots) {
-        return missingSlots(slots, timeConstraint, unconstrainedSlots).isEmpty();
-    }
-
-    public List<String> missingSlots(SlotBundle slots) {
-        return missingSlots(slots, TimeConstraint.empty(), Set.of());
-    }
-
-    public List<String> missingSlots(SlotBundle slots, TimeConstraint timeConstraint) {
-        return missingSlots(slots, timeConstraint, Set.of());
-    }
-
     /**
      * 计算推荐前仍需澄清的最小信息。
      * unconstrainedSlots 用于区分“尚未回答”和“用户明确说不限”。
@@ -63,10 +43,6 @@ public class ClarifyRuleService {
                 || !slots.style().isEmpty()
                 || !slots.scene().isEmpty()
                 || !slots.duration().isEmpty();
-    }
-
-    public String fallbackQuestion(List<String> missingSlots) {
-        return fallbackQuestion(missingSlots, TimeConstraint.empty());
     }
 
     public String fallbackQuestion(List<String> missingSlots, TimeConstraint timeConstraint) {
