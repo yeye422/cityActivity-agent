@@ -98,4 +98,25 @@ class TimeResolutionServiceTest {
         assertTrue(result.timeConstraint().hasDate());
         assertFalse(result.timeConstraint().hasTime());
     }
+
+    @Test
+    void shouldKeepHistoricalTimeWhenLlmUnderstandsExplicitKeepReference() {
+        TimeConstraint historical = new TimeConstraint(
+                "周六下午",
+                LocalDate.of(2026, 9, 5), LocalDate.of(2026, 9, 5),
+                LocalTime.of(12, 0), LocalTime.of(18, 0),
+                LocalDateTime.of(2026, 8, 30, 10, 0));
+        TemporalMutation temporal = new TemporalMutation(
+                "还是之前那个时间",
+                TemporalMode.KEEP, null, null,
+                TemporalMode.KEEP, null, null,
+                false, 0.95);
+
+        TimeResolutionResult result = service.resolve(historical, temporal, "还是之前那个时间");
+
+        assertEquals(TimeResolutionResult.Status.UNCHANGED, result.status());
+        assertEquals(historical.dateStart(), result.timeConstraint().dateStart());
+        assertEquals(historical.startTime(), result.timeConstraint().startTime());
+        assertFalse(result.needsClarification());
+    }
 }
