@@ -57,7 +57,7 @@ public class TimeResolutionService {
             );
         }
 
-        TimeConstraint parsed = timeExpressionParser.parse(fallbackText);
+        TimeConstraint parsed = safeJavaParse(fallbackText);
         if (parsed.hasConstraint()) {
             TemporalMutation fallbackMutation = new TemporalMutation(
                     fallbackText == null ? "" : fallbackText,
@@ -87,6 +87,14 @@ public class TimeResolutionService {
         return temporal.changesAnything()
                 && temporal.confidence() >= MIN_LLM_TEMPORAL_CONFIDENCE
                 && temporalValidator.isValid(temporal);
+    }
+
+    private TimeConstraint safeJavaParse(String text) {
+        try {
+            return timeExpressionParser.parse(text);
+        } catch (RuntimeException ignored) {
+            return TimeConstraint.empty();
+        }
     }
 
     /** Java 兜底只处理几种明确的清除语义，避免和普通时间解析混在一起。 */
