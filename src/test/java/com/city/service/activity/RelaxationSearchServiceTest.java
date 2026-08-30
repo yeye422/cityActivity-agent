@@ -46,7 +46,7 @@ class RelaxationSearchServiceTest {
         ArgumentCaptor<ActivitySearchRequest> captor = ArgumentCaptor.forClass(ActivitySearchRequest.class);
         verify(searchService).search(captor.capture());
         assertEquals(excluded, captor.getValue().excludedSlots());
-        assertEquals(List.of(), captor.getValue().slots().mood());
+        assertEquals(List.of(), captor.getValue().slots().experienceGoal());
         assertEquals(List.of(), captor.getValue().slots().style());
         assertEquals(List.of("电影"), captor.getValue().slots().activityType());
     }

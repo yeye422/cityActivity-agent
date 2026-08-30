@@ -41,8 +41,8 @@ public class SlotMergeService {
         return new SlotBundle(
                 mergeList(historicalSlots.city(), newSlots.city()),
                 mergeList(historicalSlots.location(), newSlots.location()),
-                mergeList(historicalSlots.mood(), newSlots.mood()),
-                mergeList(historicalSlots.scene(), newSlots.scene()),
+                mergeList(historicalSlots.experienceGoal(), newSlots.experienceGoal()),
+                mergeList(historicalSlots.companion(), newSlots.companion()),
                 mergeList(historicalSlots.budget(), newSlots.budget()),
                 mergeList(historicalSlots.activityType(), newSlots.activityType()),
                 mergeList(historicalSlots.style(), newSlots.style()),

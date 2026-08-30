@@ -29,8 +29,8 @@
 只处理以下普通属性：
 - city：活动所在城市，如西安、北京、上海、成都。
 - location：区域或交通偏好，如曲江、小寨、高新、钟楼、近地铁。
-- mood：放松、社交、解压、治愈、刺激等。
-- scene：独处、情侣、朋友、亲子等。
+- experienceGoal：放松、社交、解压、治愈、刺激等。
+- companion：独处、情侣、朋友、亲子等。
 - budget：免费、100元内、200元内等。
 - activityType：电影、展览、演出、桌游、运动、探店等。
 - style：安静、文艺、热闹、刺激等。
@@ -74,4 +74,4 @@ temporal 必须完整输出：
 【输出格式】
 只输出一个合法 JSON 对象，顶层只能包含：intent、slots、operations、temporal、confidence。
 示例结构：
-{"intent":"MEAL_RECOMMENDATION","slots":{"city":[],"location":[],"mood":[],"scene":[],"budget":[],"activityType":[],"style":[],"duration":[]},"operations":[],"temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},"confidence":0.95}
+{"intent":"MEAL_RECOMMENDATION","slots":{"city":[],"location":[],"experienceGoal":[],"companion":[],"budget":[],"activityType":[],"style":[],"duration":[]},"operations":[],"temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},"confidence":0.95}

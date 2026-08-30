@@ -751,8 +751,8 @@ button {
     background: var(--accent-soft);
 }
 
-.tag-scene,
-.tag-mood {
+.tag-companion,
+.tag-experienceGoal {
     border-color: #e0d7ff;
     color: #5b21b6;
     background: #f3efff;
@@ -1782,8 +1782,8 @@ textarea:focus-visible {
 .tag-duration,
 .tag-date,
 .tag-budget,
-.tag-scene,
-.tag-mood,
+.tag-companion,
+.tag-experienceGoal,
 .tag-activityType,
 .tag-type,
 .tag-style {

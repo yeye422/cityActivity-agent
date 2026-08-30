@@ -294,7 +294,7 @@ public class CityOrchestratorService {
         SlotBundle applied = new SlotBundle(
                 context.city().isEmpty() ? historical.city() : context.city(),
                 context.location().isEmpty() ? historical.location() : context.location(),
-                historical.mood(), historical.scene(), historical.budget(), historical.activityType(),
+                historical.experienceGoal(), historical.companion(), historical.budget(), historical.activityType(),
                 historical.style(), historical.duration()
         );
         Set<String> unconstrained = new LinkedHashSet<>(
@@ -394,7 +394,7 @@ public class CityOrchestratorService {
 
         List<String> planActivityTimes = activityPlanService.resolveActivityTimes(mergedSlots, planContextState.timeConstraint());
         SlotBundle planSlots = new SlotBundle(
-                mergedSlots.city(), mergedSlots.location(), mergedSlots.mood(), mergedSlots.scene(),
+                mergedSlots.city(), mergedSlots.location(), mergedSlots.experienceGoal(), mergedSlots.companion(),
                 mergedSlots.budget(), mergedSlots.activityType(), mergedSlots.style(), mergedSlots.duration()
         );
         agentTraceService.recordEvent(

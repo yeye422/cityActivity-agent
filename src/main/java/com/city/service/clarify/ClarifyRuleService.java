@@ -41,7 +41,7 @@ public class ClarifyRuleService {
     private boolean hasStrongActivityPreference(SlotBundle slots) {
         return !slots.activityType().isEmpty()
                 || !slots.style().isEmpty()
-                || !slots.scene().isEmpty()
+                || !slots.companion().isEmpty()
                 || !slots.duration().isEmpty();
     }
 

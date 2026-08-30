@@ -110,8 +110,8 @@ public class ActivityPlanService {
         return new SlotBundle(
                 safe.city(),
                 safe.location(),
-                safe.mood(),
-                safe.scene(),
+                safe.experienceGoal(),
+                safe.companion(),
                 safe.budget(),
                 safe.activityType(),
                 safe.style(),

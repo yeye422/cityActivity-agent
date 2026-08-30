@@ -40,8 +40,8 @@
     const SLOT_LABELS = {
         city: "城市",
         location: "位置区域",
-        mood: "活动氛围",
-        scene: "同行人",
+        experienceGoal: "活动氛围",
+        companion: "同行人",
         budget: "预算",
         activityType: "活动类型",
         style: "活动风格",
@@ -50,8 +50,8 @@
     const SLOT_TONES = {
         city: "city",
         location: "location",
-        mood: "mood",
-        scene: "scene",
+        experienceGoal: "experienceGoal",
+        companion: "companion",
         budget: "budget",
         activityType: "type",
         style: "style",
@@ -298,7 +298,7 @@
                     <span class="chip selected tag-chip tag-city">城市 西安</span>
                     <span class="chip selected tag-chip tag-location">区域 曲江</span>
                     <span class="chip selected tag-chip tag-budget">预算 200内</span>
-                    <span class="chip selected tag-chip tag-scene">同行 朋友</span>
+                    <span class="chip selected tag-chip tag-companion">同行 朋友</span>
                 </div>
             </div>
         `;
@@ -735,8 +735,8 @@
             name: "",
             city: [],
             location: [],
-            mood: [],
-            scene: [],
+            experienceGoal: [],
+            companion: [],
             budget: [],
             activityType: [],
             style: [],
@@ -927,8 +927,8 @@
         const labels = {
             city: "城市",
             location: "区域",
-            mood: "氛围",
-            scene: "同行",
+            experienceGoal: "氛围",
+            companion: "同行",
             budget: "预算",
             activityType: "类型",
             style: "风格",

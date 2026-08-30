@@ -98,24 +98,26 @@ public class ActivityService {
                 userId,
                 jsonService.toJsonArray(safeSlots.city()),
                 jsonService.toJsonArray(safeSlots.location()),
-                jsonService.toJsonArray(safeSlots.mood()),
-                jsonService.toJsonArray(safeSlots.scene()),
+                jsonService.toJsonArray(safeSlots.experienceGoal()),
+                jsonService.toJsonArray(safeSlots.companion()),
                 jsonService.toJsonArray(searchableBudgets),
                 jsonService.toJsonArray(safeSlots.activityType()),
                 jsonService.toJsonArray(safeSlots.style()),
                 jsonService.toJsonArray(safeSlots.duration()),
+                jsonService.toJsonArray(safeSlots.feature()),
                 timeConstraint != null && timeConstraint.hasDate() ? timeConstraint.dateStart() : null,
                 timeConstraint != null && timeConstraint.hasDate() ? timeConstraint.dateEnd() : null,
                 timeConstraint != null && timeConstraint.hasTime() ? timeConstraint.startTime() : null,
                 timeConstraint != null && timeConstraint.hasTime() ? timeConstraint.endTime() : null,
                 jsonService.toJsonArray(safeExcluded.city()),
                 jsonService.toJsonArray(safeExcluded.location()),
-                jsonService.toJsonArray(safeExcluded.mood()),
-                jsonService.toJsonArray(safeExcluded.scene()),
+                jsonService.toJsonArray(safeExcluded.experienceGoal()),
+                jsonService.toJsonArray(safeExcluded.companion()),
                 jsonService.toJsonArray(safeExcluded.budget()),
                 jsonService.toJsonArray(safeExcluded.activityType()),
                 jsonService.toJsonArray(safeExcluded.style()),
                 jsonService.toJsonArray(safeExcluded.duration()),
+                jsonService.toJsonArray(safeExcluded.feature()),
                 SEARCH_LIMIT
         );
         return rows.stream().map(this::toActivityItem).toList();
@@ -144,10 +146,6 @@ public class ActivityService {
             throw new CityException("活动名称不能为空");
         }
         SlotBundle slots = request.toSlots();
-        if (request.durationMinutes() != null
-                && (request.durationMinutes() <= 0 || request.durationMinutes() > 24 * 60)) {
-            throw new CityException("活动预计时长必须在 1 到 1440 分钟之间");
-        }
         if ((request.validFrom() == null) != (request.validTo() == null)) {
             throw new CityException("有效日期请同时填写开始和结束日期");
         }
@@ -172,13 +170,13 @@ public class ActivityService {
         row.setName(request.name().trim());
         row.setCity(jsonService.toJsonArray(slots.city()));
         row.setLocation(jsonService.toJsonArray(slots.location()));
-        row.setMood(jsonService.toJsonArray(slots.mood()));
-        row.setScene(jsonService.toJsonArray(slots.scene()));
+        row.setExperienceGoal(jsonService.toJsonArray(slots.experienceGoal()));
+        row.setCompanion(jsonService.toJsonArray(slots.companion()));
         row.setBudget(jsonService.toJsonArray(slots.budget()));
         row.setActivityType(jsonService.toJsonArray(slots.activityType()));
         row.setStyle(jsonService.toJsonArray(slots.style()));
         row.setDuration(jsonService.toJsonArray(slots.duration()));
-        row.setDurationMinutes(request.durationMinutes());
+        row.setFeature(jsonService.toJsonArray(slots.feature()));
         row.setValidFrom(request.validFrom());
         row.setValidTo(request.validTo());
         row.setValidStartTime(request.validStartTime());
@@ -193,12 +191,13 @@ public class ActivityService {
         SlotBundle slots = new SlotBundle(
                 jsonService.fromJsonArray(row.getCity()),
                 jsonService.fromJsonArray(row.getLocation()),
-                jsonService.fromJsonArray(row.getMood()),
-                jsonService.fromJsonArray(row.getScene()),
+                jsonService.fromJsonArray(row.getExperienceGoal()),
+                jsonService.fromJsonArray(row.getCompanion()),
                 jsonService.fromJsonArray(row.getBudget()),
                 jsonService.fromJsonArray(row.getActivityType()),
                 jsonService.fromJsonArray(row.getStyle()),
-                jsonService.fromJsonArray(row.getDuration())
+                jsonService.fromJsonArray(row.getDuration()),
+                jsonService.fromJsonArray(row.getFeature())
         );
         return new ActivityItem(
                 row.getId(),
@@ -210,7 +209,6 @@ public class ActivityService {
                 row.getValidTo(),
                 row.getValidStartTime(),
                 row.getValidEndTime(),
-                row.getDurationMinutes(),
                 0
         );
     }

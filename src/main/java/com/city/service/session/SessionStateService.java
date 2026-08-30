@@ -91,8 +91,8 @@ public class SessionStateService {
             SlotBundle slots = new SlotBundle(
                     readStringList(root, "city"),
                     readStringList(root, "location"),
-                    readStringList(root, "mood"),
-                    readStringList(root, "scene"),
+                    readStringList(root, "experienceGoal"),
+                    readStringList(root, "companion"),
                     readStringList(root, "budget"),
                     readStringList(root, "activityType"),
                     readStringList(root, "style"),
@@ -150,8 +150,8 @@ public class SessionStateService {
         ObjectNode root = objectMapper.createObjectNode();
         root.set("city", objectMapper.valueToTree(state.slots().city()));
         root.set("location", objectMapper.valueToTree(state.slots().location()));
-        root.set("mood", objectMapper.valueToTree(state.slots().mood()));
-        root.set("scene", objectMapper.valueToTree(state.slots().scene()));
+        root.set("experienceGoal", objectMapper.valueToTree(state.slots().experienceGoal()));
+        root.set("companion", objectMapper.valueToTree(state.slots().companion()));
         root.set("budget", objectMapper.valueToTree(state.slots().budget()));
         root.set("activityType", objectMapper.valueToTree(state.slots().activityType()));
         root.set("style", objectMapper.valueToTree(state.slots().style()));

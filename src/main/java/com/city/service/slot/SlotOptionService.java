@@ -13,7 +13,7 @@ import java.util.Set;
 @Service
 public class SlotOptionService {
     public static final List<String> SLOT_NAMES = List.of(
-            "city", "location", "mood", "scene", "budget", "activityType", "style", "duration"
+            "city", "location", "experienceGoal", "companion", "budget", "activityType", "style", "duration", "feature"
     );
 
     private final SlotOptionMapper slotOptionMapper;
@@ -40,12 +40,13 @@ public class SlotOptionService {
         return new SlotBundle(
                 sanitizeValues("city", safe.city(), options),
                 sanitizeValues("location", safe.location(), options),
-                sanitizeValues("mood", safe.mood(), options),
-                sanitizeValues("scene", safe.scene(), options),
+                sanitizeValues("experienceGoal", safe.experienceGoal(), options),
+                sanitizeValues("companion", safe.companion(), options),
                 sanitizeValues("budget", safe.budget(), options),
                 sanitizeValues("activityType", safe.activityType(), options),
                 sanitizeValues("style", safe.style(), options),
-                sanitizeValues("duration", safe.duration(), options)
+                sanitizeValues("duration", safe.duration(), options),
+                sanitizeValues("feature", safe.feature(), options)
         );
     }
 
@@ -54,12 +55,13 @@ public class SlotOptionService {
         Map<String, List<String>> options = findAllOptions();
         validateSlot("city", safe.city(), options);
         validateSlot("location", safe.location(), options);
-        validateSlot("mood", safe.mood(), options);
-        validateSlot("scene", safe.scene(), options);
+        validateSlot("experienceGoal", safe.experienceGoal(), options);
+        validateSlot("companion", safe.companion(), options);
         validateSlot("budget", safe.budget(), options);
         validateSlot("activityType", safe.activityType(), options);
         validateSlot("style", safe.style(), options);
         validateSlot("duration", safe.duration(), options);
+        validateSlot("feature", safe.feature(), options);
     }
 
     private List<String> sanitizeValues(String slotName, List<String> values, Map<String, List<String>> options) {

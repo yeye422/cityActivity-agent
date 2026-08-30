@@ -159,8 +159,8 @@ public class ActivityRankService {
         ScorePart[] parts = {
                 scorePart(safeItem.city(), safeQuery.city()),
                 scorePart(safeItem.location(), safeQuery.location()),
-                scorePart(safeItem.mood(), safeQuery.mood()),
-                scorePart(safeItem.scene(), safeQuery.scene()),
+                scorePart(safeItem.experienceGoal(), safeQuery.experienceGoal()),
+                scorePart(safeItem.companion(), safeQuery.companion()),
                 budgetScorePart(safeItem.budget(), safeQuery.budget()),
                 scorePart(safeItem.activityType(), safeQuery.activityType()),
                 scorePart(safeItem.style(), safeQuery.style()),

@@ -132,21 +132,23 @@ public class SlotMutationService {
         return switch (field) {
             case "city" -> slots.city();
             case "location" -> slots.location();
-            case "mood" -> slots.mood();
-            case "scene" -> slots.scene();
+            case "experienceGoal" -> slots.experienceGoal();
+            case "companion" -> slots.companion();
             case "budget" -> slots.budget();
             case "activityType" -> slots.activityType();
             case "style" -> slots.style();
-            default -> slots.duration();
+            case "duration" -> slots.duration();
+            default -> slots.feature();
         };
     }
 
     private SlotBundle replace(SlotBundle s, String f, List<String> v) {
         return new SlotBundle(
                 f.equals("city") ? v : s.city(), f.equals("location") ? v : s.location(),
-                f.equals("mood") ? v : s.mood(), f.equals("scene") ? v : s.scene(),
+                f.equals("experienceGoal") ? v : s.experienceGoal(), f.equals("companion") ? v : s.companion(),
                 f.equals("budget") ? v : s.budget(), f.equals("activityType") ? v : s.activityType(),
-                f.equals("style") ? v : s.style(), f.equals("duration") ? v : s.duration());
+                f.equals("style") ? v : s.style(), f.equals("duration") ? v : s.duration(),
+                f.equals("feature") ? v : s.feature());
     }
 
     private List<String> without(List<String> source, String value) {

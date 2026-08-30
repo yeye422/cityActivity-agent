@@ -141,7 +141,7 @@ public class IntentAgentService {
                 - CLARIFY_NEEDED：无法判断是否在请求活动推荐。
 
                 ## slots
-                slots 只处理 city、location、mood、scene、budget、activityType、style、duration。
+                slots 只处理 city、location、experienceGoal、companion、budget、activityType、style、duration。
                 slots 只填写当前用户消息里明确出现的正向标准标签；历史已生效值不要抄入本轮 slots。
                 未提及字段输出 []；时间绝不能写入 slots。
                 - “想找个半天的展览”中的“半天”描述活动自身时长，可写 duration=["半天"]，intent 仍是 MEAL_RECOMMENDATION。
@@ -192,13 +192,13 @@ public class IntentAgentService {
                 {"raw":"晚上","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"SET","timeStart":"18:00","timeEnd":"23:00","approximate":false,"confidence":0.95}
 
                 “换一批” =>
-                {"intent":"MEAL_ADJUST","slots":{"city":[],"location":[],"mood":[],"scene":[],"budget":[],"activityType":[],"style":[],"duration":[]},
+                {"intent":"MEAL_ADJUST","slots":{"city":[],"location":[],"experienceGoal":[],"companion":[],"budget":[],"activityType":[],"style":[],"duration":[]},
                  "operations":[],
                  "temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},
                  "confidence":0.95}
 
                 历史已有 city=西安、time=14:00~23:00，上一轮助手问“预算有偏好吗？”，当前用户“不限” =>
-                {"intent":"MEAL_RECOMMENDATION","slots":{"city":[],"location":[],"mood":[],"scene":[],"budget":[],"activityType":[],"style":[],"duration":[]},
+                {"intent":"MEAL_RECOMMENDATION","slots":{"city":[],"location":[],"experienceGoal":[],"companion":[],"budget":[],"activityType":[],"style":[],"duration":[]},
                  "operations":[{"field":"budget","op":"CLEAR","values":[],"raw":"不限"}],
                  "temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},
                  "confidence":0.95}
@@ -279,8 +279,8 @@ public class IntentAgentService {
         return new SlotBundle(
                 SlotJsonPicker.pick(node, "city", options),
                 SlotJsonPicker.pick(node, "location", options),
-                SlotJsonPicker.pick(node, "mood", options),
-                SlotJsonPicker.pick(node, "scene", options),
+                SlotJsonPicker.pick(node, "experienceGoal", options),
+                SlotJsonPicker.pick(node, "companion", options),
                 SlotJsonPicker.pick(node, "budget", options),
                 SlotJsonPicker.pick(node, "activityType", options),
                 SlotJsonPicker.pick(node, "style", options),

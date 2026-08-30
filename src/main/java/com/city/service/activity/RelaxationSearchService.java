@@ -74,7 +74,7 @@ public class RelaxationSearchService {
         return new SlotBundle(
                 slots.city(), slots.location(),
                 List.of(),
-                broad ? List.of() : slots.scene(),
+                broad ? List.of() : slots.companion(),
                 slots.budget(), slots.activityType(),
                 List.of(),
                 broad ? List.of() : slots.duration()
@@ -86,7 +86,7 @@ public class RelaxationSearchService {
     }
 
     private List<String> relaxedSlotsFor(int level) {
-        return level == 1 ? List.of("mood", "style") : List.of("mood", "style", "scene", "duration");
+        return level == 1 ? List.of("experienceGoal", "style") : List.of("experienceGoal", "style", "companion", "duration");
     }
 
     public record SearchResult(int level, String label, List<String> relaxedSlots,

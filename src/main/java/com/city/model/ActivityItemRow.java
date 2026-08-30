@@ -14,13 +14,14 @@ public class ActivityItemRow {
     private String name;
     private String city;
     private String location;
-    private String mood;
-    private String scene;
+    private String experienceGoal;
+    private String companion;
     private String budget;
     private String activityType;
     private String style;
     private String duration;
-    private Integer durationMinutes;
+    private String feature;
+    private String feature;
     private LocalDate validFrom;
     private LocalDate validTo;
     private LocalTime validStartTime;

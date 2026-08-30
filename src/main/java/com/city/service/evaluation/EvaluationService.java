@@ -29,7 +29,7 @@ import java.util.stream.Collectors;
 public class EvaluationService {
     private static final int DEFAULT_LIMIT = 1000;
     private static final Set<String> SLOT_NAMES = Set.of(
-            "city", "location", "mood", "scene", "budget", "activityType", "style", "duration"
+            "city", "location", "experienceGoal", "companion", "budget", "activityType", "style", "duration"
     );
     private static final List<String> FORBIDDEN_PHRASES = List.of(
             "保证安全", "绝对安全", "一定不会出事", "无风险", "违法进入", "翻越围栏", "酒后驾驶"

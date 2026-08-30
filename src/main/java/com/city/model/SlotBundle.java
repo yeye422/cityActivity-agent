@@ -18,15 +18,15 @@ public class SlotBundle {
     /** 城市，如：西安、北京、上海、成都 */
     private List<String> city;
 
-    /** 活动位置/区域，如：曲江、小寨、高新、钟楼、近地铁 */
+    /** 纯地理区域，如：曲江、小寨、高新、钟楼 */
     private List<String> location;
 
 
     /** 活动状态，如：放松、社交、解压、治愈、刺激 */
-    private List<String> mood;
+    private List<String> experienceGoal;
 
     /** 同行人，如：独处、情侣、朋友、亲子 */
-    private List<String> scene;
+    private List<String> companion;
 
     /** 预算，如：免费、100元内、200元内、300元内 */
     private List<String> budget;
@@ -37,33 +37,42 @@ public class SlotBundle {
     /** 活动风格，如：安静、文艺、热闹、刺激 */
     private List<String> style;
 
-    /** 活动时长，如：室内、近距离、少排队、交通方便 */
+    /** 纯活动耗时区间，如：1-2小时、2-4小时、半天、全天 */
     private List<String> duration;
 
-    public SlotBundle(List<String> city, List<String> location, List<String> mood, List<String> scene, List<String> budget, List<String> activityType, List<String> style, List<String> duration) {
+    /** 活动客观特征/便利性，如：室内、近地铁、少排队、交通方便 */
+    private List<String> feature;
+
+    public SlotBundle(List<String> city, List<String> location, List<String> experienceGoal, List<String> companion, List<String> budget, List<String> activityType, List<String> style, List<String> duration, List<String> feature) {
         this.city = normalize(city);
         this.location = normalize(location);
-        this.mood = normalize(mood);
-        this.scene = normalize(scene);
+        this.experienceGoal = normalize(experienceGoal);
+        this.companion = normalize(companion);
         this.budget = normalize(budget);
         this.activityType = normalize(activityType);
         this.style = normalize(style);
         this.duration = normalize(duration);
+        this.feature = normalize(feature);
+    }
+
+    public SlotBundle(List<String> city, List<String> location, List<String> experienceGoal, List<String> companion, List<String> budget, List<String> activityType, List<String> style, List<String> duration) {
+        this(city, location, experienceGoal, companion, budget, activityType, style, duration, List.of());
     }
 
     public static SlotBundle empty() {
-        return new SlotBundle(List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+        return new SlotBundle(List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
     }
 
     public boolean isEmpty() {
         return city.isEmpty()
                 && location.isEmpty()
-                && mood.isEmpty()
-                && scene.isEmpty()
+                && experienceGoal.isEmpty()
+                && companion.isEmpty()
                 && budget.isEmpty()
                 && activityType.isEmpty()
                 && style.isEmpty()
-                && duration.isEmpty();
+                && duration.isEmpty()
+                && feature.isEmpty();
     }
 
     private static List<String> normalize(List<String> values) {
