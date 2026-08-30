@@ -63,7 +63,6 @@ public class CityOrchestratorService {
 
     private static final String CHITCHAT_REPLY = "我是城市周末活动助手，帮你发现周末好去处。你可以告诉我时间、预算、想要的氛围，比如「周六和朋友，预算200以内，想放松」。";
     private static final String TIME_CLARIFY_QUESTION = "我没能准确理解你的时间要求。可以说得更具体一点吗？例如「下周六下午3点」或「晚上7点到9点」。";
-    private static final String PUBLIC_FALLBACK_NOTICE = "你的个人活动库暂时没有匹配项，我先从公共活动中帮你挑了几个。";
 
     private final SessionService sessionService;
     private final SessionStateService sessionStateService;
@@ -716,13 +715,7 @@ public class CityOrchestratorService {
     }
 
     static ResponseResult prependPublicFallbackNotice(ResponseResult response) {
-        if (response == null) {
-            return null;
-        }
-        String speechText = response.speechText() == null || response.speechText().isBlank()
-                ? PUBLIC_FALLBACK_NOTICE
-                : PUBLIC_FALLBACK_NOTICE + "\n" + response.speechText();
-        return new ResponseResult(speechText, response.displayBlocks(), response.nextAction());
+        return response;
     }
 
     private ChatResponse completeRelaxationChoice(String sessionId,
