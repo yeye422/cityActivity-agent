@@ -1,5 +1,6 @@
 package com.city.service.session;
 
+import com.city.enums.ClarifyField;
 import com.city.enums.Intent;
 import com.city.enums.SessionPhase;
 import com.city.enums.SourceMode;
@@ -108,6 +109,7 @@ public class SessionStateService {
             TimeConstraint timeConstraint = root.path("timeConstraint").isObject()
                     ? objectMapper.treeToValue(root.path("timeConstraint"), TimeConstraint.class)
                     : TimeConstraint.empty();
+            ClarifyField pendingClarifyField = ClarifyField.parse(root.path("pendingClarifyField").asText(null));
             RelaxationContext pendingRelaxationContext = root.path("pendingRelaxationContext").isObject()
                     ? objectMapper.treeToValue(root.path("pendingRelaxationContext"), RelaxationContext.class)
                     : null;
@@ -128,6 +130,7 @@ public class SessionStateService {
                     excludedSlots,
                     unconstrainedSlots,
                     timeConstraint,
+                    pendingClarifyField,
                     recommendationQueryKey,
                     pendingRelaxationContext,
                     parseLongList(row.getLastRecommendedActivityIds())
@@ -164,6 +167,11 @@ public class SessionStateService {
                 state.unconstrainedSlots() == null ? Set.of() : state.unconstrainedSlots()));
         root.set("timeConstraint", objectMapper.valueToTree(
                 state.timeConstraint() == null ? TimeConstraint.empty() : state.timeConstraint()));
+        if (state.pendingClarifyField() == null) {
+            root.putNull("pendingClarifyField");
+        } else {
+            root.put("pendingClarifyField", state.pendingClarifyField().name());
+        }
         root.set("pendingRelaxationContext", objectMapper.valueToTree(state.pendingRelaxationContext()));
         ObjectNode meta = objectMapper.createObjectNode();
         meta.put("currentIntent", state.currentIntent() == null ? null : state.currentIntent().name());
