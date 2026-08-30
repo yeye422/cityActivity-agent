@@ -20,6 +20,7 @@ import com.city.model.RiskGuardResult;
 import com.city.model.SessionState;
 import com.city.model.SlotBundle;
 import com.city.model.SlotMutation;
+import com.city.model.TimeConstraint;
 import com.city.model.TimeResolutionResult;
 import com.city.model.WeatherRecommendationContext;
 import com.city.service.activity.ActivityRankService;
@@ -433,10 +434,18 @@ public class CityOrchestratorService {
         return chatResponse;
     }
 
-    private String recommendationQueryKey(SessionState state) {
+    static String recommendationQueryKey(SessionState state) {
         if (state == null) return "";
+        List<String> unconstrained = state.unconstrainedSlots() == null
+                ? List.of()
+                : state.unconstrainedSlots().stream().sorted().toList();
+        TimeConstraint time = state.timeConstraint();
+        String timeKey = time == null
+                ? "null|null|null|null"
+                : String.valueOf(time.dateStart()) + "|" + time.dateEnd()
+                + "|" + time.startTime() + "|" + time.endTime();
         return String.valueOf(state.sourceMode()) + "|" + state.slots() + "|" + state.excludedSlots()
-                + "|" + state.unconstrainedSlots() + "|" + state.timeConstraint();
+                + "|" + unconstrained + "|" + timeKey;
     }
 
     private ChatResponse handleHealthRisk(String sessionId, String traceId, SessionState state) {
