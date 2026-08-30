@@ -144,6 +144,10 @@ public class ActivityService {
             throw new CityException("活动名称不能为空");
         }
         SlotBundle slots = request.toSlots();
+        if (request.durationMinutes() != null
+                && (request.durationMinutes() <= 0 || request.durationMinutes() > 24 * 60)) {
+            throw new CityException("活动预计时长必须在 1 到 1440 分钟之间");
+        }
         if ((request.validFrom() == null) != (request.validTo() == null)) {
             throw new CityException("有效日期请同时填写开始和结束日期");
         }
@@ -174,6 +178,7 @@ public class ActivityService {
         row.setActivityType(jsonService.toJsonArray(slots.activityType()));
         row.setStyle(jsonService.toJsonArray(slots.style()));
         row.setDuration(jsonService.toJsonArray(slots.duration()));
+        row.setDurationMinutes(request.durationMinutes());
         row.setValidFrom(request.validFrom());
         row.setValidTo(request.validTo());
         row.setValidStartTime(request.validStartTime());
@@ -205,6 +210,7 @@ public class ActivityService {
                 row.getValidTo(),
                 row.getValidStartTime(),
                 row.getValidEndTime(),
+                row.getDurationMinutes(),
                 0
         );
     }

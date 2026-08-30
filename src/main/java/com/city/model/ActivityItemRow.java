@@ -20,6 +20,7 @@ public class ActivityItemRow {
     private String activityType;
     private String style;
     private String duration;
+    private Integer durationMinutes;
     private LocalDate validFrom;
     private LocalDate validTo;
     private LocalTime validStartTime;
