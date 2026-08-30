@@ -15,7 +15,7 @@ import java.util.List;
 
 /**
  * 严格条件无结果时的候选回退策略。
- * 城市、区域、时间、预算和活动类型保持不变；只逐层放宽偏好类槽位。
+ * 城市、区域、时间、预算、活动类型以及所有显式排除条件保持不变；只逐层放宽正向偏好槽位。
  */
 @Service
 public class RelaxationSearchService {
@@ -28,35 +28,42 @@ public class RelaxationSearchService {
         this.activityRankService = activityRankService;
     }
 
-    public List<RelaxationOption> options(SourceMode sourceMode, Long userId, SlotBundle originalSlots, List<Long> excludeActivityIds) {
-        return options(sourceMode, userId, originalSlots, excludeActivityIds, TimeConstraint.empty());
-    }
-
-    /** 放宽偏好时仍必须保留用户指定的日期和时段，不能把“周六下午”悄悄放宽掉。 */
-    public List<RelaxationOption> options(SourceMode sourceMode, Long userId, SlotBundle originalSlots,
-                                          List<Long> excludeActivityIds, TimeConstraint timeConstraint) {
+    /**
+     * 放宽偏好时仍保留用户指定的日期/时段和 excludedSlots。
+     * negative constraint 永远不能因为“相近活动”而被悄悄放宽。
+     */
+    public List<RelaxationOption> options(SourceMode sourceMode,
+                                          Long userId,
+                                          SlotBundle originalSlots,
+                                          SlotBundle excludedSlots,
+                                          List<Long> excludeActivityIds,
+                                          TimeConstraint timeConstraint) {
         return List.of(1, 2).stream()
-                .map(level -> find(sourceMode, userId, originalSlots, excludeActivityIds, timeConstraint, level))
+                .map(level -> find(sourceMode, userId, originalSlots, excludedSlots,
+                        excludeActivityIds, timeConstraint, level))
                 .filter(result -> !result.ranked().isEmpty())
-                .map(result -> new RelaxationOption(result.level(), result.label(), result.relaxedSlots(), result.ranked().size()))
+                .map(result -> new RelaxationOption(
+                        result.level(), result.label(), result.relaxedSlots(), result.ranked().size()))
                 .toList();
     }
 
-    public SearchResult find(SourceMode sourceMode, Long userId, SlotBundle originalSlots,
-                             List<Long> excludeActivityIds, Integer level) {
-        return find(sourceMode, userId, originalSlots, excludeActivityIds, TimeConstraint.empty(), level);
-    }
-
-    public SearchResult find(SourceMode sourceMode, Long userId, SlotBundle originalSlots,
-                             List<Long> excludeActivityIds, TimeConstraint timeConstraint, Integer level) {
+    public SearchResult find(SourceMode sourceMode,
+                             Long userId,
+                             SlotBundle originalSlots,
+                             SlotBundle excludedSlots,
+                             List<Long> excludeActivityIds,
+                             TimeConstraint timeConstraint,
+                             Integer level) {
         if (level == null || level < 1 || level > 2) {
             throw new CityException("无效的相近活动方案");
         }
         SlotBundle original = originalSlots == null ? SlotBundle.empty() : originalSlots;
+        SlotBundle excluded = excludedSlots == null ? SlotBundle.empty() : excludedSlots;
         SlotBundle query = queryFor(original, level);
         List<ActivityItem> candidates = activitySearchService.search(
-                new ActivitySearchRequest(sourceMode, userId, query, excludeActivityIds, timeConstraint));
-        // 用原始条件和原始时间评分，使最接近原需求的活动排在前面。
+                new ActivitySearchRequest(
+                        sourceMode, userId, query, excludeActivityIds, timeConstraint, excluded));
+        // 用原始正向条件和原始时间评分，使最接近原需求的活动排在前面；负向条件已在 Search 阶段严格排除。
         ActivityRankResult rankResult = activityRankService.rank(
                 new ActivityRankRequest(candidates, original, timeConstraint, excludeActivityIds));
         return new SearchResult(level, labelFor(level), relaxedSlotsFor(level), query, rankResult.ranked());
