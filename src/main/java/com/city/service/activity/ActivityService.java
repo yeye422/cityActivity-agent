@@ -1,5 +1,6 @@
 package com.city.service.activity;
 
+import com.city.enums.SourceMode;
 import com.city.exception.CityException;
 import com.city.mapper.ActivityMapper;
 import com.city.model.ActivityItem;
@@ -7,14 +8,12 @@ import com.city.model.ActivityItemRow;
 import com.city.model.ActivityRequest;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
-import com.city.enums.SourceMode;
 import com.city.service.slot.SlotOptionService;
 import com.city.util.JsonService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import java.util.Comparator;
+
 import java.util.List;
-import java.util.Set;
 
 /**
  * 活动数据服务。
@@ -25,9 +24,12 @@ public class ActivityService {
 
     /** 单次检索从 DB 拉取的最大行数，初排后取 top10 交给 Rank 层。 */
     private static final int SEARCH_LIMIT = 50;
+    private static final List<String> BUDGET_ORDER = List.of("免费", "100元内", "200元内", "300元内");
+
     private final ActivityMapper activityMapper;
     private final SlotOptionService slotOptionService;
     private final JsonService jsonService;
+
     public ActivityService(ActivityMapper activityMapper, SlotOptionService slotOptionService, JsonService jsonService) {
         this.activityMapper = activityMapper;
         this.slotOptionService = slotOptionService;
@@ -47,7 +49,7 @@ public class ActivityService {
      * 由 Orchestrator#handleTurn 调用，count > 0 才继续推荐链路。
      */
     public boolean hasPersonalActivities(Long userId) {
-        return activityMapper.countPersonalActivities(userId) > 0; // 查个人活动数量是否大于 0
+        return activityMapper.countPersonalActivities(userId) > 0;
     }
 
     @Transactional
@@ -77,10 +79,6 @@ public class ActivityService {
         }
     }
 
-    /**
-     * 按槽位标签检索活动并计算初排 matchScore。
-     * 由 ActivitySearchService#search 调用；MySQL JSON_OVERLAPS 召回后 Java 侧 overlap 打分。
-     */
     public List<ActivityItem> search(SourceMode sourceMode, Long userId, SlotBundle slots) {
         return search(sourceMode, userId, slots, TimeConstraint.empty());
     }
@@ -89,35 +87,56 @@ public class ActivityService {
         return search(sourceMode, userId, slots, timeConstraint, SlotBundle.empty());
     }
 
-    public List<ActivityItem> search(SourceMode sourceMode, Long userId, SlotBundle slots, TimeConstraint timeConstraint, SlotBundle excludedSlots) {
-        // MyBatis 执行 JSON_OVERLAPS 检索，9 维槽位各传 JSON 数组，最多拉 SEARCH_LIMIT=50 条
+    public List<ActivityItem> search(SourceMode sourceMode, Long userId, SlotBundle slots,
+                                     TimeConstraint timeConstraint, SlotBundle excludedSlots) {
+        SlotBundle safeSlots = slots == null ? SlotBundle.empty() : slots;
+        SlotBundle safeExcluded = excludedSlots == null ? SlotBundle.empty() : excludedSlots;
+        List<String> searchableBudgets = expandBudgetUpperBound(safeSlots.budget());
+
         List<ActivityItemRow> rows = activityMapper.search(
-                sourceMode,                                      // PERSONAL 或 PUBLIC，决定查哪张数据
-                userId,                                          // PERSONAL 时过滤 owner_user_id
-                jsonService.toJsonArray(slots.city()),           // 城市标签 JSON 数组
-                jsonService.toJsonArray(slots.location()),       // 位置/区域标签 JSON 数组
-                jsonService.toJsonArray(slots.mood()),           // 心情标签 JSON 数组
-                jsonService.toJsonArray(slots.scene()),          // 场景标签 JSON 数组
-                jsonService.toJsonArray(slots.budget()),     // 预算标签 JSON 数组
-                jsonService.toJsonArray(slots.activityType()),        // 菜系 JSON 数组
-                jsonService.toJsonArray(slots.style()),          // 活动风格 JSON 数组
-                jsonService.toJsonArray(slots.duration()),    // 活动时长 JSON 数组
+                sourceMode,
+                userId,
+                jsonService.toJsonArray(safeSlots.city()),
+                jsonService.toJsonArray(safeSlots.location()),
+                jsonService.toJsonArray(safeSlots.mood()),
+                jsonService.toJsonArray(safeSlots.scene()),
+                jsonService.toJsonArray(searchableBudgets),
+                jsonService.toJsonArray(safeSlots.activityType()),
+                jsonService.toJsonArray(safeSlots.style()),
+                jsonService.toJsonArray(safeSlots.duration()),
                 timeConstraint != null && timeConstraint.hasDate() ? timeConstraint.dateStart() : null,
                 timeConstraint != null && timeConstraint.hasDate() ? timeConstraint.dateEnd() : null,
                 timeConstraint != null && timeConstraint.hasTime() ? timeConstraint.startTime() : null,
                 timeConstraint != null && timeConstraint.hasTime() ? timeConstraint.endTime() : null,
-                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.city()),
-                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.location()),
-                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.mood()),
-                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.scene()),
-                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.budget()),
-                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.activityType()),
-                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.style()),
-                jsonService.toJsonArray(excludedSlots == null ? List.of() : excludedSlots.duration()),
-                SEARCH_LIMIT                                     // DB 层最多返回 50 行
+                jsonService.toJsonArray(safeExcluded.city()),
+                jsonService.toJsonArray(safeExcluded.location()),
+                jsonService.toJsonArray(safeExcluded.mood()),
+                jsonService.toJsonArray(safeExcluded.scene()),
+                jsonService.toJsonArray(safeExcluded.budget()),
+                jsonService.toJsonArray(safeExcluded.activityType()),
+                jsonService.toJsonArray(safeExcluded.style()),
+                jsonService.toJsonArray(safeExcluded.duration()),
+                SEARCH_LIMIT
         );
-        // Row → ActivityItem
         return rows.stream().map(this::toActivityItem).toList();
+    }
+
+    /**
+     * budget 标签表达的是“价格上限”，不是互斥类别。
+     * 例如用户选择 200元内，应允许召回 免费、100元内、200元内，而不是只做 200元内 精确标签重叠。
+     */
+    private List<String> expandBudgetUpperBound(List<String> budgets) {
+        if (budgets == null || budgets.isEmpty()) {
+            return List.of();
+        }
+        int maxIndex = -1;
+        for (String budget : budgets) {
+            maxIndex = Math.max(maxIndex, BUDGET_ORDER.indexOf(budget));
+        }
+        if (maxIndex < 0) {
+            return budgets;
+        }
+        return List.copyOf(BUDGET_ORDER.subList(0, maxIndex + 1));
     }
 
     private void validateActivityRequest(ActivityRequest request) {

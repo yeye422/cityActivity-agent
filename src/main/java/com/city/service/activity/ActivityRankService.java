@@ -10,7 +10,6 @@ import com.city.model.WeatherRecommendationContext;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalTime;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -25,6 +24,7 @@ public class ActivityRankService {
     private static final int MAX_RANKED_CANDIDATES = 10;
     private static final double SLOT_WEIGHT_WITH_TIME = 0.80;
     private static final double TIME_WEIGHT = 0.20;
+    private static final List<String> BUDGET_ORDER = List.of("免费", "100元内", "200元内", "300元内");
 
     public ActivityRankResult rank(ActivityRankRequest request) {
         return rank(request, WeatherRecommendationContext.inactive());
@@ -161,7 +161,7 @@ public class ActivityRankService {
                 scorePart(safeItem.location(), safeQuery.location()),
                 scorePart(safeItem.mood(), safeQuery.mood()),
                 scorePart(safeItem.scene(), safeQuery.scene()),
-                scorePart(safeItem.budget(), safeQuery.budget()),
+                budgetScorePart(safeItem.budget(), safeQuery.budget()),
                 scorePart(safeItem.activityType(), safeQuery.activityType()),
                 scorePart(safeItem.style(), safeQuery.style()),
                 scorePart(safeItem.duration(), safeQuery.duration())
@@ -181,6 +181,32 @@ public class ActivityRankService {
 
     private ScorePart scorePart(List<String> itemValues, List<String> queryValues) {
         return new ScorePart(queryValues != null && !queryValues.isEmpty(), overlap(itemValues, queryValues));
+    }
+
+    /** budget 标签是上限语义：100元内活动完整满足“200元内”，不应按标签不相等计 0 分。 */
+    private ScorePart budgetScorePart(List<String> itemBudgets, List<String> queryBudgets) {
+        if (queryBudgets == null || queryBudgets.isEmpty()) {
+            return new ScorePart(false, 0.0);
+        }
+        int queryMax = maxBudgetIndex(queryBudgets);
+        if (queryMax < 0) {
+            return new ScorePart(true, overlap(itemBudgets, queryBudgets));
+        }
+        if (itemBudgets == null || itemBudgets.isEmpty()) {
+            return new ScorePart(true, 0.0);
+        }
+        boolean withinLimit = itemBudgets.stream()
+                .mapToInt(BUDGET_ORDER::indexOf)
+                .anyMatch(index -> index >= 0 && index <= queryMax);
+        return new ScorePart(true, withinLimit ? 1.0 : 0.0);
+    }
+
+    private int maxBudgetIndex(List<String> budgets) {
+        int max = -1;
+        for (String budget : budgets) {
+            max = Math.max(max, BUDGET_ORDER.indexOf(budget));
+        }
+        return max;
     }
 
     /** 计算 queryValues 中有多少标签出现在 itemValues 中，返回命中比例。 */

@@ -6,29 +6,27 @@ import com.city.model.ActivityRankRequest;
 import com.city.model.ActivitySearchRequest;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
+import com.city.model.WeatherRecommendationContext;
 import com.city.service.activity.ActivityRankService;
 import com.city.service.activity.ActivitySearchService;
 import org.springframework.stereotype.Service;
 
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.time.DayOfWeek;
-import java.time.LocalDate;
-import java.time.LocalTime;
 
 /**
- * 多时段规划服务：解析目标活动时段，并按时段拆分检索/重排后各取一款。
+ * 多时段规划服务：解析目标活动时段，并按时段拆分检索/重排后各取一个活动。
  */
 @Service
 public class ActivityPlanService {
 
     /** 一天规划默认拆分的日内时段。日期由 TimeConstraint 单独确定。 */
     private static final List<String> DEFAULT_DAY_PERIODS = List.of("上午", "下午", "晚上");
-
-    /** 「周末」聚合标签，需展开为具体活动时段。 */
-    private static final String AGGREGATE_WEEKEND = "周末";
 
     private final ActivitySearchService activitySearchService;
     private final ActivityRankService activityRankService;
@@ -39,21 +37,10 @@ public class ActivityPlanService {
     }
 
     /**
-     * 从合并后的槽位解析规划时段。
-     *   含「周末」或为空 → 默认周六上午/下午/晚上
-     *   含 ≥2 个具体时段 → 按用户指定顺序去重保留
-     *   仅 1 个具体时段 → 仍按默认多时段规划
-     */
-    public List<String> resolveActivityTimes(SlotBundle slots) {
-        return resolveActivityTimes(slots, TimeConstraint.empty());
-    }
-
-    /**
-     * 解析一天内的规划时段。对周六、周日保留旧活动库使用的星期标签；其他具体日期只保留
-     * “上午/下午/晚上”语义，改由日期和营业时间字段过滤，避免把任意日期误当成周六。
+     * 从规范化 TimeConstraint 推导一天内的规划时段。
+     * 周六/周日保留星期标签；其他具体日期使用上午/下午/晚上。
      */
     public List<String> resolveActivityTimes(SlotBundle slots, TimeConstraint timeConstraint) {
-        // 规划时段不再读取 SlotBundle.activityTime，统一由用户 TimeConstraint 推导。
         return defaultActivityTimes(timeConstraint);
     }
 
@@ -78,9 +65,7 @@ public class ActivityPlanService {
         };
     }
 
-    /**
-     * 复制共享槽位；规划时段通过 TimeConstraint 处理，不写入活动槽位。
-     */
+    /** 复制共享正向槽位；规划时段通过 TimeConstraint 处理，不写回 SlotBundle。 */
     public SlotBundle slotsForActivityTime(SlotBundle base, String activityTime) {
         SlotBundle safe = base == null ? SlotBundle.empty() : base;
         return new SlotBundle(
@@ -97,33 +82,41 @@ public class ActivityPlanService {
 
     /**
      * 按时段依次检索重排，每个时段取 top1；跨时段排除已选 activityId，避免重复活动。
+     * excludedSlots 始终作为硬排除条件透传；WeatherContext 与普通推荐共用同一套天气排序语义。
      */
-    public List<PlannedActivity> planActivities(SourceMode sourceMode, Long userId, SlotBundle baseSlots, List<String> activityTimes) {
-        return planActivities(sourceMode, userId, baseSlots, activityTimes, TimeConstraint.empty());
-    }
-
-    /**
-     * 规划场景按“日内时段”拆分检索。
-     * <p>
-     * 日期约束用于限定每个规划时段发生在哪一天。
-     */
-    public List<PlannedActivity> planActivities(SourceMode sourceMode, Long userId, SlotBundle baseSlots,
-                                                 List<String> activityTimes, TimeConstraint timeConstraint) {
+    public List<PlannedActivity> planActivities(SourceMode sourceMode,
+                                                 Long userId,
+                                                 SlotBundle baseSlots,
+                                                 SlotBundle excludedSlots,
+                                                 List<String> activityTimes,
+                                                 TimeConstraint timeConstraint,
+                                                 WeatherRecommendationContext weather) {
         List<String> targets = activityTimes == null || activityTimes.isEmpty()
                 ? defaultActivityTimes(timeConstraint)
                 : activityTimes;
+        SlotBundle safeExcluded = excludedSlots == null ? SlotBundle.empty() : excludedSlots;
+        WeatherRecommendationContext safeWeather = weather == null
+                ? WeatherRecommendationContext.inactive()
+                : weather;
         List<PlannedActivity> planned = new ArrayList<>();
         Set<Long> usedIds = new LinkedHashSet<>();
 
         for (String activityTime : targets) {
-            // 时段仅用于生成展示窗口；活动可用性完全由 activity_session 过滤。
             SlotBundle querySlots = slotsForActivityTime(baseSlots, activityTime);
             TimeConstraint targetTimeConstraint = timeConstraintForActivityTime(timeConstraint, activityTime);
             List<Long> excludeIds = List.copyOf(usedIds);
             List<ActivityItem> candidates = activitySearchService.search(
-                    new ActivitySearchRequest(sourceMode, userId, querySlots, excludeIds, targetTimeConstraint));
+                    new ActivitySearchRequest(
+                            sourceMode,
+                            userId,
+                            querySlots,
+                            excludeIds,
+                            targetTimeConstraint,
+                            safeExcluded
+                    ));
             List<ActivityItem> ranked = activityRankService.rank(
-                    new ActivityRankRequest(candidates, querySlots, targetTimeConstraint, excludeIds))
+                            new ActivityRankRequest(candidates, querySlots, targetTimeConstraint, excludeIds),
+                            safeWeather)
                     .ranked();
             ActivityItem picked = ranked.stream()
                     .filter(item -> item != null && item.id() != null && !usedIds.contains(item.id()))
@@ -171,9 +164,7 @@ public class ActivityPlanService {
         return start;
     }
 
-    /**
-     * 单时段规划结果：时段 + 命中活动（可能为空）+ 该时段检索用槽位。
-     */
+    /** 单时段规划结果：时段 + Java 选定活动（可能为空）+ 该时段检索用正向槽位。 */
     public record PlannedActivity(String period, ActivityItem activity, SlotBundle querySlots) {
         public boolean matched() {
             return activity != null && activity.id() != null;
