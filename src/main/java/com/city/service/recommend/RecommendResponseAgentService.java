@@ -23,8 +23,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * RecommendResponseAgent 服务（Orchestrator 推荐流水线第三层）。
- * 一次 LLM 调用同时生成 top3 推荐理由和面向用户的口语 speechText。
+ * 推荐结果表达 Agent。
+ *
+ * <p>它位于“Java 已完成检索/排序”之后，不负责决定候选池，也不允许创建候选之外的新活动；
+ * 主要工作是给已排序候选生成具体推荐理由，并把结构化结果组织成用户可直接阅读的 speechText。</p>
+ *
+ * <p>因此职责边界是：Java 决定“有哪些活动、顺序是什么、事实是什么”，LLM 决定“怎么解释这些结果”。
+ * 即使 LLM 失败，也会用确定性模板返回同一批候选，推荐主链路不会因为生成层异常而丢失结果。</p>
  */
 @Service
 public class RecommendResponseAgentService {
@@ -46,6 +51,7 @@ public class RecommendResponseAgentService {
         this.modelName = modelName;
     }
 
+    /** 无天气上下文时的便捷入口。 */
     public Result recommendAndRespond(
             String sessionId,
             String userInput,
@@ -55,6 +61,12 @@ public class RecommendResponseAgentService {
         return recommendAndRespond(sessionId, userInput, sourceMode, slots, rankedMeals, WeatherRecommendationContext.inactive());
     }
 
+    /**
+     * 为 Java 排好序的候选生成最终推荐说明。
+     *
+     * <p>这里只取前 3 个候选，并始终保持输入顺序。Agent 只能为这 3 个活动生成 reason/speechText，
+     * parseOptions 会再次按 activityId 白名单过滤模型输出，防止幻觉活动进入响应。</p>
+     */
     public Result recommendAndRespond(
             String sessionId, String userInput, SourceMode sourceMode, SlotBundle slots,
             List<ActivityItem> rankedMeals, WeatherRecommendationContext weather) {
@@ -67,6 +79,7 @@ public class RecommendResponseAgentService {
         boolean needDisclaimer = needsDisclaimer(slots);
         try {
             ReActAgent agent = agentFactory.get(sessionId).recommendResponse();
+            // 所需上下文完全由本轮 Prompt 显式提供，避免 Agent memory 里残留旧候选造成串结果。
             agent.getMemory().clear();
             Msg response = agentTraceService.callAgent(
                     sessionId,
@@ -81,6 +94,7 @@ public class RecommendResponseAgentService {
                     parsed.speechText(), toDisplayBlocks(recommend, topMeals), "WAIT_USER");
             return new Result(recommend, responseResult);
         } catch (Exception ignored) {
+            // 生成层失败时保留同一批 top3，只把理由和文本降级为 Java 模板。
             RecommendResult recommend = new RecommendResult(templateOptions(topMeals, slots), needDisclaimer);
             return new Result(
                     recommend,
@@ -89,6 +103,9 @@ public class RecommendResponseAgentService {
         }
     }
 
+    /**
+     * 构造“受约束生成”Prompt：候选活动是唯一事实源，模型不得改变候选集合或排序。
+     */
     private String buildUserPrompt(String userInput, SourceMode sourceMode, SlotBundle slots, List<ActivityItem> topMeals,
                                    WeatherRecommendationContext weather) {
         return """
@@ -124,6 +141,9 @@ public class RecommendResponseAgentService {
                 weather != null && weather.active() ? weather.summary() : "未启用天气排序");
     }
 
+    /**
+     * 解析模型输出。recommendations 负责结构化理由，speechText 为空时用模板从结构化结果重新生成。
+     */
     private ParsedOutput parseOutput(String content, List<ActivityItem> topMeals, SlotBundle slots) {
         JsonNode root = llmJsonService.parseObject(content);
         List<RecommendedActivityOption> options = parseOptions(root.path("recommendations"), topMeals, slots);
@@ -134,6 +154,12 @@ public class RecommendResponseAgentService {
         return new ParsedOutput(options, speechText);
     }
 
+    /**
+     * 用 Java 候选 ID 白名单重建最终推荐列表。
+     *
+     * <p>模型漏写理由时使用 templateReason；模型输出未知 activityId 时直接忽略；最终顺序永远按 topMeals，
+     * 所以 Agent 不能通过 JSON 改变排序结果。</p>
+     */
     private List<RecommendedActivityOption> parseOptions(JsonNode recommendationsNode, List<ActivityItem> topMeals, SlotBundle slots) {
         Map<Long, ActivityItem> byId = new LinkedHashMap<>();
         topMeals.forEach(activity -> byId.put(activity.id(), activity));
@@ -156,17 +182,22 @@ public class RecommendResponseAgentService {
         return result;
     }
 
+    /** LLM 不可用时，为全部候选生成确定性推荐理由。 */
     private List<RecommendedActivityOption> templateOptions(List<ActivityItem> topMeals, SlotBundle slots) {
         return topMeals.stream()
                 .map(activity -> toOption(activity, templateReason(activity, slots)))
                 .toList();
     }
 
+    /** 把原始 ActivityItem 与生成理由组合成对外推荐选项；活动事实仍来自 ActivityItem。 */
     private RecommendedActivityOption toOption(ActivityItem activity, String reason) {
         return new RecommendedActivityOption(
                 activity.id(), activity.sourceType(), activity.name(), reason, activity.matchScore(), activity.slots());
     }
 
+    /**
+     * 最小模板理由：只引用当前已有槽位和活动名称，不生成数据库中不存在的事实。
+     */
     private String templateReason(ActivityItem activity, SlotBundle slots) {
         if (slots != null && !slots.budget().isEmpty()) {
             return activity.name() + "比较符合你提到的" + String.join("、", slots.budget()) + "诉求。";
@@ -179,6 +210,7 @@ public class RecommendResponseAgentService {
 
     /**
      * 前端活动卡片必须以原始 ActivityItem 为事实来源；RecommendResult 只决定展示哪些活动。
+     * 这一步再次按 ID 回表式映射，可避免 LLM 生成内容污染地点、时间等卡片字段。
      */
     private List<ActivityResponse> toDisplayBlocks(RecommendResult recommendResult, List<ActivityItem> candidates) {
         if (recommendResult == null || recommendResult.recommendations() == null
@@ -198,6 +230,7 @@ public class RecommendResponseAgentService {
                 .toList();
     }
 
+    /** 把结构化推荐项拼成可直接展示的 fallback 文本。 */
     private String templateSpeech(RecommendResult recommendResult) {
         if (recommendResult == null || recommendResult.recommendations().isEmpty()) {
             return "暂时没有找到很匹配的活动，你可以补充时间段、活动类型或氛围偏好。";
@@ -212,14 +245,19 @@ public class RecommendResponseAgentService {
         return builder.toString();
     }
 
+    /**
+     * 兼容历史标签的免责声明判断。这里只影响响应文案，不影响候选检索和排序。
+     */
     private boolean needsDisclaimer(SlotBundle slots) {
         return slots != null && slots.budget().stream().anyMatch(value ->
                 value.contains("减脂") || value.contains("低糖") || value.contains("控碳水") || value.contains("养胃"));
     }
 
+    /** 同时返回结构化推荐结果和最终前端响应。 */
     public record Result(RecommendResult recommend, ResponseResult response) {
     }
 
+    /** LLM 单次调用的内部解析结果。 */
     private record ParsedOutput(List<RecommendedActivityOption> options, String speechText) {
     }
 }
