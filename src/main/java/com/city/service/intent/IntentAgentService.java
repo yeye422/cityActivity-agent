@@ -15,9 +15,6 @@ import com.city.service.trace.AgentTraceService;
 import com.city.util.LlmJsonService;
 import com.city.util.SlotJsonPicker;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
 import org.springframework.beans.factory.annotation.Value;
@@ -35,12 +32,12 @@ import java.util.Map;
 /**
  * IntentAgent 的业务适配层：把自然语言转换成 Orchestrator 可执行的结构化 Patch。
  *
- * <p>一次识别同时产出四类信息：intent、九维 slots、ConstraintOperation、TemporalMutation。
- * 这里的 slots/operations/temporal 只表达“本轮新增或修改了什么”，不会复制完整历史状态；
- * 历史状态的真正合并由 SlotMergeService、SlotMutationService、TimeResolutionService 在 Java 层完成。</p>
+ * <p>一次识别只产出三类业务信息：intent、ConstraintOperation、TemporalMutation。
+ * 九维普通条件的新增、替换、排除和取消限制全部通过 operations 表达；时间变化只通过 temporal 表达。
+ * 历史普通状态由 SlotMutationService 确定性更新，历史时间状态由 TimeResolutionService 确定性更新。</p>
  *
- * <p>LLM 负责语义理解，但不能直接制造任意槽位值：所有槽位和 operation value 都会经过
- * SlotOptionService 提供的启用字典过滤。模型调用或 JSON 结构解析失败时才进入关键词 fallback。</p>
+ * <p>LLM 不能直接制造任意槽位值：所有 operation value 都会经过 SlotOptionService 提供的启用字典过滤。
+ * 模型调用或 JSON 结构解析失败时，Java fallback 也先生成 ConstraintOperation，再进入同一 mutation 链。</p>
  */
 @Service
 public class IntentAgentService {
@@ -77,7 +74,7 @@ public class IntentAgentService {
      * @param sessionId 当前会话 ID，用于隔离 Agent 实例和 Trace
      * @param userId 当前用户 ID
      * @param userInput 本轮用户原文
-     * @param knownSlots 已持久化的九维条件，仅作为理解上下文，不要求模型复制输出
+     * @param knownSlots 已持久化的九维条件，只用于模型理解上下文
      * @param knownTimeConstraint 已持久化的时间条件
      * @param recentHistory 最近若干轮短期上下文
      * @return 本轮结构化语义 Patch
@@ -120,8 +117,7 @@ public class IntentAgentService {
     /**
      * 构造 IntentAgent 的单轮 Prompt。
      *
-     * <p>这里把当前时间、历史状态、最近对话和槽位字典都显式传给模型；同时要求输出“Patch 而非快照”，
-     * 是为了让会话状态合并规则继续由 Java 控制，避免 LLM 每轮重写整份 SessionState。</p>
+     * <p>当前已生效状态只作为理解指代的上下文；模型输出始终是本轮 Patch，而不是 SessionState 快照。</p>
      */
     private String buildUserPrompt(
             Long userId,
@@ -152,16 +148,17 @@ public class IntentAgentService {
                 当前用户消息: %s
 
                 ## 本轮输出约束
-                - 输出的是当前消息带来的语义 Patch，不复制未变化的历史条件。
-                - slots 必须完整包含九个数组字段：city、location、experienceGoal、companion、budget、activityType、style、duration、feature。
-                - location 只表示地理区域；“近地铁/交通方便”等写 feature。
-                - experienceGoal 表示用户想获得的体验，如放松/社交/解压；companion 表示同行关系。
-                - duration 只表示活动自身持续时间，如 1小时内/1-2小时/2-4小时/半天/全天；室内、少排队、交通方便等绝不能写 duration。
-                - feature 表示客观特征/便利性，如室内、户外、近地铁、少排队、交通方便。
-                - 用户自己的可用时间只写 temporal，不写 duration。
-                - operations 只能修改上述九维普通槽位；时间变化只写 temporal。
-                - 纯“换一批”必须是 MEAL_ADJUST + 空 slots + operations=[] + temporal KEEP/KEEP。
-                - 最终只输出合法 JSON，顶层只能包含 intent、slots、operations、temporal、confidence。
+                - 输出的是当前消息带来的语义 Patch，不是当前完整会话状态快照。
+                - operations 是九维普通属性唯一的状态变更协议；历史已生效值不要重复写入 operations。
+                - 普通正向新增使用 ADD；明确“改成/换成/只要”使用 SET；明确排除使用 REMOVE；明确取消限制使用 CLEAR。
+                - operations 只能使用九维字段：city、location、experienceGoal、companion、budget、activityType、style、duration、feature。
+                - operation values 只能使用可用标准标签；CLEAR 的 values 必须为 []。
+                - location 只表示地理区域；“近地铁/交通方便”等使用 feature。
+                - duration 只表示活动自身持续时间；用户自己的可用时间只写 temporal。
+                - 时间、日期、上午/下午/晚上等变化只能写 temporal，绝不能写 operations。
+                - 当前消息没有修改某个普通字段时，不为该字段生成 operation。
+                - 纯“换一批”必须是 MEAL_ADJUST + operations=[] + temporal KEEP/KEEP。
+                - 最终只输出合法 JSON，顶层只能包含 intent、operations、temporal、confidence。
                 """.formatted(
                 now.toLocalDateTime(),
                 now.toLocalDate(),
@@ -181,12 +178,9 @@ public class IntentAgentService {
     private IntentResult parseResult(String content, Map<String, List<String>> slotOptions) {
         JsonNode root = llmJsonService.parseObject(content);
         Intent intent = parseIntent(root.path("intent").asText(null));
-        JsonNode slotsNode = root.path("slots").isObject() ? root.path("slots") : root;
-        SlotBundle slots = parseSlots(slotsNode, slotOptions);
         double confidence = root.path("confidence").asDouble(0.5);
         return new IntentResult(
                 intent,
-                slots,
                 confidence,
                 parseOperations(root.path("operations"), slotOptions),
                 parseTemporal(root.path("temporal"))
@@ -236,24 +230,6 @@ public class IntentAgentService {
     }
 
     /**
-     * 解析九维槽位，并通过 SlotJsonPicker 把每个值限制在数据库启用字典中。
-     * 模型即使输出了不存在的标签，也不会进入后续 SessionState 和 SQL 检索。
-     */
-    private SlotBundle parseSlots(JsonNode node, Map<String, List<String>> options) {
-        return new SlotBundle(
-                SlotJsonPicker.pick(node, "city", options),
-                SlotJsonPicker.pick(node, "location", options),
-                SlotJsonPicker.pick(node, "experienceGoal", options),
-                SlotJsonPicker.pick(node, "companion", options),
-                SlotJsonPicker.pick(node, "budget", options),
-                SlotJsonPicker.pick(node, "activityType", options),
-                SlotJsonPicker.pick(node, "style", options),
-                SlotJsonPicker.pick(node, "duration", options),
-                SlotJsonPicker.pick(node, "feature", options)
-        );
-    }
-
-    /**
      * 解析 SET/ADD/REMOVE/CLEAR 操作。
      * 非九维字段、非法 op、没有有效 value 的非 CLEAR 操作都会被丢弃；单个坏 operation 不影响本轮其他结果。
      */
@@ -288,7 +264,6 @@ public class IntentAgentService {
     private IntentResult fallback(String userInput, Map<String, List<String>> options) {
         return new IntentResult(
                 fallbackIntent(userInput),
-                fallbackSlots(userInput, options),
                 0.2,
                 fallbackOperations(userInput, options),
                 TemporalMutation.keep(),
@@ -296,20 +271,10 @@ public class IntentAgentService {
         );
     }
 
-    /** fallback 槽位只做“原文包含某个合法字典值”的精确命中，不进行开放式语义推断。 */
-    private SlotBundle fallbackSlots(String userInput, Map<String, List<String>> options) {
-        ObjectNode node = JsonNodeFactory.instance.objectNode();
-        for (Map.Entry<String, List<String>> entry : options.entrySet()) {
-            List<String> hits = entry.getValue().stream()
-                    .filter(value -> userInput != null && userInput.contains(value))
-                    .toList();
-            ArrayNode values = node.putArray(entry.getKey());
-            hits.forEach(values::add);
-        }
-        return parseSlots(node, options);
-    }
-
-    /** 模型失败时才把少量明确的“不限/不要”表达转换成结构化 operations。 */
+    /**
+     * 模型失败时把高确定性的普通槽位语义统一转换成 operations。
+     * CLEAR/REMOVE 优先；其余原文直接命中的合法字典值按 ADD 处理，不再生成独立 slots 快照。
+     */
     private List<ConstraintOperation> fallbackOperations(String userInput, Map<String, List<String>> options) {
         String text = userInput == null ? "" : userInput.replaceAll("\\s+", "");
         if (text.isBlank()) return List.of();
@@ -321,15 +286,21 @@ public class IntentAgentService {
                 continue;
             }
             for (String value : options.getOrDefault(field, List.of())) {
-                if (text.contains("不要" + value)
-                        || text.contains("不想" + value)
-                        || text.contains("不想看" + value)
-                        || text.contains("别" + value)) {
+                if (isNegativePreference(text, value)) {
                     result.add(new ConstraintOperation(field, ConstraintOperationType.REMOVE, List.of(value), text));
+                } else if (text.contains(value)) {
+                    result.add(new ConstraintOperation(field, ConstraintOperationType.ADD, List.of(value), text));
                 }
             }
         }
         return List.copyOf(result);
+    }
+
+    private boolean isNegativePreference(String text, String value) {
+        return text.contains("不要" + value)
+                || text.contains("不想" + value)
+                || text.contains("不想看" + value)
+                || text.contains("别" + value);
     }
 
     /** fallback CLEAR 只覆盖少量高确定性表达，避免规则兜底重新变成第二套语义解析器。 */
