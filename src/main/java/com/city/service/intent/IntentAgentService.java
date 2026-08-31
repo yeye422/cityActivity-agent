@@ -32,10 +32,20 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/** IntentAgent：识别 intent、九维普通 slots、operations 和本轮 temporal mutation。 */
+/**
+ * IntentAgent 的业务适配层：把自然语言转换成 Orchestrator 可执行的结构化 Patch。
+ *
+ * <p>一次识别同时产出四类信息：intent、九维 slots、ConstraintOperation、TemporalMutation。
+ * 这里的 slots/operations/temporal 只表达“本轮新增或修改了什么”，不会复制完整历史状态；
+ * 历史状态的真正合并由 SlotMergeService、SlotMutationService、TimeResolutionService 在 Java 层完成。</p>
+ *
+ * <p>LLM 负责语义理解，但不能直接制造任意槽位值：所有槽位和 operation value 都会经过
+ * SlotOptionService 提供的启用字典过滤。模型调用或 JSON 结构解析失败时才进入关键词 fallback。</p>
+ */
 @Service
 public class IntentAgentService {
 
+    /** 相对日期解析统一以业务时区为基准，避免服务器所在时区改变“本周六/明天”的含义。 */
     private static final ZoneId TIME_ZONE = ZoneId.of("Asia/Shanghai");
 
     private final AgentFactory agentFactory;
@@ -58,6 +68,20 @@ public class IntentAgentService {
         this.modelName = modelName;
     }
 
+    /**
+     * 执行一轮意图识别。
+     *
+     * <p>链路为：加载槽位字典 → 获取会话级 IntentAgent → 清空 Agent 内存 → 构造显式上下文 Prompt
+     * → 调用模型并记录 Trace → JSON 解析/字典过滤。任何一步失败都收敛到 fallback，保证主聊天链路可继续。</p>
+     *
+     * @param sessionId 当前会话 ID，用于隔离 Agent 实例和 Trace
+     * @param userId 当前用户 ID
+     * @param userInput 本轮用户原文
+     * @param knownSlots 已持久化的九维条件，仅作为理解上下文，不要求模型复制输出
+     * @param knownTimeConstraint 已持久化的时间条件
+     * @param recentHistory 最近若干轮短期上下文
+     * @return 本轮结构化语义 Patch
+     */
     public IntentResult recognize(
             String sessionId,
             Long userId,
@@ -67,8 +91,11 @@ public class IntentAgentService {
             List<ConversationTurn> recentHistory
     ) {
         try {
+            // 字典既注入 Prompt，也用于解析后的白名单过滤，形成输入提示 + 输出约束双保险。
             Map<String, List<String>> slotOptions = slotOptionService.findAllOptions();
             ReActAgent agent = agentFactory.get(sessionId).intent();
+
+            // 历史对话由后端显式放进 Prompt；清空 Agent 自身 memory，避免出现两套上下文来源。
             agent.getMemory().clear();
             Msg response = agentTraceService.callAgent(
                     sessionId,
@@ -79,6 +106,7 @@ public class IntentAgentService {
             );
             return parseResult(response.getTextContent(), slotOptions);
         } catch (Exception ignored) {
+            // fallback 仍尽量读取数据库字典；字典服务也不可用时退化为空字典，禁止凭空制造槽位。
             Map<String, List<String>> fallbackOptions;
             try {
                 fallbackOptions = slotOptionService.findAllOptions();
@@ -89,6 +117,12 @@ public class IntentAgentService {
         }
     }
 
+    /**
+     * 构造 IntentAgent 的单轮 Prompt。
+     *
+     * <p>这里把当前时间、历史状态、最近对话和槽位字典都显式传给模型；同时要求输出“Patch 而非快照”，
+     * 是为了让会话状态合并规则继续由 Java 控制，避免 LLM 每轮重写整份 SessionState。</p>
+     */
     private String buildUserPrompt(
             Long userId,
             String sessionId,
@@ -143,6 +177,7 @@ public class IntentAgentService {
         );
     }
 
+    /** 将模型 JSON 统一转换成 IntentResult；任一关键结构异常会抛出并由 recognize() 进入 fallback。 */
     private IntentResult parseResult(String content, Map<String, List<String>> slotOptions) {
         JsonNode root = llmJsonService.parseObject(content);
         Intent intent = parseIntent(root.path("intent").asText(null));
@@ -158,6 +193,9 @@ public class IntentAgentService {
         );
     }
 
+    /**
+     * 解析模型的 temporal Patch。结构非法时返回 KEEP/KEEP，后续 TimeResolutionService 再结合原文决定是否 fallback/澄清。
+     */
     private TemporalMutation parseTemporal(JsonNode node) {
         if (node == null || !node.isObject()) return TemporalMutation.keep();
         try {
@@ -197,6 +235,10 @@ public class IntentAgentService {
         return Intent.valueOf(rawIntent);
     }
 
+    /**
+     * 解析九维槽位，并通过 SlotJsonPicker 把每个值限制在数据库启用字典中。
+     * 模型即使输出了不存在的标签，也不会进入后续 SessionState 和 SQL 检索。
+     */
     private SlotBundle parseSlots(JsonNode node, Map<String, List<String>> options) {
         return new SlotBundle(
                 SlotJsonPicker.pick(node, "city", options),
@@ -211,6 +253,10 @@ public class IntentAgentService {
         );
     }
 
+    /**
+     * 解析 SET/ADD/REMOVE/CLEAR 操作。
+     * 非九维字段、非法 op、没有有效 value 的非 CLEAR 操作都会被丢弃；单个坏 operation 不影响本轮其他结果。
+     */
     private List<ConstraintOperation> parseOperations(JsonNode node, Map<String, List<String>> options) {
         if (node == null || !node.isArray()) return List.of();
         List<ConstraintOperation> result = new ArrayList<>();
@@ -230,11 +276,15 @@ public class IntentAgentService {
         return List.copyOf(result);
     }
 
+    /** SlotJsonPicker 固定读取 values 字段，因此把某一维字典包装成其期望的 Map 结构。 */
     private Map<String, List<String>> optionsFor(String field, Map<String, List<String>> options) {
         return Map.of("values", options.getOrDefault(field, List.of()));
     }
 
-    /** 仅在 Agent 调用或结构解析失败后执行。 */
+    /**
+     * 仅在 Agent 调用或结构解析失败后执行的保底结果。
+     * fallback=true 会被后续 Trace/评估识别，避免把规则兜底当成正常模型能力。
+     */
     private IntentResult fallback(String userInput, Map<String, List<String>> options) {
         return new IntentResult(
                 fallbackIntent(userInput),
@@ -246,6 +296,7 @@ public class IntentAgentService {
         );
     }
 
+    /** fallback 槽位只做“原文包含某个合法字典值”的精确命中，不进行开放式语义推断。 */
     private SlotBundle fallbackSlots(String userInput, Map<String, List<String>> options) {
         ObjectNode node = JsonNodeFactory.instance.objectNode();
         for (Map.Entry<String, List<String>> entry : options.entrySet()) {
@@ -281,6 +332,7 @@ public class IntentAgentService {
         return List.copyOf(result);
     }
 
+    /** fallback CLEAR 只覆盖少量高确定性表达，避免规则兜底重新变成第二套语义解析器。 */
     private boolean fallbackClear(String text, String field) {
         return switch (field) {
             case "city" -> text.contains("城市不限") || text.contains("地点不限");
@@ -294,7 +346,10 @@ public class IntentAgentService {
         };
     }
 
-    /** 关键词 Intent 判断只存在于模型失败后的 fallback 路径。 */
+    /**
+     * 关键词 Intent 判断只存在于模型失败后的 fallback 路径。
+     * 这里优先保证系统能继续路由，而不是追求与主模型同等的语义覆盖率。
+     */
     private Intent fallbackIntent(String userInput) {
         if (userInput == null || userInput.isBlank()) return Intent.CLARIFY_NEEDED;
         if (containsAny(userInput, "危险", "偏远", "深夜独自", "违法", "未成年人进入")) return Intent.HEALTH_RISK;
@@ -309,6 +364,7 @@ public class IntentAgentService {
         return Intent.CLARIFY_NEEDED;
     }
 
+    /** fallback 中识别少量明确的“需要多时段规划”表达。 */
     private boolean containsActivityPlanSignal(String userInput) {
         if (userInput == null || userInput.isBlank()) return false;
         String text = userInput.replaceAll("\\s+", "");
