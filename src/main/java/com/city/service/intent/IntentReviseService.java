@@ -38,6 +38,12 @@ public class IntentReviseService {
         // 模型异常返回 null 时统一转成 CLARIFY，防止后续链路出现空指针。
         IntentResult safeResult = result == null ? IntentResult.clarify() : result;
 
+        //        用户说“换一批”
+        //→ IntentAgent 理想输出 MEAL_ADJUST
+        //→ IntentReviseService.isPureBatchRefresh(userInput)
+        //→ Java 再次确认这是纯换批
+        //→ 强制清空 slots / operations / temporal
+        //→ 只保留“刷新结果集”
         // “换一批”是确定性的结果集操作，不允许模型顺带修改普通槽位或时间条件。
         if (isPureBatchRefresh(userInput)) {
             Intent targetIntent = hasLastRecommendations(state)

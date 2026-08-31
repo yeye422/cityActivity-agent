@@ -202,6 +202,7 @@ public class CityOrchestratorService {
     private ChatResponse handleTurn(Long userId, ChatRequest request, String traceId, SessionState state) {
         String sessionId = state.sessionId();
         SlotBundle contextSlots = contextSlots(request.context());
+//        合并请求上下文里的 city/location
         if (!contextSlots.isEmpty()) {
             state = applyContextSlots(state, contextSlots);
             agentTraceService.recordEvent("CONTEXT_SLOTS_APPLIED", "SLOT", request.context(), contextSlots);
@@ -210,6 +211,7 @@ public class CityOrchestratorService {
         sessionService.appendMessage(sessionId, "user", request.message(), null, traceId);
         agentTraceService.recordEvent("USER_MESSAGE_RECORDED", "SESSION", request.message(), Map.of("sessionId", sessionId, "sourceMode", sourceMode));
 
+//        PERSONAL 无数据时降级 PUBLIC
         boolean publicFallbackUsed = false;
         if (sourceMode == SourceMode.PERSONAL && !activityService.hasPersonalActivities(userId)) {
             agentTraceService.recordEvent("PERSONAL_LIBRARY_EMPTY_FALLBACK_TO_PUBLIC", "ROUTE",
@@ -219,6 +221,10 @@ public class CityOrchestratorService {
             publicFallbackUsed = true;
         }
 
+//        当前用户消息
+//                + 当前已经生效的九维槽位
+//                + 当前已经生效的时间条件
+//                + 最近 3 条对话历史
         IntentResult rawIntent = intentAgentService.recognize(
                 sessionId,
                 userId,
@@ -234,6 +240,7 @@ public class CityOrchestratorService {
                 state.timeConstraint(), intent.temporal(), request.message());
         agentTraceService.recordEvent("TIME_RESOLUTION_DECIDED", "TIME", intent.temporal(), timeResolution);
 
+//        检测用户是不是明显提到了时间。
         if (timeResolution.needsClarification() && isActivityFlow(intent.intent())) {
             agentTraceService.recordEvent("TIME_PARSE_CLARIFY", "TIME", request.message(), timeResolution);
             SessionState clarifyState = state.withIntent(intent.intent());
@@ -244,6 +251,7 @@ public class CityOrchestratorService {
         }
 
         if (timeResolution.shouldUpdateState()) {
+//            新的时间状态
             state = state.withTimeConstraint(timeResolution.timeConstraint());
             if (timeResolution.status() == TimeResolutionResult.Status.JAVA_FALLBACK) {
                 agentTraceService.recordEvent("TIME_PARSE_FALLBACK", "TIME", request.message(), timeResolution.timeConstraint());
@@ -327,6 +335,17 @@ public class CityOrchestratorService {
         return mutation;
     }
 
+//    旧 SessionState
+//   +
+//    IntentResult.operations
+//   ↓
+//    SlotMutationService
+//   ↓
+//    新的槽位状态
+//   ↓
+//    检查是否需要澄清
+//   ├─ 缺条件 → completeAsk()
+//   └─ 条件够了 → completeRecommendation()
     private ChatResponse handleRecommendation(String sessionId, Long userId, String userInput, String traceId,
                                               SessionState state, IntentResult intent, boolean publicFallbackUsed) {
         SlotMutation mutation = applySlotMutation(state, intent);
@@ -588,6 +607,14 @@ public class CityOrchestratorService {
         return completeTextOnly(sessionId, traceId, state, Intent.OTHER, response);
     }
 
+//    天气上下文
+//→ 活动召回（结合检索条件查询数据库）
+//→ 排序 + 多样性重排
+//→ 无结果 fallback / 放宽条件
+//→ ResponseAgent 生成推荐表达
+//→ 风险检查
+//→ 保存推荐结果和会话状态
+//→ 返回 ChatResponse
     private ChatResponse completeRecommendation(String sessionId, Long userId, String userInput, String traceId,
                                                 SessionState state, List<Long> excludeActivityIds) {
         return completeRecommendation(sessionId, userId, userInput, traceId, state, excludeActivityIds, null, false);
