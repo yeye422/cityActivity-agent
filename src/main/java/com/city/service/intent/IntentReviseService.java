@@ -4,7 +4,6 @@ import com.city.enums.Intent;
 import com.city.enums.SessionPhase;
 import com.city.model.IntentResult;
 import com.city.model.SessionState;
-import com.city.model.SlotBundle;
 import com.city.model.TemporalMutation;
 import org.springframework.stereotype.Service;
 
@@ -37,7 +36,7 @@ public class IntentReviseService {
      */
     public IntentResult revise(SessionState state, IntentResult result, String userInput) {
         // 模型异常返回 null 时统一转成 CLARIFY，防止后续链路出现空指针。
-        IntentResult safeResult = result == null ? IntentResult.clarify(SlotBundle.empty()) : result;
+        IntentResult safeResult = result == null ? IntentResult.clarify() : result;
 
         // “换一批”是确定性的结果集操作，不允许模型顺带修改普通槽位或时间条件。
         if (isPureBatchRefresh(userInput)) {
@@ -105,13 +104,12 @@ public class IntentReviseService {
     }
 
     /**
-     * 纯换批必须清空模型产生的 slots / operations / temporal 变更，只保留“刷新结果集”这一件事。
-     * 否则模型偶然抽出的槽位会污染上一轮条件，导致“换一批”实际变成“修改条件后重搜”。
+     * 纯换批必须清空模型产生的 operations / temporal 变更，只保留“刷新结果集”这一件事。
+     * 否则模型偶然抽出的约束 Patch 会污染上一轮条件，导致“换一批”实际变成“修改条件后重搜”。
      */
     private IntentResult batchRefresh(Intent intent, IntentResult result) {
         return new IntentResult(
                 intent,
-                SlotBundle.empty(),
                 Math.max(result.confidence(), BATCH_REFRESH_CONFIDENCE),
                 List.of(),
                 TemporalMutation.keep(),
@@ -119,19 +117,13 @@ public class IntentReviseService {
         );
     }
 
-    /** 对可能为空的模型槽位做防御性归一化。 */
-    private SlotBundle safeSlots(IntentResult result) {
-        return result.slots() == null ? SlotBundle.empty() : result.slots();
-    }
-
     /**
-     * 只替换 Intent，本轮已经识别出的 slots / operations / temporal 保持不变。
+     * 只替换 Intent，本轮已经识别出的 operations / temporal 保持不变。
      * 用于“语义基本正确，但受会话状态约束需要切换路由”的场景。
      */
     private IntentResult revised(Intent intent, IntentResult result) {
         return new IntentResult(
                 intent,
-                safeSlots(result),
                 result.confidence(),
                 result.operations() == null ? List.of() : result.operations(),
                 result.temporal() == null ? TemporalMutation.keep() : result.temporal(),
