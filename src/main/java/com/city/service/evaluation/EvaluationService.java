@@ -175,7 +175,7 @@ public class EvaluationService {
         metrics.put("timeConstraintAccuracy", timeAccuracy(row.getLabelNote(), snapshot.timeRaw()));
         metrics.put("missingSlotAccuracy", missingSlotAccuracy(row.getLabelNote(), snapshot.missingSlots()));
 
-        // includeJudge=true 时调用 EvaluationJudgeAgent，否则 Judge 维度不参与总分。
+        // includeJudge=true 时调用 LLM as Judge，否则 Judge 维度不参与总分。
         EvaluationJudgeResult judge = includeJudge
                 // Judge 输入只给 trace 摘要，不访问线上系统或额外数据。
                 ? evaluationJudgeService.judge(row.getTraceId(), row.getSessionId(), buildJudgeInput(snapshot))
@@ -307,7 +307,7 @@ public class EvaluationService {
         List<String> operations = List.of();
         String timeRaw = null;
         List<String> missingSlots = List.of();
-        // 最终槽位，优先取 SLOTS_MERGED，其次取 INTENT_REVISED.slots。
+        // 最终槽位只取 SLOT_MUTATION_APPLIED 的确定性状态结果。
         Map<String, List<String>> slots = Map.of();
 
         // trace_json 的根节点里 events 数组保存了本轮请求的全部链路事件。
@@ -337,16 +337,10 @@ public class EvaluationService {
                 if ("INTENT_REVISED".equals(eventType)) {
                     // 读取修正后的 intent，如果字段缺失则保留已有值。
                     intent = output.path("intent").asText(intent);
-                    // 有些 trace 会在 INTENT_REVISED 里带 slots，作为槽位备选来源。
-                    if (output.has("slots")) {
-                        // 将 slots JSON 归一成 Map<String, List<String>>。
-                        slots = slots(output.path("slots"));
-                    }
                     operations = operationKeys(output.path("operations"));
-                // SLOTS_MERGED 是历史槽位和本轮槽位合并后的最终槽位。
-                } else if ("SLOTS_MERGED".equals(eventType)) {
-                    // 用合并后的槽位覆盖前面的备选槽位。
-                    slots = slots(output);
+                // SLOT_MUTATION_APPLIED 是 operations 执行后的最终九维状态。
+                } else if ("SLOT_MUTATION_APPLIED".equals(eventType)) {
+                    slots = slots(output.path("resultSlots"));
                 // CLARIFY_DECISION 记录澄清节点 ASK/READY 的结构化结果。
                 } else if ("CLARIFY_DECISION".equals(eventType)) {
                     // 提取 clarify action，用于和 expected_clarify_action 比较。
@@ -481,7 +475,7 @@ public class EvaluationService {
         int compared = 0;
         // matched 统计预测完全匹配的槽位数量。
         int matched = 0;
-        // 遍历 7 个标准槽位逐项比较。
+        // 遍历九个标准槽位逐项比较。
         for (String slotName : SLOT_NAMES) {
             // 取出当前槽位的人工标注值。
             List<String> expected = expectedSlots.getOrDefault(slotName, List.of());
@@ -688,7 +682,7 @@ public class EvaluationService {
     }
 
     private Map<String, List<String>> slots(JsonNode node) {
-        // 创建槽位 Map，key 固定为 7 个标准槽位。
+        // 创建槽位 Map，key 固定为九个标准槽位。
         Map<String, List<String>> slots = new HashMap<>();
         // 遍历标准槽位名，避免输出里出现非标准字段。
         for (String slotName : SLOT_NAMES) {
