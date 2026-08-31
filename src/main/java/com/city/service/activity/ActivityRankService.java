@@ -16,15 +16,13 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 活动相关性重排服务（Orchestrator 推荐流水线第二层）。
- * Search 负责硬约束召回；这里融合九维槽位、时间窗口适配和天气上下文。
+ * 活动重排服务（Orchestrator 推荐流水线第二层）。
+ * Search 已负责九维正负约束等硬条件过滤；这里不再重复计算槽位匹配分，
+ * 只处理历史推荐 ID 排除、时间窗口适配和天气上下文调整。
  */
 @Service
 public class ActivityRankService {
     private static final int MAX_RANKED_CANDIDATES = 10;
-    private static final double SLOT_WEIGHT_WITH_TIME = 0.80;
-    private static final double TIME_WEIGHT = 0.20;
-    private static final List<String> BUDGET_ORDER = List.of("免费", "100元内", "200元内", "300元内");
 
     public ActivityRankResult rank(ActivityRankRequest request) {
         return rank(request, WeatherRecommendationContext.inactive());
@@ -40,7 +38,7 @@ public class ActivityRankService {
 
         List<ScoredActivity> scored = request.candidates().stream()
                 .filter(item -> item != null && !excludeIds.contains(item.id()))
-                .map(item -> score(item, request.slots(), request.timeConstraint(), weather))
+                .map(item -> score(item, request.timeConstraint(), weather))
                 .sorted(Comparator
                         .comparingDouble((ScoredActivity item) -> item.score().finalScore()).reversed()
                         .thenComparing(item -> item.activity().id(), Comparator.nullsLast(Long::compareTo)))
@@ -53,14 +51,13 @@ public class ActivityRankService {
     }
 
     private ScoredActivity score(ActivityItem item,
-                                 SlotBundle query,
                                  TimeConstraint timeConstraint,
                                  WeatherRecommendationContext weather) {
-        double slotScore = slotScore(item.slots(), query);
         Double timeScore = timeScore(item, timeConstraint);
-        double relevance = combineRelevance(slotScore, timeScore, hasActiveSlot(query));
-        double weatherAdjusted = weatherScore(relevance, item.slots(), weather);
-        double weatherAdjustment = weatherAdjusted - relevance;
+        // Search 已保证候选满足九维硬约束；没有具体时段时所有候选使用相同中性基准分。
+        double baseScore = timeScore == null ? 1.0 : clamp(timeScore);
+        double weatherAdjusted = weatherScore(baseScore, item.slots(), weather);
+        double weatherAdjustment = weatherAdjusted - baseScore;
 
         ActivityItem rankedItem = new ActivityItem(
                 item.id(), item.sourceType(), item.ownerUserId(), item.name(), item.slots(),
@@ -70,14 +67,8 @@ public class ActivityRankService {
                 ? WeatherRecommendationContext.Status.NOT_REQUESTED
                 : weather.status();
         ActivityRankScore breakdown = new ActivityRankScore(
-                item.id(), slotScore, timeScore, weatherAdjustment, weatherAdjusted, weatherStatus);
+                item.id(), timeScore, weatherAdjustment, weatherAdjusted, weatherStatus);
         return new ScoredActivity(rankedItem, breakdown);
-    }
-
-    private double combineRelevance(double slotScore, Double timeScore, boolean hasActiveSlot) {
-        if (timeScore == null) return slotScore;
-        if (!hasActiveSlot) return clamp(timeScore);
-        return clamp(slotScore * SLOT_WEIGHT_WITH_TIME + timeScore * TIME_WEIGHT);
     }
 
     /**
@@ -121,80 +112,21 @@ public class ActivityRankService {
         return time.getHour() * 60 + time.getMinute();
     }
 
-    private double weatherScore(double relevanceScore, SlotBundle item, WeatherRecommendationContext weather) {
-        if (weather == null || !weather.active() || item == null) return relevanceScore;
+    private double weatherScore(double baseScore, SlotBundle item, WeatherRecommendationContext weather) {
+        if (weather == null || !weather.active() || item == null) return baseScore;
         Set<String> features = Set.copyOf(item.feature() == null ? List.of() : item.feature());
         if (features.contains("室内")) {
-            return clamp(relevanceScore * 0.88 + 0.12);
+            return clamp(baseScore * 0.88 + 0.12);
         }
         if (features.contains("户外") || features.contains("室外")) {
-            return clamp(relevanceScore * 0.82);
+            return clamp(baseScore * 0.82);
         }
-        return relevanceScore;
-    }
-
-    /** 计算活动九维 slots 与查询 slots 的有效维度平均重叠比例。 */
-    private double slotScore(SlotBundle item, SlotBundle query) {
-        SlotBundle safeItem = item == null ? SlotBundle.empty() : item;
-        SlotBundle safeQuery = query == null ? SlotBundle.empty() : query;
-        double total = 0.0;
-        int dimensions = 0;
-        ScorePart[] parts = {
-                scorePart(safeItem.city(), safeQuery.city()),
-                scorePart(safeItem.location(), safeQuery.location()),
-                scorePart(safeItem.experienceGoal(), safeQuery.experienceGoal()),
-                scorePart(safeItem.companion(), safeQuery.companion()),
-                budgetScorePart(safeItem.budget(), safeQuery.budget()),
-                scorePart(safeItem.activityType(), safeQuery.activityType()),
-                scorePart(safeItem.style(), safeQuery.style()),
-                scorePart(safeItem.duration(), safeQuery.duration()),
-                scorePart(safeItem.feature(), safeQuery.feature())
-        };
-        for (ScorePart part : parts) {
-            if (part.active()) {
-                total += part.score();
-                dimensions++;
-            }
-        }
-        return dimensions == 0 ? 0 : clamp(total / dimensions);
-    }
-
-    private boolean hasActiveSlot(SlotBundle query) {
-        return query != null && !query.isEmpty();
-    }
-
-    private ScorePart scorePart(List<String> itemValues, List<String> queryValues) {
-        return new ScorePart(queryValues != null && !queryValues.isEmpty(), overlap(itemValues, queryValues));
-    }
-
-    private ScorePart budgetScorePart(List<String> itemBudgets, List<String> queryBudgets) {
-        if (queryBudgets == null || queryBudgets.isEmpty()) return new ScorePart(false, 0.0);
-        int queryMax = maxBudgetIndex(queryBudgets);
-        if (queryMax < 0) return new ScorePart(true, overlap(itemBudgets, queryBudgets));
-        if (itemBudgets == null || itemBudgets.isEmpty()) return new ScorePart(true, 0.0);
-        boolean withinLimit = itemBudgets.stream()
-                .mapToInt(BUDGET_ORDER::indexOf)
-                .anyMatch(index -> index >= 0 && index <= queryMax);
-        return new ScorePart(true, withinLimit ? 1.0 : 0.0);
-    }
-
-    private int maxBudgetIndex(List<String> budgets) {
-        int max = -1;
-        for (String budget : budgets) max = Math.max(max, BUDGET_ORDER.indexOf(budget));
-        return max;
-    }
-
-    private double overlap(List<String> itemValues, List<String> queryValues) {
-        if (queryValues == null || queryValues.isEmpty()) return 0;
-        Set<String> itemSet = Set.copyOf(itemValues == null ? List.of() : itemValues);
-        long hits = queryValues.stream().filter(itemSet::contains).count();
-        return hits * 1.0 / queryValues.size();
+        return baseScore;
     }
 
     private double clamp(double score) {
         return Math.max(0, Math.min(1, score));
     }
 
-    private record ScorePart(boolean active, double score) {}
     private record ScoredActivity(ActivityItem activity, ActivityRankScore score) {}
 }
