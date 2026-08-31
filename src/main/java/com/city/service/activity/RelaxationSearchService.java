@@ -11,11 +11,17 @@ import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
 import org.springframework.stereotype.Service;
 
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 严格条件无结果时的候选回退策略。
  * 城市、区域、时间、预算、活动类型以及所有显式排除条件保持不变；只逐层放宽正向偏好槽位。
+ *
+ * <p>通用 Rank 不再重复计算九维槽位分；只有本服务主动放宽的字段，才在这里按原始偏好覆盖度
+ * 对相近结果做二次排序，从而保持“放宽后仍尽量接近原需求”的语义。</p>
  */
 @Service
 public class RelaxationSearchService {
@@ -61,7 +67,14 @@ public class RelaxationSearchService {
                         sourceMode, userId, query, excludeActivityIds, timeConstraint, excluded));
         ActivityRankResult rankResult = activityRankService.rank(
                 new ActivityRankRequest(candidates, original, timeConstraint, excludeActivityIds));
-        return new SearchResult(level, labelFor(level), relaxedSlotsFor(level), query, rankResult.ranked());
+
+        // Rank 先处理历史 ID、时间和天气；Relaxation 再只比较本轮被放宽字段与原始偏好的接近程度。
+        // Stream.sorted 对有序流是稳定排序，因此接近度相同时保留 Rank 已确定的顺序。
+        List<ActivityItem> ranked = rankResult.ranked().stream()
+                .sorted(Comparator.comparingDouble(
+                        (ActivityItem item) -> relaxedPreferenceCoverage(item, original, level)).reversed())
+                .toList();
+        return new SearchResult(level, labelFor(level), relaxedSlotsFor(level), query, ranked);
     }
 
     /**
@@ -81,6 +94,39 @@ public class RelaxationSearchService {
                 broad ? List.of() : slots.duration(),
                 slots.feature()
         );
+    }
+
+    /** 只对当前 level 真正放宽的字段计算原始偏好覆盖度，避免和 Search 的硬约束重复评分。 */
+    private double relaxedPreferenceCoverage(ActivityItem item, SlotBundle original, int level) {
+        if (item == null || item.slots() == null || original == null) return 0.0;
+        SlotBundle actual = item.slots();
+        double total = 0.0;
+        int dimensions = 0;
+
+        if (!original.experienceGoal().isEmpty()) {
+            total += overlap(actual.experienceGoal(), original.experienceGoal());
+            dimensions++;
+        }
+        if (!original.style().isEmpty()) {
+            total += overlap(actual.style(), original.style());
+            dimensions++;
+        }
+        if (level >= 2 && !original.companion().isEmpty()) {
+            total += overlap(actual.companion(), original.companion());
+            dimensions++;
+        }
+        if (level >= 2 && !original.duration().isEmpty()) {
+            total += overlap(actual.duration(), original.duration());
+            dimensions++;
+        }
+        return dimensions == 0 ? 0.0 : total / dimensions;
+    }
+
+    private double overlap(List<String> actual, List<String> expected) {
+        if (expected == null || expected.isEmpty()) return 0.0;
+        Set<String> actualSet = new HashSet<>(actual == null ? List.of() : actual);
+        long hits = expected.stream().filter(actualSet::contains).count();
+        return hits * 1.0 / expected.size();
     }
 
     private String labelFor(int level) {
