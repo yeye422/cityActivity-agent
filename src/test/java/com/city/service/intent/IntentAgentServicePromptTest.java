@@ -10,6 +10,7 @@ import java.time.LocalTime;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -20,7 +21,7 @@ class IntentAgentServicePromptTest {
         IntentAgentService service = new IntentAgentService(null, null, null, null, "qwen-turbo");
         SlotBundle knownSlots = new SlotBundle(
                 List.of("西安"), List.of(), List.of(), List.of(),
-                List.of(), List.of(), List.of(), List.of());
+                List.of(), List.of(), List.of(), List.of(), List.of());
         TimeConstraint knownTime = new TimeConstraint(
                 "下午到晚上",
                 null,
@@ -43,10 +44,11 @@ class IntentAgentServicePromptTest {
 
         assertNotNull(prompt);
         assertTrue(prompt.contains("不是当前完整会话状态快照"));
-        assertTrue(prompt.contains("历史普通条件和历史时间条件只用于理解指代"));
-        assertTrue(prompt.contains("历史已生效值不要抄入本轮 slots"));
-        assertTrue(prompt.contains("CLEAR 表示用户明确取消该字段限制，values 必须为 []"));
-        assertTrue(prompt.contains("当前用户只说“不限”，则 city 不要复制到 slots"));
-        assertTrue(prompt.contains("temporal 必须 KEEP/KEEP"));
+        assertTrue(prompt.contains("operations 是九维普通属性唯一的状态变更协议"));
+        assertTrue(prompt.contains("历史已生效值不要重复写入 operations"));
+        assertTrue(prompt.contains("普通正向新增使用 ADD"));
+        assertTrue(prompt.contains("CLEAR 的 values 必须为 []"));
+        assertTrue(prompt.contains("纯“换一批”必须是 MEAL_ADJUST + operations=[] + temporal KEEP/KEEP"));
+        assertFalse(prompt.contains("顶层只能包含 intent、slots"));
     }
 }
