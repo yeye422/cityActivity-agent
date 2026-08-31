@@ -70,14 +70,46 @@ class IntentAgentServiceOperationTest {
     @Test
     void fallbackShouldCreateRemoveOperationForExplicitNegativePreference() {
         Map<String, List<String>> options = Map.of(
-                "duration", List.of("户外", "室内", "半天", "全天"));
+                "feature", List.of("户外", "室内", "近地铁"));
 
         List<ConstraintOperation> result = ReflectionTestUtils.invokeMethod(
                 service, "fallbackOperations", "不要户外", options);
 
         assertEquals(1, result.size());
-        assertEquals("duration", result.getFirst().field());
+        assertEquals("feature", result.getFirst().field());
         assertEquals(ConstraintOperationType.REMOVE, result.getFirst().op());
         assertEquals(List.of("户外"), result.getFirst().values());
+    }
+
+    @Test
+    void fallbackShouldCreateAddOperationForPositiveDictionaryHit() {
+        Map<String, List<String>> options = Map.of(
+                "city", List.of("西安", "上海"),
+                "feature", List.of("室内", "户外"));
+
+        List<ConstraintOperation> result = ReflectionTestUtils.invokeMethod(
+                service, "fallbackOperations", "上海室内的", options);
+
+        assertEquals(2, result.size());
+        assertTrue(result.stream().anyMatch(operation ->
+                operation.field().equals("city")
+                        && operation.op() == ConstraintOperationType.ADD
+                        && operation.values().equals(List.of("上海"))));
+        assertTrue(result.stream().anyMatch(operation ->
+                operation.field().equals("feature")
+                        && operation.op() == ConstraintOperationType.ADD
+                        && operation.values().equals(List.of("室内"))));
+    }
+
+    @Test
+    void negativeFallbackHitShouldNotAlsoCreateAddOperation() {
+        Map<String, List<String>> options = Map.of(
+                "feature", List.of("户外", "室内"));
+
+        List<ConstraintOperation> result = ReflectionTestUtils.invokeMethod(
+                service, "fallbackOperations", "不要户外", options);
+
+        assertEquals(1, result.size());
+        assertEquals(ConstraintOperationType.REMOVE, result.getFirst().op());
     }
 }
