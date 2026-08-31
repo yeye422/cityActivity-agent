@@ -1,12 +1,13 @@
 package com.city.service.intent;
 
 import com.city.enums.ClarifyField;
+import com.city.enums.ConstraintOperationType;
 import com.city.enums.Intent;
 import com.city.enums.SessionPhase;
 import com.city.enums.SourceMode;
+import com.city.model.ConstraintOperation;
 import com.city.model.IntentResult;
 import com.city.model.SessionState;
-import com.city.model.SlotBundle;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -25,15 +26,14 @@ class IntentReviseServiceTest {
                 .withPhase(SessionPhase.CLARIFY)
                 .withPendingClarifyField(ClarifyField.CITY);
 
-        SlotBundle cityOnly = new SlotBundle(
-                List.of("西安"), List.of(), List.of(), List.of(),
-                List.of(), List.of(), List.of(), List.of(), List.of());
-        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, cityOnly, 0.95, List.of());
+        ConstraintOperation cityAdd = new ConstraintOperation(
+                "city", ConstraintOperationType.ADD, List.of("西安"), "西安");
+        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, 0.95, List.of(cityAdd));
 
         IntentResult revised = service.revise(state, raw, "西安");
 
         assertEquals(Intent.ACTIVITY_PLAN, revised.intent());
-        assertEquals(List.of("西安"), revised.slots().city());
+        assertEquals(List.of(cityAdd), revised.operations());
     }
 
     @Test
@@ -41,7 +41,7 @@ class IntentReviseServiceTest {
         SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
                 .withIntent(Intent.ACTIVITY_PLAN)
                 .withPhase(SessionPhase.CLARIFY);
-        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.95, List.of());
+        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, 0.95, List.of());
 
         IntentResult revised = service.revise(state, raw, "西安");
 
@@ -53,7 +53,7 @@ class IntentReviseServiceTest {
         SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
                 .withPhase(SessionPhase.CLARIFY)
                 .withPendingClarifyField(ClarifyField.CITY);
-        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.95, List.of());
+        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, 0.95, List.of());
 
         IntentResult revised = service.revise(state, raw, "西安");
 
@@ -62,7 +62,7 @@ class IntentReviseServiceTest {
 
     @Test
     void shouldRespectSuccessfulModelPlanEvenWhenTextLooksLikeSingleActivity() {
-        IntentResult raw = new IntentResult(Intent.ACTIVITY_PLAN, SlotBundle.empty(), 0.95, List.of());
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_PLAN, 0.95, List.of());
 
         IntentResult revised = service.revise(null, raw, "想找个半天的展览");
 
@@ -72,7 +72,7 @@ class IntentReviseServiceTest {
 
     @Test
     void shouldRespectSuccessfulModelRecommendationEvenWhenTextContainsPlanningWords() {
-        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.95, List.of());
+        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, 0.95, List.of());
 
         IntentResult revised = service.revise(null, raw, "帮我安排周六一天");
 
@@ -81,7 +81,7 @@ class IntentReviseServiceTest {
 
     @Test
     void shouldNotOverrideRecommendationWithSafetyKeywordsWhenModelSucceeded() {
-        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.95, List.of());
+        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, 0.95, List.of());
 
         IntentResult revised = service.revise(null, raw, "暴雨天推荐几个室内展览");
 
@@ -90,7 +90,7 @@ class IntentReviseServiceTest {
 
     @Test
     void shouldNotForceClarificationOnlyBecauseConfidenceIsLow() {
-        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), 0.2, List.of());
+        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, 0.2, List.of());
 
         IntentResult revised = service.revise(null, raw, "上海看展");
 
