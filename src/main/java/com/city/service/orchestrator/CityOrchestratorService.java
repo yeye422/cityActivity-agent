@@ -39,7 +39,6 @@ import com.city.service.recommend.RecommendResponseAgentService;
 import com.city.service.risk.RiskGuardService;
 import com.city.service.session.SessionService;
 import com.city.service.session.SessionStateService;
-import com.city.service.slot.SlotMergeService;
 import com.city.service.slot.SlotMutationService;
 import com.city.service.slot.SlotOptionService;
 import com.city.service.time.TimeResolutionService;
@@ -66,7 +65,6 @@ public class CityOrchestratorService {
     private final SessionStateService sessionStateService;
     private final IntentAgentService intentAgentService;
     private final IntentReviseService intentReviseService;
-    private final SlotMergeService slotMergeService;
     private final SlotOptionService slotOptionService;
     private final SlotMutationService slotMutationService;
     private final ClarifyRuleService clarifyRuleService;
@@ -89,7 +87,6 @@ public class CityOrchestratorService {
             SessionStateService sessionStateService,
             IntentAgentService intentAgentService,
             IntentReviseService intentReviseService,
-            SlotMergeService slotMergeService,
             SlotOptionService slotOptionService,
             SlotMutationService slotMutationService,
             ClarifyRuleService clarifyRuleService,
@@ -110,7 +107,6 @@ public class CityOrchestratorService {
         this.sessionStateService = sessionStateService;
         this.intentAgentService = intentAgentService;
         this.intentReviseService = intentReviseService;
-        this.slotMergeService = slotMergeService;
         this.slotOptionService = slotOptionService;
         this.slotMutationService = slotMutationService;
         this.clarifyRuleService = clarifyRuleService;
@@ -314,15 +310,27 @@ public class CityOrchestratorService {
         return value == null ? "" : String.valueOf(value).trim();
     }
 
+    /** 九维普通条件只通过 operations 修改，所有推荐/调整/规划分支共用同一执行入口。 */
+    private SlotMutation applySlotMutation(SessionState state, IntentResult intent) {
+        SlotMutation mutation = slotMutationService.apply(
+                intent.operations(), state.slots(), state.excludedSlots(), state.unconstrainedSlots());
+        agentTraceService.recordEvent("SLOT_MUTATION_APPLIED", "SLOT",
+                traceMap(
+                        "stateSlots", state.slots(),
+                        "stateExcludedSlots", state.excludedSlots(),
+                        "stateUnconstrainedSlots", state.unconstrainedSlots(),
+                        "operations", intent.operations()),
+                traceMap(
+                        "resultSlots", mutation.included(),
+                        "resultExcludedSlots", mutation.excluded(),
+                        "resultUnconstrainedSlots", mutation.unconstrained()));
+        return mutation;
+    }
+
     private ChatResponse handleRecommendation(String sessionId, Long userId, String userInput, String traceId,
                                               SessionState state, IntentResult intent, boolean publicFallbackUsed) {
-        SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
-        SlotMutation mutation = slotMutationService.apply(
-                intent.operations(), userInput, mergedSlots, state.excludedSlots(), state.unconstrainedSlots());
-        mergedSlots = mutation.included();
-        agentTraceService.recordEvent("SLOTS_MERGED", "SLOT",
-                traceMap("stateSlots", state.slots(), "intentSlots", intent.slots()),
-                traceMap("mergedSlots", mergedSlots, "unconstrainedSlots", mutation.unconstrained()));
+        SlotMutation mutation = applySlotMutation(state, intent);
+        SlotBundle mergedSlots = mutation.included();
 
         SessionState workingState = state.withIntent(Intent.MEAL_RECOMMENDATION)
                 .withSlots(mergedSlots)
@@ -378,10 +386,8 @@ public class CityOrchestratorService {
 
     private ChatResponse handleAdjust(String sessionId, Long userId, String userInput, String traceId,
                                       SessionState state, IntentResult intent, boolean publicFallbackUsed) {
-        SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
-        SlotMutation mutation = slotMutationService.apply(
-                intent.operations(), userInput, mergedSlots, state.excludedSlots(), state.unconstrainedSlots());
-        mergedSlots = mutation.included();
+        SlotMutation mutation = applySlotMutation(state, intent);
+        SlotBundle mergedSlots = mutation.included();
         SessionState workingState = state.withIntent(Intent.MEAL_ADJUST)
                 .withSlots(mergedSlots)
                 .withExcludedSlots(mutation.excluded())
@@ -416,10 +422,8 @@ public class CityOrchestratorService {
 
     private ChatResponse handlePlan(String sessionId, Long userId, String userInput, String traceId,
                                     SessionState state, IntentResult intent, boolean publicFallbackUsed) {
-        SlotBundle mergedSlots = slotMergeService.merge(state.slots(), intent.slots());
-        SlotMutation mutation = slotMutationService.apply(
-                intent.operations(), userInput, mergedSlots, state.excludedSlots(), state.unconstrainedSlots());
-        mergedSlots = mutation.included();
+        SlotMutation mutation = applySlotMutation(state, intent);
+        SlotBundle mergedSlots = mutation.included();
         SessionState planContextState = state.withIntent(Intent.ACTIVITY_PLAN)
                 .withSlots(mergedSlots)
                 .withExcludedSlots(mutation.excluded())
