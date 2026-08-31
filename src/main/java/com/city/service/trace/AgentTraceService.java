@@ -21,18 +21,32 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Agent 链路追踪服务。
- * 通过 ThreadLocal 收集一轮请求内的状态机事件和 Agent 调用，TraceScope close 时统一落库。
+ * 单轮请求级 Agent 全链路追踪服务。
+ *
+ * <p>Orchestrator 在请求开始时通过 openTrace 建立 TraceScope，随后意图识别、槽位变化、
+ * 澄清决策、搜索、排序、Agent 调用、异常等事件都追加到当前 Scope；请求结束时 close()
+ * 一次性把整条事件序列持久化到 request trace 表。</p>
+ *
+ * <p>ThreadLocal 只负责把“当前线程正在写哪条 Trace”传递给各业务服务，真正需要长期保存的
+ * Trace 数据最终仍落数据库。TraceScope 必须通过 try-with-resources 关闭，防止线程池复用时串 Trace。</p>
  */
 @Service
 public class AgentTraceService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentTraceService.class);
+
+    /** Trace 查询默认返回条数。 */
     private static final int DEFAULT_LIMIT = 200;
+
+    /** 防止后台查询一次拉取过多 Trace。 */
     private static final int MAX_LIMIT = 1000;
+
+    /** 单个 input/output/error payload 最大保存长度，避免 Trace JSON 被大 Prompt 或响应无限放大。 */
     private static final int MAX_PAYLOAD_LENGTH = 20000;
 
+    /** 当前请求线程绑定的 TraceScope；Scope.close() 时必须 remove。 */
     private final ThreadLocal<TraceScope> currentScope = new ThreadLocal<>();
+
     private final AgentTraceMapper agentTraceMapper;
     private final ObjectMapper objectMapper;
     private final String promptVersion;
@@ -53,28 +67,39 @@ public class AgentTraceService {
         this.gitCommit = buildVersionService.gitCommit();
     }
 
+    /**
+     * 为一轮请求创建 Trace 上下文并绑定到当前线程。
+     * 调用方应使用 try-with-resources，确保成功和异常路径最终都会 flush 并清理 ThreadLocal。
+     */
     public TraceScope openTrace(String traceId, String sessionId, Long userId) {
         TraceScope scope = new TraceScope(traceId, sessionId, userId);
         currentScope.set(scope);
         return scope;
     }
 
+    /** 记录一个不带耗时的普通状态机事件。 */
     public void recordEvent(String eventType, String phase, Object inputPayload, Object outputPayload) {
         record(eventType, phase, null, null, inputPayload, outputPayload,
                 null, null, null, null, null);
     }
 
+    /** 记录一个带阶段耗时的普通状态机事件。 */
     public void recordEvent(String eventType, String phase, Object inputPayload, Object outputPayload, Long latencyMs) {
         record(eventType, phase, null, null, inputPayload, outputPayload,
                 latencyMs, null, null, null, null);
     }
 
+    /** 记录业务阶段异常，并把当前 Trace 标记为 FAILED。 */
     public void recordError(String eventType, String phase, Object inputPayload, Exception error) {
         record(eventType, phase, null, null, inputPayload, null,
                 null, null, null, null, error);
     }
 
-    /** 同步调用 Agent，并记录模型名、Token、耗时与异常。 */
+    /**
+     * 同步调用一个 Agent，并自动采集模型名、输入输出、Token、耗时和异常。
+     *
+     * <p>Agent 调用统一从这里经过，能够避免各 Worker 自己实现一套不一致的可观测逻辑。</p>
+     */
     public Msg callAgent(String sessionId, String agentName, String modelName, ReActAgent agent, String inputText) {
         long startedAt = System.nanoTime();
         try {
@@ -86,16 +111,19 @@ public class AgentTraceService {
                     response, elapsedMs(startedAt), null);
             return response;
         } catch (RuntimeException error) {
+            // 异常同样进入 Trace，然后保持原异常语义继续向上抛出。
             recordAgentCall(sessionId, agentName, modelName, inputText,
                     null, elapsedMs(startedAt), error);
             throw error;
         }
     }
 
+    /** 按 traceId 查询单条完整请求 Trace。 */
     public RequestTraceRow findByTraceId(Long userId, String traceId) {
         return agentTraceMapper.findByTraceId(userId, traceId);
     }
 
+    /** 批量查询 Trace，并在进入 Mapper 前过滤空 ID 和重复 ID。 */
     public List<RequestTraceRow> findByTraceIds(Long userId, List<String> traceIds) {
         if (traceIds == null || traceIds.isEmpty()) return List.of();
         return agentTraceMapper.findByTraceIds(userId, traceIds.stream()
@@ -104,11 +132,16 @@ public class AgentTraceService {
                 .toList());
     }
 
+    /** 查询某个 Session 下最近的 Trace，limit 被限制在 1~1000。 */
     public List<RequestTraceRow> findBySessionId(Long userId, String sessionId, Integer limit) {
         int safeLimit = limit == null ? DEFAULT_LIMIT : Math.max(1, Math.min(MAX_LIMIT, limit));
         return agentTraceMapper.findBySessionId(userId, sessionId, safeLimit);
     }
 
+    /**
+     * 按时间窗口读取 Trace，可选只查看尚未人工标注的样本。
+     * 时间区间采用 [startAt, endAt) 的语义，由 Mapper 查询实现。
+     */
     public List<RequestTraceRow> findByTimeRange(
             Long userId,
             LocalDateTime startAt,
@@ -124,6 +157,10 @@ public class AgentTraceService {
                 userId, startAt, endAt, Boolean.TRUE.equals(onlyUnlabeled), safeLimit);
     }
 
+    /**
+     * 写入人工标准答案/标注信息，供离线评估与回归检测使用。
+     * expectedSlots 在数据库中保存为 JSON，Intent 则保存枚举名称。
+     */
     public void updateLabel(Long userId, String traceId, TraceLabelRequest request) {
         if (traceId == null || traceId.isBlank()) {
             throw new CityException("TraceId 不能为空");
@@ -150,6 +187,10 @@ public class AgentTraceService {
         }
     }
 
+    /**
+     * 把 AgentScope 的 Msg 统一转换成 AGENT_CALL 事件。
+     * Token 从 response.chatUsage 读取；供应商未返回 usage 时保持 null，而不是伪造 0。
+     */
     private void recordAgentCall(
             String sessionId,
             String agentName,
@@ -167,6 +208,10 @@ public class AgentTraceService {
                 latencyMs, inputTokens, outputTokens, totalTokens, error);
     }
 
+    /**
+     * 所有 Trace 事件最终汇聚到这里。
+     * 没有 active TraceScope 时直接返回，因此普通单元测试或非请求线程调用不会因为 Trace 机制失败。
+     */
     private void record(
             String eventType,
             String phase,
@@ -187,6 +232,8 @@ public class AgentTraceService {
         String errorMessage = error == null
                 ? null
                 : trim(error.getClass().getSimpleName() + ": " + error.getMessage());
+
+        // stepOrder 在一个 Scope 内单调递增，回放时按该字段即可还原真实执行顺序。
         scope.addEvent(new TraceEvent(
                 scope.nextStep(),
                 eventType,
@@ -207,6 +254,10 @@ public class AgentTraceService {
         }
     }
 
+    /**
+     * 将内存中的整条 Trace 聚合成 RequestTraceRow 并一次性落库。
+     * Trace 顶层额外记录 promptVersion、ruleVersion、gitCommit，用于评估时精确定位运行版本。
+     */
     private void flushTrace(TraceScope scope) {
         RequestTraceRow row = new RequestTraceRow();
         row.setTraceId(scope.traceId());
@@ -232,6 +283,7 @@ public class AgentTraceService {
         agentTraceMapper.insert(row);
     }
 
+    /** Trace 顶层 JSON 序列化失败时返回最小合法结构，避免追踪系统反向打断业务请求。 */
     private String toTraceJson(Object payload) {
         try {
             return objectMapper.writeValueAsString(payload);
@@ -240,6 +292,10 @@ public class AgentTraceService {
         }
     }
 
+    /**
+     * 将任意事件 payload 归一化为可保存字符串，并统一执行长度截断。
+     * String 原样保存；结构化对象优先 JSON；JSON 失败时再退化到 toString()。
+     */
     private String toPayload(Object payload) {
         if (payload == null) {
             return null;
@@ -254,6 +310,7 @@ public class AgentTraceService {
         }
     }
 
+    /** 单个 payload 最多保存 20000 字符，超出部分明确标记 truncated。 */
     private String trim(String text) {
         if (text == null || text.length() <= MAX_PAYLOAD_LENGTH) {
             return text;
@@ -277,6 +334,7 @@ public class AgentTraceService {
         return tokens == null ? null : tokens.longValue();
     }
 
+    /** 只有输入和输出 Token 都可用时才计算 total，避免把未知值误当成 0。 */
     private Long totalTokens(Long inputTokens, Long outputTokens) {
         if (inputTokens == null || outputTokens == null) {
             return null;
@@ -284,10 +342,12 @@ public class AgentTraceService {
         return inputTokens + outputTokens;
     }
 
+    /** 将 System.nanoTime 的差值转换为毫秒，只用于耗时统计，不参与业务时间。 */
     private long elapsedMs(long startedAt) {
         return (System.nanoTime() - startedAt) / 1_000_000;
     }
 
+    /** Trace 中的最小事件单元，stepOrder 决定回放顺序。 */
     private record TraceEvent(
             int stepOrder,
             String eventType,
@@ -305,6 +365,12 @@ public class AgentTraceService {
     ) {
     }
 
+    /**
+     * 一轮请求的可关闭 Trace 上下文。
+     *
+     * <p>Scope 内部累计事件和状态；close 时只允许 flush 一次，并无论落库成功与否都清理 ThreadLocal。
+     * Trace 持久化失败只记 WARN，不反向影响用户主请求。</p>
+     */
     public final class TraceScope implements AutoCloseable {
         private final String traceId;
         private final String sessionId;
@@ -362,6 +428,7 @@ public class AgentTraceService {
             events.add(event);
         }
 
+        /** 任一事件出现异常后，整条请求 Trace 标记为 FAILED，并保留最近一次错误信息。 */
         private void markFailed(String errorMessage) {
             this.status = "FAILED";
             this.errorMessage = errorMessage;
@@ -376,8 +443,10 @@ public class AgentTraceService {
             try {
                 flushTrace(this);
             } catch (RuntimeException error) {
+                // 可观测链路是旁路能力：数据库 Trace 写入失败不能覆盖真实业务结果。
                 log.warn("Failed to persist request trace: traceId={}", traceId, error);
             } finally {
+                // 线程池会复用线程；不 remove 会导致下一次请求继续写入旧 Scope。
                 currentScope.remove();
             }
         }
