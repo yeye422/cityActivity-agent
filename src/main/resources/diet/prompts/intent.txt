@@ -3,10 +3,10 @@
 
 【核心原则】
 - 输出的是当前这一轮新增、修改、删除或清除的语义，不是完整 SessionState。
-- 历史条件只用于理解指代和承接澄清；当前用户没有再次提及时，不要把历史值复制到 slots、operations 或 temporal SET。
-- 普通属性变化写入 slots / operations；日期和时间变化只能写入 temporal，禁止通过 operations 表达时间。
+- 历史条件只用于理解指代和承接澄清；当前用户没有再次修改时，不要把历史值重复写入 operations 或 temporal SET。
+- 九维普通属性的状态变化只能写 operations；日期和时间变化只能写 temporal。
 - 只使用后端提供的 slotOptions 标准标签，不要创造新标签。
-- 城市或区域不明确时留空，不要默认任何城市。
+- 城市或区域不明确时不要生成对应 operation，不要默认任何城市。
 
 【intent】
 - MEAL_RECOMMENDATION：寻找一个或多个活动，补充推荐条件，或继续普通活动推荐。
@@ -21,11 +21,11 @@
 - “帮我安排周六一天” → ACTIVITY_PLAN。
 - “周六从上午到晚上帮我排一下” → ACTIVITY_PLAN。
 - “给我做个一日行程” → ACTIVITY_PLAN。
-- “想找个半天的展览” → MEAL_RECOMMENDATION，duration 可取“半天”。
-- “想找个能玩一天的活动 / 想找全天项目” → MEAL_RECOMMENDATION；只有当“全天”明确描述活动自身持续时长时，duration 才可取“全天”。
-- “周六全天都行 / 周六一整天都有空 / 全天都可以”描述用户可用时间，不写 duration，交给 temporal。
+- “想找个半天的展览” → MEAL_RECOMMENDATION，ADD duration=半天、ADD activityType=展览。
+- “想找个能玩一天的活动 / 想找全天项目” → MEAL_RECOMMENDATION；只有当“全天”明确描述活动自身持续时长时，ADD duration=全天。
+- “周六全天都行 / 周六一整天都有空 / 全天都可以”描述用户可用时间，不修改 duration，交给 temporal。
 
-【九维 slots】
+【九维普通属性】
 只处理以下九个普通属性：
 - city：城市，如西安、北京、上海、成都。
 - location：纯地理区域，如曲江、小寨、高新、钟楼。不要把“近地铁/交通方便”写 location。
@@ -38,23 +38,35 @@
 - feature：活动客观特征/便利性，如室内、户外、近地铁、少排队、交通方便。
 
 【字段边界】
-- “最近压力大，想安静一点” → experienceGoal 可取“解压”，style 可取“安静”。
-- “和朋友出去热闹一点” → companion 可取“朋友”，experienceGoal 可取“社交”，style 可取“热闹”。
-- “曲江附近、最好近地铁” → location 可取“曲江”，feature 可取“近地铁”。
-- “想找室内展览” → activityType 可取“展览”，feature 可取“室内”；绝不能把“室内”写 duration。
-- “交通方便、少排队” → feature；绝不能写 duration。
-- duration 中的“半天/全天”只有在用户明确描述活动本身持续多久时才填写；用户自己的空闲时间交给 temporal。
-- 未提及的九维 slots 字段输出 []。
+- “最近压力大，想安静一点” → 可 ADD experienceGoal=解压、ADD style=安静。
+- “和朋友出去热闹一点” → 可 ADD companion=朋友、ADD experienceGoal=社交、ADD style=热闹。
+- “曲江附近、最好近地铁” → ADD location=曲江、ADD feature=近地铁。
+- “想找室内展览” → ADD activityType=展览、ADD feature=室内；绝不能把“室内”写 duration。
+- “交通方便、少排队” → ADD feature；绝不能写 duration。
+- duration 中的“半天/全天”只有在用户明确描述活动本身持续多久时才生成 operation；用户自己的空闲时间交给 temporal。
+- 未提及、未修改的普通字段不要生成 operation。
 
-【operations】
-operations 只处理上述九维普通属性槽位：
+【operations：九维普通条件唯一 Patch】
+每个 operation 的结构：
 {"field":"字段名","op":"SET|ADD|REMOVE|CLEAR","values":["标准标签"],"raw":"用户原始片段"}
-- SET：替换该字段约束。
-- ADD：在原约束上追加。
-- REMOVE：明确排除某些值。
-- CLEAR：明确取消该字段限制，values 必须为 []。
+
+规则：
+- ADD：新增一个或多个条件；普通正向表达默认使用 ADD。
+  - “想看展览” → ADD activityType=展览。
+  - “室内的” → ADD feature=室内。
+  - “再加个近地铁” → ADD feature=近地铁。
+- SET：明确替换该字段原有约束，只用于“改成 / 换成 / 只要 / 就要”等明确替换语义。
+  - “预算改成100元内” → SET budget=100元内。
+  - “不要之前那些类型，只要展览” → SET activityType=展览。
+- REMOVE：明确不要、排除某些值。
+  - “不要户外” → REMOVE feature=户外。
+  - “展览不要了” → REMOVE activityType=展览。
+- CLEAR：明确取消整个字段限制，values 必须为 []。
+  - “预算不限” → CLEAR budget。
+  - “类型不限” → CLEAR activityType。
+- 同一个普通条件不要同时用两种协议表达；这里只有 operations，没有独立普通槽位快照输出。
 - 时间、日期、上午/下午/晚上、全天可用等时间语义绝不能写 operations，统一写 temporal。
-- 纯“换一批 / 再来几个 / 还有别的吗”等结果刷新：slots 全空、operations=[]、temporal KEEP/KEEP。
+- 纯“换一批 / 再来几个 / 还有别的吗”等结果刷新：operations=[]、temporal KEEP/KEEP。
 
 【temporal】
 temporal 必须完整输出：
@@ -74,11 +86,11 @@ temporal 必须完整输出：
 - 日期格式 yyyy-MM-dd；时间格式 HH:mm。
 
 【全天三种语义必须区分】
-1. “周六全天都行” = 用户周六没有具体时段限制：不要写 duration；date 设置周六，timeMode=CLEAR。
-2. “想找个全天活动” = 活动自身时长偏好：可写 slots.duration=["全天"]，temporal 不因为“全天”而设置具体时段。
-3. “帮我安排周六一天 / 一整天行程” = 多时段规划：intent=ACTIVITY_PLAN，日期写 temporal；不要仅用 duration=["全天"] 代替规划意图。
+1. “周六全天都行” = 用户周六没有具体时段限制：不要修改 duration；date 设置周六，timeMode=CLEAR。
+2. “想找个全天活动” = 活动自身时长偏好：ADD duration=全天；temporal 不因为“全天”而设置具体时段。
+3. “帮我安排周六一天 / 一整天行程” = 多时段规划：intent=ACTIVITY_PLAN，日期写 temporal；不要仅用 duration=全天代替规划意图。
 
 【输出格式】
-只输出一个合法 JSON 对象，顶层只能包含：intent、slots、operations、temporal、confidence。
+只输出一个合法 JSON 对象，顶层只能包含：intent、operations、temporal、confidence。
 示例结构：
-{"intent":"MEAL_RECOMMENDATION","slots":{"city":[],"location":[],"experienceGoal":[],"companion":[],"budget":[],"activityType":[],"style":[],"duration":[],"feature":[]},"operations":[],"temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},"confidence":0.95}
+{"intent":"MEAL_RECOMMENDATION","operations":[{"field":"city","op":"ADD","values":["西安"],"raw":"西安"},{"field":"activityType","op":"ADD","values":["展览"],"raw":"看展"}],"temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},"confidence":0.95}
