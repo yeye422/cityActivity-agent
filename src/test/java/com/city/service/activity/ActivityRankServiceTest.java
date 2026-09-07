@@ -16,24 +16,26 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ActivityRankServiceTest {
     private final ActivityRankService service = new ActivityRankService();
 
     @Test
-    void fullSlotMatchShouldRankAbovePartialMatch() {
+    void multiValueSlotCoverageShouldNotAffectRankAfterHardSearch() {
         SlotBundle query = slots(List.of("西安"), List.of(), List.of("文艺", "安静"), List.of(), List.of());
-        ActivityItem full = activity(1L, "完整匹配", query, LocalTime.of(15, 0), LocalTime.of(17, 0));
-        ActivityItem partial = activity(2L, "部分匹配",
+        ActivityItem partial = activity(1L, "部分覆盖",
                 slots(List.of("西安"), List.of(), List.of("文艺"), List.of(), List.of()),
+                LocalTime.of(15, 0), LocalTime.of(17, 0));
+        ActivityItem full = activity(2L, "完整覆盖", query,
                 LocalTime.of(15, 0), LocalTime.of(17, 0));
 
         ActivityRankResult result = service.rank(new ActivityRankRequest(
-                List.of(partial, full), query, TimeConstraint.empty(), List.of()));
+                List.of(full, partial), query, TimeConstraint.empty(), List.of()));
 
+        // 两个候选都已经通过 Search 的硬约束；Rank 不再按槽位命中数量二次加分。
         assertEquals(List.of(1L, 2L), result.ranked().stream().map(ActivityItem::id).toList());
-        assertTrue(result.scores().get(0).slotScore() > result.scores().get(1).slotScore());
+        assertEquals(1.0, result.scores().get(0).finalScore(), 0.0001);
+        assertEquals(1.0, result.scores().get(1).finalScore(), 0.0001);
         assertNull(result.scores().get(0).timeScore());
     }
 
@@ -57,7 +59,7 @@ class ActivityRankServiceTest {
         assertEquals(1.0, fullScore.timeScore(), 0.0001);
         assertEquals(0.875, partialScore.timeScore(), 0.0001);
         assertEquals(1.0, fullScore.finalScore(), 0.0001);
-        assertEquals(0.975, partialScore.finalScore(), 0.0001);
+        assertEquals(0.875, partialScore.finalScore(), 0.0001);
     }
 
     @Test
@@ -108,29 +110,6 @@ class ActivityRankServiceTest {
                 List.of(first, second), query, TimeConstraint.empty(), List.of(1L)));
 
         assertEquals(List.of(2L), result.ranked().stream().map(ActivityItem::id).toList());
-    }
-
-    @Test
-    void cheaperActivityShouldFullySatisfyHigherBudgetUpperBound() {
-        SlotBundle query = new SlotBundle(
-                List.of("西安"), List.of(), List.of(), List.of(),
-                List.of("200元内"), List.of(), List.of(), List.of(), List.of());
-        SlotBundle cheapSlots = new SlotBundle(
-                List.of("西安"), List.of(), List.of(), List.of(),
-                List.of("100元内"), List.of(), List.of(), List.of(), List.of());
-        SlotBundle expensiveSlots = new SlotBundle(
-                List.of("西安"), List.of(), List.of(), List.of(),
-                List.of("300元内"), List.of(), List.of(), List.of(), List.of());
-
-        ActivityItem cheap = activity(1L, "100元活动", cheapSlots, null, null);
-        ActivityItem expensive = activity(2L, "300元活动", expensiveSlots, null, null);
-
-        ActivityRankResult result = service.rank(new ActivityRankRequest(
-                List.of(expensive, cheap), query, TimeConstraint.empty(), List.of()));
-
-        assertEquals(List.of(1L, 2L), result.ranked().stream().map(ActivityItem::id).toList());
-        assertEquals(1.0, result.scores().get(0).slotScore(), 0.0001);
-        assertTrue(result.scores().get(0).slotScore() > result.scores().get(1).slotScore());
     }
 
     private ActivityItem activity(Long id, String name, SlotBundle slots, LocalTime start, LocalTime end) {

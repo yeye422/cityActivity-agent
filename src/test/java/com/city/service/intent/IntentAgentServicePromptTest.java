@@ -44,11 +44,16 @@ class IntentAgentServicePromptTest {
 
         assertNotNull(prompt);
         assertTrue(prompt.contains("不是当前完整会话状态快照"));
+        assertTrue(prompt.contains("intent 只能是 MEAL_RECOMMENDATION、MEAL_ADJUST、ACTIVITY_PLAN、OTHER"));
+        assertTrue(prompt.contains("信息不足不是独立 intent"));
+        assertTrue(prompt.contains("安全风险不是独立 intent"));
         assertTrue(prompt.contains("operations 是九维普通属性唯一的状态变更协议"));
         assertTrue(prompt.contains("历史已生效值不要重复写入 operations"));
         assertTrue(prompt.contains("普通正向新增使用 ADD"));
         assertTrue(prompt.contains("CLEAR 的 values 必须为 []"));
         assertTrue(prompt.contains("纯“换一批”必须是 MEAL_ADJUST + operations=[] + temporal KEEP/KEEP"));
+        assertFalse(prompt.contains("CLARIFY_NEEDED"));
+        assertFalse(prompt.contains("HEALTH_RISK"));
         assertFalse(prompt.contains("顶层只能包含 intent、slots"));
     }
 }

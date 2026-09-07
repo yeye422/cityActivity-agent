@@ -118,6 +118,8 @@ CREATE TABLE IF NOT EXISTS evaluation_run (
   run_id VARCHAR(128) NOT NULL,
   user_id BIGINT NOT NULL,
   eval_set_version VARCHAR(64) NOT NULL,
+  eval_set_hash VARCHAR(64) NULL,
+  git_commit VARCHAR(64) NULL,
   prompt_version VARCHAR(64) NULL,
   rule_version VARCHAR(64) NULL,
   model_version VARCHAR(128) NULL,
@@ -125,11 +127,14 @@ CREATE TABLE IF NOT EXISTS evaluation_run (
   avg_score DECIMAL(10,4) NULL,
   metric_snapshot JSON NOT NULL,
   baseline_run_id VARCHAR(128) NULL,
+  is_baseline TINYINT NOT NULL DEFAULT 0,
+  baseline_name VARCHAR(128) NULL,
   passed TINYINT NOT NULL DEFAULT 1,
   created_at DATETIME NOT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uk_evaluation_run_id (run_id),
-  KEY idx_evaluation_run_user_set_time (user_id, eval_set_version, created_at)
+  KEY idx_evaluation_run_user_set_time (user_id, eval_set_version, created_at),
+  KEY idx_evaluation_run_baseline (user_id, eval_set_version, eval_set_hash, is_baseline)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS evaluation_case (
@@ -153,6 +158,62 @@ SET @has_trace_id := (
 );
 SET @sql := IF(@has_trace_id = 0,
   'ALTER TABLE city_feedback ADD COLUMN trace_id VARCHAR(128) NULL AFTER user_id, ADD INDEX idx_city_feedback_trace (trace_id)',
+  'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- 兼容已经存在的 evaluation_run：补充代码/评测集指纹以及显式 Baseline 字段。
+SET @has_eval_set_hash := (
+  SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'evaluation_run' AND COLUMN_NAME = 'eval_set_hash'
+);
+SET @sql := IF(@has_eval_set_hash = 0,
+  'ALTER TABLE evaluation_run ADD COLUMN eval_set_hash VARCHAR(64) NULL AFTER eval_set_version',
+  'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @has_git_commit := (
+  SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'evaluation_run' AND COLUMN_NAME = 'git_commit'
+);
+SET @sql := IF(@has_git_commit = 0,
+  'ALTER TABLE evaluation_run ADD COLUMN git_commit VARCHAR(64) NULL AFTER eval_set_hash',
+  'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @has_is_baseline := (
+  SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'evaluation_run' AND COLUMN_NAME = 'is_baseline'
+);
+SET @sql := IF(@has_is_baseline = 0,
+  'ALTER TABLE evaluation_run ADD COLUMN is_baseline TINYINT NOT NULL DEFAULT 0 AFTER baseline_run_id',
+  'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @has_baseline_name := (
+  SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'evaluation_run' AND COLUMN_NAME = 'baseline_name'
+);
+SET @sql := IF(@has_baseline_name = 0,
+  'ALTER TABLE evaluation_run ADD COLUMN baseline_name VARCHAR(128) NULL AFTER is_baseline',
+  'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @has_baseline_index := (
+  SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'evaluation_run' AND INDEX_NAME = 'idx_evaluation_run_baseline'
+);
+SET @sql := IF(@has_baseline_index = 0,
+  'ALTER TABLE evaluation_run ADD INDEX idx_evaluation_run_baseline (user_id, eval_set_version, eval_set_hash, is_baseline)',
   'SELECT 1');
 PREPARE stmt FROM @sql;
 EXECUTE stmt;

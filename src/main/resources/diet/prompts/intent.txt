@@ -7,14 +7,21 @@
 - 九维普通属性的状态变化只能写 operations；日期和时间变化只能写 temporal。
 - 只使用后端提供的 slotOptions 标准标签，不要创造新标签。
 - 城市或区域不明确时不要生成对应 operation，不要默认任何城市。
+- intent 只表示业务路由，只允许 MEAL_RECOMMENDATION、MEAL_ADJUST、ACTIVITY_PLAN、OTHER。
+- “信息不足”不是独立 intent：只要用户的主任务是找活动，仍输出 MEAL_RECOMMENDATION；缺少 city/date/time 等执行条件由后端确定性规则决定是否追问。
+- “安全风险”不是独立 intent：带风险条件的推荐/调整/规划仍按其主业务 intent 输出；纯安全咨询或其他非推荐问题输出 OTHER，安全拦截由后端 RiskGuard 统一处理。
 
 【intent】
-- MEAL_RECOMMENDATION：寻找一个或多个活动，补充推荐条件，或继续普通活动推荐。
+- MEAL_RECOMMENDATION：寻找一个或多个活动，补充推荐条件，或继续普通活动推荐。即使当前缺少城市等必要信息，也仍然属于该 intent。
 - MEAL_ADJUST：修改已有推荐条件，或要求“换一批”等结果刷新。
 - ACTIVITY_PLAN：明确要求系统规划/安排多时段行程，例如“帮我安排周六一天”“做个一日行程”“从上午到晚上排一下”。
-- CLARIFY_NEEDED：有活动意向，但无法可靠判断用户想要什么。
-- HEALTH_RISK：涉及深夜独行、偏远地点、极端天气或其他明显安全风险。
-- OTHER：与城市活动无关。
+- OTHER：不属于活动推荐、推荐调整或多时段规划的输入，例如闲聊、纯知识问答、纯安全咨询。
+
+【业务意图与安全风险的边界】
+- “暴雨天推荐几个爬山活动” → MEAL_RECOMMENDATION；风险由后端拦截，不要输出安全类 intent。
+- “暴雨天爬山安全吗？” → OTHER；这是纯安全咨询，后端 RiskGuard 会处理。
+- “换成晚上去徒步” → MEAL_ADJUST；风险判断仍由后端处理。
+- 不要因为出现“危险、暴雨、偏远、深夜”等词改变用户原本的业务 intent。
 
 【规划与普通推荐的边界】
 不要仅因为出现“半天 / 一天 / 全天”就判断为 ACTIVITY_PLAN，要判断这些词描述的是“活动自身时长/用户可用时间”，还是“要求系统组织多时段行程”。
@@ -92,5 +99,6 @@ temporal 必须完整输出：
 
 【输出格式】
 只输出一个合法 JSON 对象，顶层只能包含：intent、operations、temporal、confidence。
+intent 只能是：MEAL_RECOMMENDATION、MEAL_ADJUST、ACTIVITY_PLAN、OTHER。
 示例结构：
 {"intent":"MEAL_RECOMMENDATION","operations":[{"field":"city","op":"ADD","values":["西安"],"raw":"西安"},{"field":"activityType","op":"ADD","values":["展览"],"raw":"看展"}],"temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},"confidence":0.95}

@@ -202,7 +202,6 @@ public class CityOrchestratorService {
     private ChatResponse handleTurn(Long userId, ChatRequest request, String traceId, SessionState state) {
         String sessionId = state.sessionId();
         SlotBundle contextSlots = contextSlots(request.context());
-//        合并请求上下文里的 city/location
         if (!contextSlots.isEmpty()) {
             state = applyContextSlots(state, contextSlots);
             agentTraceService.recordEvent("CONTEXT_SLOTS_APPLIED", "SLOT", request.context(), contextSlots);
@@ -211,7 +210,6 @@ public class CityOrchestratorService {
         sessionService.appendMessage(sessionId, "user", request.message(), null, traceId);
         agentTraceService.recordEvent("USER_MESSAGE_RECORDED", "SESSION", request.message(), Map.of("sessionId", sessionId, "sourceMode", sourceMode));
 
-//        PERSONAL 无数据时降级 PUBLIC
         boolean publicFallbackUsed = false;
         if (sourceMode == SourceMode.PERSONAL && !activityService.hasPersonalActivities(userId)) {
             agentTraceService.recordEvent("PERSONAL_LIBRARY_EMPTY_FALLBACK_TO_PUBLIC", "ROUTE",
@@ -221,10 +219,6 @@ public class CityOrchestratorService {
             publicFallbackUsed = true;
         }
 
-//        当前用户消息
-//                + 当前已经生效的九维槽位
-//                + 当前已经生效的时间条件
-//                + 最近 3 条对话历史
         IntentResult rawIntent = intentAgentService.recognize(
                 sessionId,
                 userId,
@@ -236,11 +230,25 @@ public class CityOrchestratorService {
         agentTraceService.recordEvent("INTENT_RECOGNIZED", "INTENT", request.message(), rawIntent);
 
         IntentResult intent = intentReviseService.revise(state, rawIntent, request.message());
+        // 即使后续被 RiskGuard 短路，也先记录最终业务 Intent，保证 Trace/评估仍能观察意图分类结果。
+        agentTraceService.recordEvent("INTENT_REVISED", "INTENT", rawIntent, intent);
+
+        // 安全风险是后端横切约束，不作为 Intent。明显风险请求在状态修改和业务搜索前直接拦截。
+        RiskGuardResult inputGuard = riskGuardService.checkInput(request.message());
+        agentTraceService.recordEvent("RISK_GUARD_INPUT_CHECKED", "GUARD",
+                traceMap("intent", intent.intent(), "userInput", request.message()), inputGuard);
+        if (!inputGuard.passed()) {
+            ResponseResult safeResponse = ResponseResult.textOnly(inputGuard.rewriteSuggestion());
+            agentTraceService.recordEvent("RISK_GUARD_INPUT_BLOCKED", "GUARD", inputGuard, safeResponse);
+            agentTraceService.recordEvent("ROUTE_BYPASSED_BY_RISK_GUARD", "ROUTE",
+                    traceMap("intent", intent.intent()), Map.of("blocked", true));
+            return completeGuardedTextOnly(sessionId, traceId, state, safeResponse);
+        }
+
         TimeResolutionResult timeResolution = timeResolutionService.resolve(
                 state.timeConstraint(), intent.temporal(), request.message());
         agentTraceService.recordEvent("TIME_RESOLUTION_DECIDED", "TIME", intent.temporal(), timeResolution);
 
-//        检测用户是不是明显提到了时间。
         if (timeResolution.needsClarification() && isActivityFlow(intent.intent())) {
             agentTraceService.recordEvent("TIME_PARSE_CLARIFY", "TIME", request.message(), timeResolution);
             SessionState clarifyState = state.withIntent(intent.intent());
@@ -251,7 +259,6 @@ public class CityOrchestratorService {
         }
 
         if (timeResolution.shouldUpdateState()) {
-//            新的时间状态
             state = state.withTimeConstraint(timeResolution.timeConstraint());
             if (timeResolution.status() == TimeResolutionResult.Status.JAVA_FALLBACK) {
                 agentTraceService.recordEvent("TIME_PARSE_FALLBACK", "TIME", request.message(), timeResolution.timeConstraint());
@@ -262,15 +269,13 @@ public class CityOrchestratorService {
             }
         }
 
-        agentTraceService.recordEvent("INTENT_REVISED", "INTENT", rawIntent, intent);
         agentTraceService.recordEvent("ROUTE_SELECTED", "ROUTE", intent, Map.of("route", intent.intent()));
 
         return switch (intent.intent()) {
-            case MEAL_RECOMMENDATION, CLARIFY_NEEDED ->
+            case MEAL_RECOMMENDATION ->
                     handleRecommendation(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
             case MEAL_ADJUST -> handleAdjust(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
             case ACTIVITY_PLAN -> handlePlan(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
-            case HEALTH_RISK -> handleHealthRisk(sessionId, traceId, state);
             case OTHER -> handleChitchat(sessionId, traceId, state);
         };
     }
@@ -278,8 +283,7 @@ public class CityOrchestratorService {
     private boolean isActivityFlow(Intent intent) {
         return intent == Intent.MEAL_RECOMMENDATION
                 || intent == Intent.MEAL_ADJUST
-                || intent == Intent.ACTIVITY_PLAN
-                || intent == Intent.CLARIFY_NEEDED;
+                || intent == Intent.ACTIVITY_PLAN;
     }
 
     private SlotBundle contextSlots(Map<String, Object> context) {
@@ -335,17 +339,6 @@ public class CityOrchestratorService {
         return mutation;
     }
 
-//    旧 SessionState
-//   +
-//    IntentResult.operations
-//   ↓
-//    SlotMutationService
-//   ↓
-//    新的槽位状态
-//   ↓
-//    检查是否需要澄清
-//   ├─ 缺条件 → completeAsk()
-//   └─ 条件够了 → completeRecommendation()
     private ChatResponse handleRecommendation(String sessionId, Long userId, String userInput, String traceId,
                                               SessionState state, IntentResult intent, boolean publicFallbackUsed) {
         SlotMutation mutation = applySlotMutation(state, intent);
@@ -394,12 +387,13 @@ public class CityOrchestratorService {
                 .withPendingClarifyField(field)
                 .withPendingRelaxationContext(null);
         sessionStateService.save(clarifyState);
-        sessionService.appendMessage(sessionId, "assistant", question, Intent.CLARIFY_NEEDED.name(), traceId);
+        String businessIntent = clarifyState.currentIntent() == null ? null : clarifyState.currentIntent().name();
+        sessionService.appendMessage(sessionId, "assistant", question, businessIntent, traceId);
         List<String> missingSlots = List.of(field.key());
         ChatResponse response = withConversationContext(
                 ChatResponse.clarify(sessionId, traceId, question, missingSlots), clarifyState);
         agentTraceService.recordEvent("RESPONSE_READY", "CLARIFY",
-                traceMap("field", field.key(), "question", question), response);
+                traceMap("field", field.key(), "question", question, "businessIntent", businessIntent), response);
         return response;
     }
 
@@ -555,17 +549,7 @@ public class CityOrchestratorService {
                     Map.of("sourceMode", SourceMode.PUBLIC), response);
         }
         agentTraceService.recordEvent("PLAN_RESPONSE_AGENT_RESULT", "RESPONSE", recommend, response);
-        RiskGuardResult guard = riskGuardService.check(userInput, Intent.ACTIVITY_PLAN, recommend, response);
-        agentTraceService.recordEvent(
-                "NUTRITION_GUARD_CHECKED", "GUARD",
-                Map.of("intent", Intent.ACTIVITY_PLAN, "response", response), guard);
-
-        if (!guard.passed()) {
-            response = ResponseResult.textOnly(guard.rewriteSuggestion());
-            agentTraceService.recordEvent("NUTRITION_GUARD_REWRITTEN", "GUARD", guard, response);
-        } else {
-            agentTraceService.recordEvent("COMPLIANCE_GUARD_REWRITTEN", "GUARD", null, response);
-        }
+        response = applyOutputRiskGuard(userInput, Intent.ACTIVITY_PLAN, response);
 
         List<Long> lastIds = recommend.recommendations().stream().map(option -> option.itemId()).toList();
         String queryKey = recommendationQueryKey(state);
@@ -597,24 +581,44 @@ public class CityOrchestratorService {
                 + "|" + unconstrained + "|" + timeKey;
     }
 
-    private ChatResponse handleHealthRisk(String sessionId, String traceId, SessionState state) {
-        ResponseResult response = ResponseResult.textOnly(riskGuardService.conservativeMessage());
-        return completeTextOnly(sessionId, traceId, state, Intent.HEALTH_RISK, response);
-    }
-
     private ChatResponse handleChitchat(String sessionId, String traceId, SessionState state) {
         ResponseResult response = ResponseResult.textOnly(CHITCHAT_REPLY);
+        if (hasPendingClarification(state)) {
+            return completeStatePreservingChitchat(sessionId, traceId, state, response);
+        }
         return completeTextOnly(sessionId, traceId, state, Intent.OTHER, response);
     }
 
-//    天气上下文
-//→ 活动召回（结合检索条件查询数据库）
-//→ 排序 + 多样性重排
-//→ 无结果 fallback / 放宽条件
-//→ ResponseAgent 生成推荐表达
-//→ 风险检查
-//→ 保存推荐结果和会话状态
-//→ 返回 ChatResponse
+    /** 闲聊插入未完成澄清时只回复当前问题，不终止原来的业务状态机。 */
+    private boolean hasPendingClarification(SessionState state) {
+        return state != null
+                && state.phase() == SessionPhase.CLARIFY
+                && state.pendingClarifyField() != null
+                && state.currentIntent() != null;
+    }
+
+    /**
+     * OTHER 只是一次临时插话：消息本身标记为 OTHER，但 SessionState 保留原 currentIntent、phase 和 pendingClarifyField。
+     * 下一轮用户继续回答澄清字段时，IntentRevise 仍能依据持久化状态恢复原业务流程。
+     */
+    private ChatResponse completeStatePreservingChitchat(String sessionId,
+                                                          String traceId,
+                                                          SessionState state,
+                                                          ResponseResult response) {
+        sessionStateService.save(state);
+        sessionService.appendMessage(sessionId, "assistant", response.speechText(), Intent.OTHER.name(), traceId);
+        ChatResponse chatResponse = withConversationContext(
+                ChatResponse.answer(sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction()), state);
+        agentTraceService.recordEvent("RESPONSE_READY", "CHITCHAT",
+                traceMap(
+                        "responseIntent", Intent.OTHER,
+                        "businessIntent", state.currentIntent(),
+                        "pendingClarifyField", state.pendingClarifyField(),
+                        "statePreserved", true),
+                chatResponse);
+        return chatResponse;
+    }
+
     private ChatResponse completeRecommendation(String sessionId, Long userId, String userInput, String traceId,
                                                 SessionState state, List<Long> excludeActivityIds) {
         return completeRecommendation(sessionId, userId, userInput, traceId, state, excludeActivityIds, null, false);
@@ -739,15 +743,7 @@ public class CityOrchestratorService {
                     Map.of("sourceMode", SourceMode.PUBLIC), response);
         }
         agentTraceService.recordEvent("RESPONSE_AGENT_RESULT", "RESPONSE", recommend, response);
-
-        RiskGuardResult guard = riskGuardService.check(userInput, state.currentIntent(), recommend, response);
-        agentTraceService.recordEvent("NUTRITION_GUARD_CHECKED", "GUARD", Map.of("intent", state.currentIntent(), "response", response), guard);
-        if (!guard.passed()) {
-            response = ResponseResult.textOnly(guard.rewriteSuggestion());
-            agentTraceService.recordEvent("NUTRITION_GUARD_REWRITTEN", "GUARD", guard, response);
-        } else {
-            agentTraceService.recordEvent("COMPLIANCE_GUARD_REWRITTEN", "GUARD", null, response);
-        }
+        response = applyOutputRiskGuard(userInput, state.currentIntent(), response);
 
         List<Long> lastIds = recommend.recommendations().stream().map(option -> option.itemId()).toList();
         String queryKey = recommendationQueryKey(state);
@@ -763,6 +759,20 @@ public class CityOrchestratorService {
                 ChatResponse.answer(sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction()), savedState);
         agentTraceService.recordEvent("RESPONSE_READY", "RESPONSE", savedState, chatResponse);
         return chatResponse;
+    }
+
+    /** 推荐/规划生成后的统一输出安全检查。 */
+    private ResponseResult applyOutputRiskGuard(String userInput, Intent intent, ResponseResult response) {
+        RiskGuardResult guard = riskGuardService.check(userInput, response);
+        agentTraceService.recordEvent("RISK_GUARD_OUTPUT_CHECKED", "GUARD",
+                traceMap("intent", intent, "response", response), guard);
+        if (!guard.passed()) {
+            ResponseResult rewritten = ResponseResult.textOnly(guard.rewriteSuggestion());
+            agentTraceService.recordEvent("RISK_GUARD_OUTPUT_REWRITTEN", "GUARD", guard, rewritten);
+            return rewritten;
+        }
+        agentTraceService.recordEvent("RISK_GUARD_OUTPUT_PASSED", "GUARD", null, response);
+        return response;
     }
 
     private ActivityDiversityResult rankAndDiversify(String rankEvent,
@@ -822,6 +832,21 @@ public class CityOrchestratorService {
         response.excludedSlots(state.excludedSlots());
         response.timeConstraint(state.timeConstraint());
         return response;
+    }
+
+    /** 风险兜底只返回提示，不改变原业务状态和待澄清上下文。 */
+    private ChatResponse completeGuardedTextOnly(String sessionId,
+                                                 String traceId,
+                                                 SessionState state,
+                                                 ResponseResult response) {
+        sessionStateService.save(state);
+        String businessIntent = state.currentIntent() == null ? null : state.currentIntent().name();
+        sessionService.appendMessage(sessionId, "assistant", response.speechText(), businessIntent, traceId);
+        ChatResponse chatResponse = withConversationContext(
+                ChatResponse.answer(sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction()), state);
+        agentTraceService.recordEvent("RESPONSE_READY", "GUARD",
+                traceMap("businessIntent", businessIntent, "statePreserved", true), chatResponse);
+        return chatResponse;
     }
 
     private ChatResponse completeTextOnly(String sessionId, String traceId, SessionState state, Intent intent, ResponseResult response) {

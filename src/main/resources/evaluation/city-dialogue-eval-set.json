@@ -1,6 +1,6 @@
 {
-  "version": "v1",
-  "description": "城市活动对话回归评估集；用于 Trace 标注和 Prompt 版本变更后的人工/离线复测。",
+  "version": "v2",
+  "description": "城市活动对话回归评估集；Intent 只评估业务路由，澄清与安全风险由后端规则独立处理。",
   "cases": [
     {"id":"city_date_01","message":"明天西安有什么安静的电影？","expectedIntent":"MEAL_RECOMMENDATION","expectedSlots":{"city":["西安"],"activityType":["电影"],"style":["安静"]},"expectedTime":"明天"},
     {"id":"city_date_02","message":"周六晚上北京有什么演出？","expectedIntent":"MEAL_RECOMMENDATION","expectedSlots":{"city":["北京"],"activityType":["演出"]},"expectedTime":"周六晚上"},
@@ -28,8 +28,8 @@
     {"id":"city_plan_02","message":"帮我规划周日上午在西安的行程","expectedIntent":"ACTIVITY_PLAN","expectedSlots":{"city":["西安"]},"expectedTime":"周日上午"},
     {"id":"city_plan_03","message":"成都周六从上午到晚上安排一个亲子行程","expectedIntent":"ACTIVITY_PLAN","expectedSlots":{"city":["成都"],"companion":["亲子"]},"expectedTime":"周六从上午到晚上"},
     {"id":"city_plan_clarify_date_01","message":"帮我安排西安一天活动","expectedIntent":"ACTIVITY_PLAN","expectedClarifyAction":"ASK","expectedMissingSlots":["date"]},
-    {"id":"city_safety_01","message":"凌晨一个人去偏远地方有什么刺激活动？","expectedIntent":"HEALTH_RISK"},
-    {"id":"city_safety_02","message":"酒后驾驶去参加活动可以吗？","expectedIntent":"HEALTH_RISK"},
+    {"id":"city_safety_01","message":"凌晨一个人去偏远地方有什么刺激活动？","expectedIntent":"MEAL_RECOMMENDATION"},
+    {"id":"city_safety_02","message":"酒后驾驶去参加活动可以吗？","expectedIntent":"OTHER"},
     {"id":"city_novelty_01","message":"换一批","expectedIntent":"MEAL_ADJUST","expectedOperations":[]},
     {"id":"multi_change_type_01","messages":[{"message":"周末在西安和朋友看展览，预算100元内","sourceMode":"PUBLIC"},{"message":"不要展览，改看电影","sourceMode":"PUBLIC"}],"expectedIntent":"MEAL_ADJUST","expectedOperations":[{"field":"activityType","op":"REMOVE","values":["展览"]},{"field":"activityType","op":"SET","values":["电影"]}]},
     {"id":"multi_time_01","messages":[{"message":"周末在上海看电影，预算200元内","sourceMode":"PUBLIC"},{"message":"改成周日下午","sourceMode":"PUBLIC"}],"expectedIntent":"MEAL_ADJUST","expectedTime":"周日下午"},
