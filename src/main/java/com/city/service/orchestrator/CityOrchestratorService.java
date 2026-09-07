@@ -230,6 +230,8 @@ public class CityOrchestratorService {
         agentTraceService.recordEvent("INTENT_RECOGNIZED", "INTENT", request.message(), rawIntent);
 
         IntentResult intent = intentReviseService.revise(state, rawIntent, request.message());
+        // 即使后续被 RiskGuard 短路，也先记录最终业务 Intent，保证 Trace/评估仍能观察意图分类结果。
+        agentTraceService.recordEvent("INTENT_REVISED", "INTENT", rawIntent, intent);
 
         // 安全风险是后端横切约束，不作为 Intent。明显风险请求在状态修改和业务搜索前直接拦截。
         RiskGuardResult inputGuard = riskGuardService.checkInput(request.message());
@@ -238,7 +240,9 @@ public class CityOrchestratorService {
         if (!inputGuard.passed()) {
             ResponseResult safeResponse = ResponseResult.textOnly(inputGuard.rewriteSuggestion());
             agentTraceService.recordEvent("RISK_GUARD_INPUT_BLOCKED", "GUARD", inputGuard, safeResponse);
-            return completeTextOnly(sessionId, traceId, state, intent.intent(), safeResponse);
+            agentTraceService.recordEvent("ROUTE_BYPASSED_BY_RISK_GUARD", "ROUTE",
+                    traceMap("intent", intent.intent()), Map.of("blocked", true));
+            return completeGuardedTextOnly(sessionId, traceId, state, safeResponse);
         }
 
         TimeResolutionResult timeResolution = timeResolutionService.resolve(
@@ -265,7 +269,6 @@ public class CityOrchestratorService {
             }
         }
 
-        agentTraceService.recordEvent("INTENT_REVISED", "INTENT", rawIntent, intent);
         agentTraceService.recordEvent("ROUTE_SELECTED", "ROUTE", intent, Map.of("route", intent.intent()));
 
         return switch (intent.intent()) {
@@ -796,6 +799,21 @@ public class CityOrchestratorService {
         response.excludedSlots(state.excludedSlots());
         response.timeConstraint(state.timeConstraint());
         return response;
+    }
+
+    /** 风险兜底只返回提示，不改变原业务状态和待澄清上下文。 */
+    private ChatResponse completeGuardedTextOnly(String sessionId,
+                                                 String traceId,
+                                                 SessionState state,
+                                                 ResponseResult response) {
+        sessionStateService.save(state);
+        String businessIntent = state.currentIntent() == null ? null : state.currentIntent().name();
+        sessionService.appendMessage(sessionId, "assistant", response.speechText(), businessIntent, traceId);
+        ChatResponse chatResponse = withConversationContext(
+                ChatResponse.answer(sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction()), state);
+        agentTraceService.recordEvent("RESPONSE_READY", "GUARD",
+                traceMap("businessIntent", businessIntent, "statePreserved", true), chatResponse);
+        return chatResponse;
     }
 
     private ChatResponse completeTextOnly(String sessionId, String traceId, SessionState state, Intent intent, ResponseResult response) {
