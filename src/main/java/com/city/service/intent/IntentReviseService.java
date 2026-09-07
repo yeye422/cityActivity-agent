@@ -48,12 +48,13 @@ public class IntentReviseService {
         }
 
         // 正在回答持久化的 Plan 必要字段时，短回答沿用原 Plan 意图。
-        // 例如上一轮问“哪一天？”，本轮只回答“周六”，不能因为文本很短而掉回普通推荐。
+        // 模型正常识别成推荐，或模型失败后保守落到 OTHER，都不能让已确定的 Plan 澄清上下文丢失。
         if (state != null
                 && state.phase() == SessionPhase.CLARIFY
                 && state.pendingClarifyField() != null
                 && state.currentIntent() == Intent.ACTIVITY_PLAN
-                && safeResult.intent() == Intent.MEAL_RECOMMENDATION) {
+                && (safeResult.intent() == Intent.MEAL_RECOMMENDATION
+                    || (safeResult.fallback() && safeResult.intent() == Intent.OTHER))) {
             return revised(Intent.ACTIVITY_PLAN, safeResult);
         }
 
