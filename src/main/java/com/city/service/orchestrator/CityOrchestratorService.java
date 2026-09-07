@@ -583,7 +583,40 @@ public class CityOrchestratorService {
 
     private ChatResponse handleChitchat(String sessionId, String traceId, SessionState state) {
         ResponseResult response = ResponseResult.textOnly(CHITCHAT_REPLY);
+        if (hasPendingClarification(state)) {
+            return completeStatePreservingChitchat(sessionId, traceId, state, response);
+        }
         return completeTextOnly(sessionId, traceId, state, Intent.OTHER, response);
+    }
+
+    /** 闲聊插入未完成澄清时只回复当前问题，不终止原来的业务状态机。 */
+    private boolean hasPendingClarification(SessionState state) {
+        return state != null
+                && state.phase() == SessionPhase.CLARIFY
+                && state.pendingClarifyField() != null
+                && state.currentIntent() != null;
+    }
+
+    /**
+     * OTHER 只是一次临时插话：消息本身标记为 OTHER，但 SessionState 保留原 currentIntent、phase 和 pendingClarifyField。
+     * 下一轮用户继续回答澄清字段时，IntentRevise 仍能依据持久化状态恢复原业务流程。
+     */
+    private ChatResponse completeStatePreservingChitchat(String sessionId,
+                                                          String traceId,
+                                                          SessionState state,
+                                                          ResponseResult response) {
+        sessionStateService.save(state);
+        sessionService.appendMessage(sessionId, "assistant", response.speechText(), Intent.OTHER.name(), traceId);
+        ChatResponse chatResponse = withConversationContext(
+                ChatResponse.answer(sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction()), state);
+        agentTraceService.recordEvent("RESPONSE_READY", "CHITCHAT",
+                traceMap(
+                        "responseIntent", Intent.OTHER,
+                        "businessIntent", state.currentIntent(),
+                        "pendingClarifyField", state.pendingClarifyField(),
+                        "statePreserved", true),
+                chatResponse);
+        return chatResponse;
     }
 
     private ChatResponse completeRecommendation(String sessionId, Long userId, String userInput, String traceId,
