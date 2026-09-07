@@ -42,7 +42,7 @@ final class EvaluationSetFingerprint {
 
     private static JsonNode canonicalize(ObjectMapper objectMapper, JsonNode node) {
         if (node == null || node.isNull()) {
-            return objectMapper.nullNode();
+            return objectMapper.getNodeFactory().nullNode();
         }
         if (node.isObject()) {
             ObjectNode result = objectMapper.createObjectNode();
