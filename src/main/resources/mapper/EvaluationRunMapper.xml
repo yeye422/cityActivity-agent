@@ -8,6 +8,8 @@
         <result property="runId" column="run_id"/>
         <result property="userId" column="user_id"/>
         <result property="evalSetVersion" column="eval_set_version"/>
+        <result property="evalSetHash" column="eval_set_hash"/>
+        <result property="gitCommit" column="git_commit"/>
         <result property="promptVersion" column="prompt_version"/>
         <result property="ruleVersion" column="rule_version"/>
         <result property="modelVersion" column="model_version"/>
@@ -15,26 +17,67 @@
         <result property="avgScore" column="avg_score"/>
         <result property="metricSnapshot" column="metric_snapshot"/>
         <result property="baselineRunId" column="baseline_run_id"/>
+        <result property="baseline" column="is_baseline"/>
+        <result property="baselineName" column="baseline_name"/>
         <result property="passed" column="passed"/>
         <result property="createdAt" column="created_at"/>
     </resultMap>
 
     <insert id="insert" parameterType="com.city.model.EvaluationRunRow">
         INSERT INTO evaluation_run (
-            run_id, user_id, eval_set_version, prompt_version, rule_version, model_version,
-            total_traces, avg_score, metric_snapshot, baseline_run_id, passed, created_at
+            run_id, user_id, eval_set_version, eval_set_hash, git_commit,
+            prompt_version, rule_version, model_version,
+            total_traces, avg_score, metric_snapshot, baseline_run_id,
+            is_baseline, baseline_name, passed, created_at
         ) VALUES (
-            #{runId}, #{userId}, #{evalSetVersion}, #{promptVersion}, #{ruleVersion}, #{modelVersion},
-            #{totalTraces}, #{avgScore}, #{metricSnapshot}, #{baselineRunId}, #{passed}, NOW()
+            #{runId}, #{userId}, #{evalSetVersion}, #{evalSetHash}, #{gitCommit},
+            #{promptVersion}, #{ruleVersion}, #{modelVersion},
+            #{totalTraces}, #{avgScore}, #{metricSnapshot}, #{baselineRunId},
+            #{baseline}, #{baselineName}, #{passed}, NOW()
         )
     </insert>
 
-    <select id="findLatest" resultMap="EvaluationRunRowMap">
-        SELECT id, run_id, user_id, eval_set_version, prompt_version, rule_version, model_version,
-               total_traces, avg_score, metric_snapshot, baseline_run_id, passed, created_at
+    <select id="findByRunId" resultMap="EvaluationRunRowMap">
+        SELECT id, run_id, user_id, eval_set_version, eval_set_hash, git_commit,
+               prompt_version, rule_version, model_version,
+               total_traces, avg_score, metric_snapshot, baseline_run_id,
+               is_baseline, baseline_name, passed, created_at
         FROM evaluation_run
-        WHERE user_id = #{userId} AND eval_set_version = #{evalSetVersion} AND passed = 1
+        WHERE user_id = #{userId} AND run_id = #{runId}
+        LIMIT 1
+    </select>
+
+    <select id="findBaseline" resultMap="EvaluationRunRowMap">
+        SELECT id, run_id, user_id, eval_set_version, eval_set_hash, git_commit,
+               prompt_version, rule_version, model_version,
+               total_traces, avg_score, metric_snapshot, baseline_run_id,
+               is_baseline, baseline_name, passed, created_at
+        FROM evaluation_run
+        WHERE user_id = #{userId}
+          AND eval_set_version = #{evalSetVersion}
+          AND eval_set_hash = #{evalSetHash}
+          AND is_baseline = 1
+          AND passed = 1
         ORDER BY created_at DESC, id DESC
         LIMIT 1
     </select>
+
+    <update id="clearBaseline">
+        UPDATE evaluation_run
+        SET is_baseline = 0,
+            baseline_name = NULL
+        WHERE user_id = #{userId}
+          AND eval_set_version = #{evalSetVersion}
+          AND eval_set_hash = #{evalSetHash}
+          AND is_baseline = 1
+    </update>
+
+    <update id="markBaseline">
+        UPDATE evaluation_run
+        SET is_baseline = 1,
+            baseline_name = #{baselineName}
+        WHERE user_id = #{userId}
+          AND run_id = #{runId}
+          AND passed = 1
+    </update>
 </mapper>
