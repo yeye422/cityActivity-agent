@@ -13,7 +13,7 @@ import java.util.List;
  * IntentAgent 结果的确定性后处理层。
  *
  * <p>边界非常重要：这里不重新理解自然语言，也不使用关键词覆盖模型的普通语义判断；
- * 只根据系统已经确定的会话事实修正不可能成立的状态，例如“没有历史推荐却要求调整上一批”。</p>
+ * 只根据系统已经确定的会话事实或 fallback 已经抽取出的结构化 Patch，修正不可能成立的路由。</p>
  *
  * <p>主链路因此保持为：LLM 负责业务意图理解 → 本服务做状态一致性修正 → Orchestrator 按最终 Intent 路由。
  * 澄清和安全风险都由后端独立处理，不属于 IntentRevise 的职责。</p>
@@ -27,8 +27,8 @@ public class IntentReviseService {
     /**
      * 根据持久化会话状态修正 IntentAgent 输出。
      *
-     * <p>当前只处理三类确定性场景：纯换批、Plan 澄清续答、无历史结果的 ADJUST 降级为首次推荐。
-     * 其余场景直接尊重模型结果，避免 Java 规则和 LLM 形成两套互相竞争的意图分类器。</p>
+     * <p>当前处理四类确定性场景：纯换批、Plan 澄清续答、无历史结果的 ADJUST 降级为首次推荐，
+     * 以及模型失败后已经抽取到普通槽位 Patch 却误落 OTHER 的 fallback 路由修正。</p>
      *
      * @param state 当前持久化会话状态
      * @param result IntentAgent 的结构化输出
@@ -60,6 +60,18 @@ public class IntentReviseService {
         // 没有历史推荐结果时，ADJUST 不存在可调整对象，按首次推荐流程处理。
         if (safeResult.intent() == Intent.MEAL_ADJUST && !hasLastRecommendations(state)) {
             return revised(Intent.MEAL_RECOMMENDATION, safeResult);
+        }
+
+        // 模型调用失败时，Java fallback 可能已经可靠抽取出 CLEAR/ADD/REMOVE 等普通槽位 Patch。
+        // 此时若 fallbackIntent 只能落到 OTHER，不能丢弃已经确定的业务修改：有历史推荐按 ADJUST，没有则按首次推荐。
+        if (safeResult.fallback()
+                && safeResult.intent() == Intent.OTHER
+                && safeResult.operations() != null
+                && !safeResult.operations().isEmpty()) {
+            Intent targetIntent = hasLastRecommendations(state)
+                    ? Intent.MEAL_ADJUST
+                    : Intent.MEAL_RECOMMENDATION;
+            return revised(targetIntent, safeResult);
         }
 
         // 其他情况下尊重模型判断，不再做关键词意图覆盖或低 confidence 强制改路由。
