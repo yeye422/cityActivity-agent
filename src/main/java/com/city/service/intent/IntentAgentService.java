@@ -36,7 +36,8 @@ import java.util.Map;
  * 九维普通条件的新增、替换、排除和取消限制全部通过 operations 表达；时间变化只通过 temporal 表达。
  * 历史普通状态由 SlotMutationService 确定性更新，历史时间状态由 TimeResolutionService 确定性更新。</p>
  *
- * <p>LLM 不能直接制造任意槽位值：所有 operation value 都会经过 SlotOptionService 提供的启用字典过滤。
+ * <p>Intent 只负责推荐、调整、规划、其他四类业务路由；是否澄清以及是否需要安全拦截由后端独立判断。
+ * LLM 不能直接制造任意槽位值：所有 operation value 都会经过 SlotOptionService 提供的启用字典过滤。
  * 模型调用或 JSON 结构解析失败时，Java fallback 也先生成 ConstraintOperation，再进入同一 mutation 链。</p>
  */
 @Service
@@ -149,6 +150,9 @@ public class IntentAgentService {
 
                 ## 本轮输出约束
                 - 输出的是当前消息带来的语义 Patch，不是当前完整会话状态快照。
+                - intent 只能是 MEAL_RECOMMENDATION、MEAL_ADJUST、ACTIVITY_PLAN、OTHER。
+                - 信息不足不是独立 intent；主任务是找活动时仍输出 MEAL_RECOMMENDATION，后端决定是否追问。
+                - 安全风险不是独立 intent；带风险的业务请求仍按主业务 intent 输出，纯安全咨询输出 OTHER，后端 RiskGuard 统一处理。
                 - operations 是九维普通属性唯一的状态变更协议；历史已生效值不要重复写入 operations。
                 - 普通正向新增使用 ADD；明确“改成/换成/只要”使用 SET；明确排除使用 REMOVE；明确取消限制使用 CLEAR。
                 - operations 只能使用九维字段：city、location、experienceGoal、companion、budget、activityType、style、duration、feature。
@@ -319,20 +323,21 @@ public class IntentAgentService {
 
     /**
      * 关键词 Intent 判断只存在于模型失败后的 fallback 路径。
-     * 这里优先保证系统能继续路由，而不是追求与主模型同等的语义覆盖率。
+     * fallback 只负责四类业务路由，不承担澄清决策和风险分类。
      */
     private Intent fallbackIntent(String userInput) {
-        if (userInput == null || userInput.isBlank()) return Intent.CLARIFY_NEEDED;
-        if (containsAny(userInput, "危险", "偏远", "深夜独自", "违法", "未成年人进入")) return Intent.HEALTH_RISK;
-        if (containsAny(userInput, "换一批", "换个", "不要户外", "室内", "便宜点", "近一点", "安静点")) return Intent.MEAL_ADJUST;
+        if (userInput == null || userInput.isBlank()) return Intent.OTHER;
+        if (containsAny(userInput, "换一批", "换个", "不要户外", "室内", "便宜点", "近一点", "安静点")) {
+            return Intent.MEAL_ADJUST;
+        }
         if (containsActivityPlanSignal(userInput)) return Intent.ACTIVITY_PLAN;
         if (containsAny(userInput, "你是谁", "你是 AI", "你好")) return Intent.OTHER;
         if (containsAny(userInput,
                 "去哪", "去哪里", "玩什么", "活动", "展览", "电影", "演出", "运动", "探店", "推荐",
-                "半天", "一天", "一日", "全天", "一整天", "有空", "都行", "都可以")) {
+                "爬山", "徒步", "露营", "半天", "一天", "一日", "全天", "一整天", "有空", "都行", "都可以")) {
             return Intent.MEAL_RECOMMENDATION;
         }
-        return Intent.CLARIFY_NEEDED;
+        return Intent.OTHER;
     }
 
     /** fallback 中识别少量明确的“需要多时段规划”表达。 */
