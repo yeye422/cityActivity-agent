@@ -1,37 +1,39 @@
 package com.city.service.evaluation;
 
-import com.city.exception.CityException;
 import com.city.enums.Intent;
 import com.city.enums.SourceMode;
+import com.city.exception.CityException;
+import com.city.mapper.EvaluationCaseMapper;
+import com.city.mapper.EvaluationRunMapper;
 import com.city.model.ChatRequest;
 import com.city.model.ChatResponse;
-import com.city.model.EvaluationReport;
-import com.city.model.RegressionEvaluationRequest;
-import com.city.model.RegressionEvaluationReport;
-import com.city.model.EvaluationRunRow;
-import com.city.mapper.EvaluationRunMapper;
-import com.city.mapper.EvaluationCaseMapper;
 import com.city.model.EvaluationCaseRow;
+import com.city.model.EvaluationReport;
+import com.city.model.EvaluationRunRow;
 import com.city.model.PromoteEvaluationCaseRequest;
+import com.city.model.RegressionEvaluationReport;
+import com.city.model.RegressionEvaluationRequest;
 import com.city.model.SlotBundle;
 import com.city.model.TraceLabelRequest;
 import com.city.service.orchestrator.CityOrchestratorService;
 import com.city.service.trace.AgentTraceService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Value;
 
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.LinkedHashMap;
 
 /** 执行固定对话集并将最终轮 Trace 送入离线评估，形成最小可运行回归闭环。 */
 @Service
 public class RegressionEvaluationService {
+    private static final String EVAL_SET_RESOURCE = "evaluation/city-dialogue-eval-set.json";
+
     private final ObjectMapper objectMapper;
     private final CityOrchestratorService orchestratorService;
     private final AgentTraceService traceService;
@@ -67,7 +69,7 @@ public class RegressionEvaluationService {
         int limit = request == null || request.getLimit() == null ? 50 : Math.max(1, Math.min(100, request.getLimit()));
         List<String> traceIds = new ArrayList<>();
         String evalSetVersion = "v1";
-        try (InputStream input = new ClassPathResource("evaluation/city-dialogue-eval-set.json").getInputStream()) {
+        try (InputStream input = new ClassPathResource(EVAL_SET_RESOURCE).getInputStream()) {
             JsonNode root = objectMapper.readTree(input);
             evalSetVersion = root.path("version").asText("v1");
             JsonNode cases = root.path("cases");
@@ -127,14 +129,29 @@ public class RegressionEvaluationService {
     }
 
     public void promote(Long userId, PromoteEvaluationCaseRequest request) {
-        if (request == null || request.caseDefinition() == null || !request.caseDefinition().isObject()) throw new CityException("评测用例内容不能为空");
+        if (request == null || request.caseDefinition() == null || !request.caseDefinition().isObject()) {
+            throw new CityException("评测用例内容不能为空");
+        }
         JsonNode definition = request.caseDefinition();
         String caseId = definition.path("id").asText("").trim();
         if (caseId.isBlank()) throw new CityException("评测用例必须包含 id");
         EvaluationCaseRow row = new EvaluationCaseRow();
-        row.setUserId(userId); row.setCaseId(caseId); row.setEvalSetVersion("v1");
-        row.setCaseJson(toJson(definition)); row.setSourceTraceId(request.traceId()); row.setCreatedBy(userId);
+        row.setUserId(userId);
+        row.setCaseId(caseId);
+        row.setEvalSetVersion(currentEvalSetVersion());
+        row.setCaseJson(toJson(definition));
+        row.setSourceTraceId(request.traceId());
+        row.setCreatedBy(userId);
         evaluationCaseMapper.insert(row);
+    }
+
+    private String currentEvalSetVersion() {
+        try (InputStream input = new ClassPathResource(EVAL_SET_RESOURCE).getInputStream()) {
+            JsonNode root = objectMapper.readTree(input);
+            return root.path("version").asText("v1");
+        } catch (Exception error) {
+            throw new CityException("评测集版本读取失败", error);
+        }
     }
 
     private RegressionEvaluationReport compare(EvaluationReport report, String version, EvaluationRunRow baseline) {
@@ -155,8 +172,11 @@ public class RegressionEvaluationService {
     }
 
     private String toJson(Object value) {
-        try { return objectMapper.writeValueAsString(value); }
-        catch (Exception error) { throw new CityException("评估指标序列化失败", error); }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception error) {
+            throw new CityException("评估指标序列化失败", error);
+        }
     }
 
     private TraceLabelRequest labelOf(JsonNode testCase) throws Exception {
@@ -180,13 +200,19 @@ public class RegressionEvaluationService {
     }
 
     private SourceMode parseSourceMode(String value) {
-        try { return SourceMode.valueOf(value.toUpperCase()); }
-        catch (Exception ignored) { return SourceMode.PUBLIC; }
+        try {
+            return SourceMode.valueOf(value.toUpperCase());
+        } catch (Exception ignored) {
+            return SourceMode.PUBLIC;
+        }
     }
 
     private <E extends Enum<E>> E parseEnum(Class<E> type, String value) {
         if (value == null || value.isBlank()) return null;
-        try { return Enum.valueOf(type, value); }
-        catch (Exception ignored) { return null; }
+        try {
+            return Enum.valueOf(type, value);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 }
