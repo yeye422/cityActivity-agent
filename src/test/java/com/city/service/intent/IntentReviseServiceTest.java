@@ -38,6 +38,21 @@ class IntentReviseServiceTest {
     }
 
     @Test
+    void shouldKeepActivityPlanWhenIntentFallbackOccursDuringClarification() {
+        SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
+                .withIntent(Intent.ACTIVITY_PLAN)
+                .withPhase(SessionPhase.CLARIFY)
+                .withPendingClarifyField(ClarifyField.DATE);
+        IntentResult raw = new IntentResult(
+                Intent.OTHER, 0.2, List.of(), TemporalMutation.keep(), true);
+
+        IntentResult revised = service.revise(state, raw, "周六");
+
+        assertEquals(Intent.ACTIVITY_PLAN, revised.intent());
+        assertEquals(true, revised.fallback());
+    }
+
+    @Test
     void shouldNotKeepPlanIntentWhenClarifyPhaseHasNoPendingField() {
         SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
                 .withIntent(Intent.ACTIVITY_PLAN)
