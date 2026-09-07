@@ -230,10 +230,8 @@ public class CityOrchestratorService {
         agentTraceService.recordEvent("INTENT_RECOGNIZED", "INTENT", request.message(), rawIntent);
 
         IntentResult intent = intentReviseService.revise(state, rawIntent, request.message());
-        // 即使后续被 RiskGuard 短路，也先记录最终业务 Intent，保证 Trace/评估仍能观察意图分类结果。
         agentTraceService.recordEvent("INTENT_REVISED", "INTENT", rawIntent, intent);
 
-        // 安全风险是后端横切约束，不作为 Intent。明显风险请求在状态修改和业务搜索前直接拦截。
         RiskGuardResult inputGuard = riskGuardService.checkInput(request.message());
         agentTraceService.recordEvent("RISK_GUARD_INPUT_CHECKED", "GUARD",
                 traceMap("intent", intent.intent(), "userInput", request.message()), inputGuard);
@@ -269,13 +267,19 @@ public class CityOrchestratorService {
             }
         }
 
-        agentTraceService.recordEvent("ROUTE_SELECTED", "ROUTE", intent, Map.of("route", intent.intent()));
+        boolean fallbackParsingUsed = intent.fallback()
+                || timeResolution.status() == TimeResolutionResult.Status.JAVA_FALLBACK;
+        agentTraceService.recordEvent("ROUTE_SELECTED", "ROUTE", intent,
+                traceMap("route", intent.intent(), "fallbackParsingUsed", fallbackParsingUsed));
 
         return switch (intent.intent()) {
             case MEAL_RECOMMENDATION ->
-                    handleRecommendation(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
-            case MEAL_ADJUST -> handleAdjust(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
-            case ACTIVITY_PLAN -> handlePlan(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
+                    handleRecommendation(sessionId, userId, request.message(), traceId, state, intent,
+                            publicFallbackUsed, fallbackParsingUsed);
+            case MEAL_ADJUST -> handleAdjust(sessionId, userId, request.message(), traceId, state, intent,
+                    publicFallbackUsed, fallbackParsingUsed);
+            case ACTIVITY_PLAN -> handlePlan(sessionId, userId, request.message(), traceId, state, intent,
+                    publicFallbackUsed, fallbackParsingUsed);
             case OTHER -> handleChitchat(sessionId, traceId, state);
         };
     }
@@ -308,12 +312,8 @@ public class CityOrchestratorService {
         );
         Set<String> unconstrained = new LinkedHashSet<>(
                 state.unconstrainedSlots() == null ? Set.of() : state.unconstrainedSlots());
-        if (!context.city().isEmpty()) {
-            unconstrained.remove("city");
-        }
-        if (!context.location().isEmpty()) {
-            unconstrained.remove("location");
-        }
+        if (!context.city().isEmpty()) unconstrained.remove("city");
+        if (!context.location().isEmpty()) unconstrained.remove("location");
         return state.withSlots(applied).withUnconstrainedSlots(unconstrained);
     }
 
@@ -322,34 +322,30 @@ public class CityOrchestratorService {
         return value == null ? "" : String.valueOf(value).trim();
     }
 
-    /** 九维普通条件只通过 operations 修改，所有推荐/调整/规划分支共用同一执行入口。 */
     private SlotMutation applySlotMutation(SessionState state, IntentResult intent) {
         SlotMutation mutation = slotMutationService.apply(
                 intent.operations(), state.slots(), state.excludedSlots(), state.unconstrainedSlots());
         agentTraceService.recordEvent("SLOT_MUTATION_APPLIED", "SLOT",
-                traceMap(
-                        "stateSlots", state.slots(),
+                traceMap("stateSlots", state.slots(),
                         "stateExcludedSlots", state.excludedSlots(),
                         "stateUnconstrainedSlots", state.unconstrainedSlots(),
                         "operations", intent.operations()),
-                traceMap(
-                        "resultSlots", mutation.included(),
+                traceMap("resultSlots", mutation.included(),
                         "resultExcludedSlots", mutation.excluded(),
                         "resultUnconstrainedSlots", mutation.unconstrained()));
         return mutation;
     }
 
     private ChatResponse handleRecommendation(String sessionId, Long userId, String userInput, String traceId,
-                                              SessionState state, IntentResult intent, boolean publicFallbackUsed) {
+                                              SessionState state, IntentResult intent, boolean publicFallbackUsed,
+                                              boolean fallbackParsingUsed) {
         SlotMutation mutation = applySlotMutation(state, intent);
         SlotBundle mergedSlots = mutation.included();
-
         SessionState workingState = state.withIntent(Intent.MEAL_RECOMMENDATION)
                 .withSlots(mergedSlots)
                 .withExcludedSlots(mutation.excluded())
                 .withUnconstrainedSlots(mutation.unconstrained());
-        ClarifyField missingField = firstMissingRequiredField(
-                Intent.MEAL_RECOMMENDATION, workingState);
+        ClarifyField missingField = firstMissingRequiredField(Intent.MEAL_RECOMMENDATION, workingState);
         agentTraceService.recordEvent("CLARIFY_DECISION", "CLARIFY",
                 traceMap("slots", mergedSlots,
                         "timeConstraint", workingState.timeConstraint(),
@@ -361,7 +357,7 @@ public class CityOrchestratorService {
         }
         return completeRecommendation(sessionId, userId, userInput, traceId,
                 workingState.withPendingClarifyField(null).withPhase(SessionPhase.RECOMMEND),
-                List.of(), publicFallbackUsed);
+                List.of(), null, publicFallbackUsed, fallbackParsingUsed);
     }
 
     private ClarifyField firstMissingRequiredField(Intent intent, SessionState state) {
@@ -371,43 +367,36 @@ public class CityOrchestratorService {
     }
 
     private Map<String, Object> clarifyDecisionPayload(ClarifyField field) {
-        return traceMap(
-                "action", field == null ? "READY" : "ASK",
+        return traceMap("action", field == null ? "READY" : "ASK",
                 "questionToAsk", field == null ? null : clarifyRuleService.questionFor(field),
-                "missingSlots", field == null ? List.of() : List.of(field.key())
-        );
+                "missingSlots", field == null ? List.of() : List.of(field.key()));
     }
 
-    private ChatResponse completeAsk(String sessionId,
-                                     String traceId,
-                                     SessionState workingState,
-                                     ClarifyField field,
-                                     String question) {
+    private ChatResponse completeAsk(String sessionId, String traceId, SessionState workingState,
+                                     ClarifyField field, String question) {
         SessionState clarifyState = workingState.withPhase(SessionPhase.CLARIFY)
                 .withPendingClarifyField(field)
                 .withPendingRelaxationContext(null);
         sessionStateService.save(clarifyState);
         String businessIntent = clarifyState.currentIntent() == null ? null : clarifyState.currentIntent().name();
         sessionService.appendMessage(sessionId, "assistant", question, businessIntent, traceId);
-        List<String> missingSlots = List.of(field.key());
         ChatResponse response = withConversationContext(
-                ChatResponse.clarify(sessionId, traceId, question, missingSlots), clarifyState);
+                ChatResponse.clarify(sessionId, traceId, question, List.of(field.key())), clarifyState);
         agentTraceService.recordEvent("RESPONSE_READY", "CLARIFY",
                 traceMap("field", field.key(), "question", question, "businessIntent", businessIntent), response);
         return response;
     }
 
     private ChatResponse handleAdjust(String sessionId, Long userId, String userInput, String traceId,
-                                      SessionState state, IntentResult intent, boolean publicFallbackUsed) {
+                                      SessionState state, IntentResult intent, boolean publicFallbackUsed,
+                                      boolean fallbackParsingUsed) {
         SlotMutation mutation = applySlotMutation(state, intent);
         SlotBundle mergedSlots = mutation.included();
         SessionState workingState = state.withIntent(Intent.MEAL_ADJUST)
                 .withSlots(mergedSlots)
                 .withExcludedSlots(mutation.excluded())
                 .withUnconstrainedSlots(mutation.unconstrained());
-
-        ClarifyField missingField = firstMissingRequiredField(
-                Intent.MEAL_RECOMMENDATION, workingState);
+        ClarifyField missingField = firstMissingRequiredField(Intent.MEAL_RECOMMENDATION, workingState);
         if (missingField != null) {
             Map<String, Object> decision = clarifyDecisionPayload(missingField);
             agentTraceService.recordEvent("ADJUST_CLARIFY_DECISION", "CLARIFY",
@@ -417,35 +406,32 @@ public class CityOrchestratorService {
             return completeAsk(sessionId, traceId, workingState,
                     missingField, clarifyRuleService.questionFor(missingField));
         }
-
-        workingState = workingState.withPendingClarifyField(null)
-                .withPhase(SessionPhase.RECOMMEND);
+        workingState = workingState.withPendingClarifyField(null).withPhase(SessionPhase.RECOMMEND);
         String currentQueryKey = recommendationQueryKey(workingState);
         boolean queryChanged = !currentQueryKey.equals(state.recommendationQueryKey());
         List<Long> excludeActivityIds = queryChanged || state.lastRecommendedActivityIds() == null
-                ? List.of()
-                : state.lastRecommendedActivityIds();
+                ? List.of() : state.lastRecommendedActivityIds();
         agentTraceService.recordEvent("ADJUST_CONTEXT_RESOLVED", "ADJUST", intent,
                 traceMap("mergedSlots", mergedSlots,
                         "unconstrainedSlots", workingState.unconstrainedSlots(),
                         "excludeActivityIds", excludeActivityIds,
                         "queryChanged", queryChanged));
-        return completeRecommendation(sessionId, userId, userInput, traceId, workingState, excludeActivityIds, publicFallbackUsed);
+        return completeRecommendation(sessionId, userId, userInput, traceId, workingState,
+                excludeActivityIds, null, publicFallbackUsed, fallbackParsingUsed);
     }
 
     private ChatResponse handlePlan(String sessionId, Long userId, String userInput, String traceId,
-                                    SessionState state, IntentResult intent, boolean publicFallbackUsed) {
+                                    SessionState state, IntentResult intent, boolean publicFallbackUsed,
+                                    boolean fallbackParsingUsed) {
         SlotMutation mutation = applySlotMutation(state, intent);
         SlotBundle mergedSlots = mutation.included();
         SessionState planContextState = state.withIntent(Intent.ACTIVITY_PLAN)
                 .withSlots(mergedSlots)
                 .withExcludedSlots(mutation.excluded())
                 .withUnconstrainedSlots(mutation.unconstrained());
-
         ClarifyField missingField = firstMissingRequiredField(Intent.ACTIVITY_PLAN, planContextState);
         Map<String, Object> decision = clarifyDecisionPayload(missingField);
-        Map<String, Object> decisionInput = traceMap(
-                "slots", mergedSlots,
+        Map<String, Object> decisionInput = traceMap("slots", mergedSlots,
                 "timeConstraint", planContextState.timeConstraint(),
                 "pendingClarifyField", planContextState.pendingClarifyField());
         agentTraceService.recordEvent("PLAN_CLARIFY_DECISION", "CLARIFY", decisionInput, decision);
@@ -454,108 +440,80 @@ public class CityOrchestratorService {
             return completeAsk(sessionId, traceId, planContextState,
                     missingField, clarifyRuleService.questionFor(missingField));
         }
-
         List<String> planActivityTimes = activityPlanService.resolveActivityTimes(mergedSlots, planContextState.timeConstraint());
-        SlotBundle planSlots = new SlotBundle(
-                mergedSlots.city(), mergedSlots.location(), mergedSlots.experienceGoal(), mergedSlots.companion(),
-                mergedSlots.budget(), mergedSlots.activityType(), mergedSlots.style(), mergedSlots.duration(),
-                mergedSlots.feature()
-        );
-        agentTraceService.recordEvent(
-                "PLAN_CONTEXT_RESOLVED", "PLAN", intent,
+        SessionState workingState = planContextState.withSlots(new SlotBundle(
+                        mergedSlots.city(), mergedSlots.location(), mergedSlots.experienceGoal(), mergedSlots.companion(),
+                        mergedSlots.budget(), mergedSlots.activityType(), mergedSlots.style(), mergedSlots.duration(), mergedSlots.feature()))
+                .withPendingClarifyField(null)
+                .withPhase(SessionPhase.PLAN);
+        agentTraceService.recordEvent("PLAN_CONTEXT_RESOLVED", "PLAN", intent,
                 traceMap("mergedSlots", mergedSlots,
                         "excludedSlots", planContextState.excludedSlots(),
                         "unconstrainedSlots", planContextState.unconstrainedSlots(),
                         "planActivityTimes", planActivityTimes,
-                        "planSlots", planSlots)
-        );
-        SessionState workingState = planContextState.withSlots(planSlots)
-                .withPendingClarifyField(null)
-                .withPhase(SessionPhase.PLAN);
-        return completePlan(sessionId, userId, userInput, traceId, workingState, planActivityTimes, publicFallbackUsed);
+                        "planSlots", workingState.slots()));
+        return completePlan(sessionId, userId, userInput, traceId, workingState,
+                planActivityTimes, publicFallbackUsed, fallbackParsingUsed);
     }
 
-    private ChatResponse completePlan(String sessionId,
-                                      Long userId,
-                                      String userInput,
-                                      String traceId,
-                                      SessionState state,
-                                      List<String> planActivityTimes,
-                                      boolean publicFallbackUsed) {
-        WeatherRecommendationContext weather = weatherRecommendationService.resolve(
-                state.slots(), state.timeConstraint());
-        agentTraceService.recordEvent(
-                "PLAN_WEATHER_CONTEXT_RESOLVED",
-                "RANK",
-                traceMap("slots", state.slots(), "timeConstraint", state.timeConstraint()),
-                weather
-        );
-
+    private ChatResponse completePlan(String sessionId, Long userId, String userInput, String traceId,
+                                      SessionState state, List<String> planActivityTimes,
+                                      boolean publicFallbackUsed, boolean fallbackParsingUsed) {
+        WeatherRecommendationContext weather = weatherRecommendationService.resolve(state.slots(), state.timeConstraint());
+        agentTraceService.recordEvent("PLAN_WEATHER_CONTEXT_RESOLVED", "RANK",
+                traceMap("slots", state.slots(), "timeConstraint", state.timeConstraint()), weather);
         List<ActivityPlanService.PlannedActivity> plannedMeals = activityPlanService.planActivities(
-                state.sourceMode(),
-                userId,
-                state.slots(),
-                state.excludedSlots(),
-                planActivityTimes,
-                state.timeConstraint(),
-                weather
-        );
-
+                state.sourceMode(), userId, state.slots(), state.excludedSlots(),
+                planActivityTimes, state.timeConstraint(), weather);
         List<Map<String, Object>> planTrace = new ArrayList<>();
         for (ActivityPlanService.PlannedActivity planned : plannedMeals) {
-            planTrace.add(traceMap(
-                    "period", planned.period(),
+            planTrace.add(traceMap("period", planned.period(),
                     "matched", planned.matched(),
                     "activityId", planned.matched() ? planned.activity().id() : null,
                     "mealName", planned.matched() ? planned.activity().name() : null,
-                    "matchScore", planned.matched() ? planned.activity().matchScore() : null
-            ));
+                    "matchScore", planned.matched() ? planned.activity().matchScore() : null));
         }
-        agentTraceService.recordEvent(
-                "ACTIVITY_PLAN_SEARCHED", "PLAN",
+        agentTraceService.recordEvent("ACTIVITY_PLAN_SEARCHED", "PLAN",
                 traceMap("planActivityTimes", planActivityTimes,
                         "slots", state.slots(),
                         "excludedSlots", state.excludedSlots(),
                         "weather", weather),
-                Map.of("plannedCount", plannedMeals.size(), "plannedMeals", planTrace)
-        );
-
+                Map.of("plannedCount", plannedMeals.size(), "plannedMeals", planTrace));
         boolean anyMatched = plannedMeals.stream().anyMatch(ActivityPlanService.PlannedActivity::matched);
         if (!anyMatched) {
             ResponseResult empty = ResponseResult.textOnly(state.sourceMode() == SourceMode.PERSONAL
                     ? "你的个人活动库里暂时拼不出多时段方案，可以补充更多常去的地方，或者我帮你看看公共推荐吧。"
                     : "暂时拼不出完整的多时段方案，你可以补充氛围、活动类型，或试试个人模式。");
+            if (fallbackParsingUsed) empty = prependFallbackParsingNotice(empty, state);
             agentTraceService.recordEvent("NO_ACTIVITY_PLAN_MATCHED", "PLAN", state, empty);
             return completeTextOnly(sessionId, traceId, state, Intent.ACTIVITY_PLAN, empty);
         }
-
         RecommendResponseAgentService.Result merged = planResponseAgentService.planAndRespond(
                 sessionId, userInput, state.sourceMode(), state.slots(), plannedMeals, weather);
         RecommendResult recommend = merged.recommend();
-        agentTraceService.recordEvent(
-                "PLAN_RESULT_BUILT", "PLAN",
+        agentTraceService.recordEvent("PLAN_RESULT_BUILT", "PLAN",
                 Map.of("strategy", Intent.ACTIVITY_PLAN.name(), "plannedMeals", planTrace), recommend);
-
         ResponseResult response = merged.response();
         if (weather.active()) {
-            response = new ResponseResult(
-                    weather.summary() + "\n" + response.speechText(),
-                    response.displayBlocks(), response.nextAction()
-            );
+            response = new ResponseResult(weather.summary() + "\n" + response.speechText(),
+                    response.displayBlocks(), response.nextAction());
         }
         if (publicFallbackUsed) {
             response = prependPublicFallbackNotice(response);
             agentTraceService.recordEvent("PUBLIC_FALLBACK_NOTICE_APPLIED", "RESPONSE",
                     Map.of("sourceMode", SourceMode.PUBLIC), response);
         }
+        if (fallbackParsingUsed) {
+            response = prependFallbackParsingNotice(response, state);
+            agentTraceService.recordEvent("FALLBACK_PARSE_NOTICE_APPLIED", "RESPONSE",
+                    fallbackNoticeTraceInput(state), response);
+        }
         agentTraceService.recordEvent("PLAN_RESPONSE_AGENT_RESULT", "RESPONSE", recommend, response);
         response = applyOutputRiskGuard(userInput, Intent.ACTIVITY_PLAN, response);
-
         List<Long> lastIds = recommend.recommendations().stream().map(option -> option.itemId()).toList();
         String queryKey = recommendationQueryKey(state);
         SessionState savedState = queryKey.equals(state.recommendationQueryKey())
-                ? state.appendLastRecommendations(lastIds)
-                : state.withLastRecommendations(lastIds);
+                ? state.appendLastRecommendations(lastIds) : state.withLastRecommendations(lastIds);
         savedState = savedState.withRecommendationQueryKey(queryKey)
                 .withPendingClarifyField(null)
                 .withPendingRelaxationContext(null);
@@ -570,11 +528,9 @@ public class CityOrchestratorService {
     static String recommendationQueryKey(SessionState state) {
         if (state == null) return "";
         List<String> unconstrained = state.unconstrainedSlots() == null
-                ? List.of()
-                : state.unconstrainedSlots().stream().sorted().toList();
+                ? List.of() : state.unconstrainedSlots().stream().sorted().toList();
         TimeConstraint time = state.timeConstraint();
-        String timeKey = time == null
-                ? "null|null|null|null"
+        String timeKey = time == null ? "null|null|null|null"
                 : String.valueOf(time.dateStart()) + "|" + time.dateEnd()
                 + "|" + time.startTime() + "|" + time.endTime();
         return String.valueOf(state.sourceMode()) + "|" + state.slots() + "|" + state.excludedSlots()
@@ -589,7 +545,6 @@ public class CityOrchestratorService {
         return completeTextOnly(sessionId, traceId, state, Intent.OTHER, response);
     }
 
-    /** 闲聊插入未完成澄清时只回复当前问题，不终止原来的业务状态机。 */
     private boolean hasPendingClarification(SessionState state) {
         return state != null
                 && state.phase() == SessionPhase.CLARIFY
@@ -597,60 +552,46 @@ public class CityOrchestratorService {
                 && state.currentIntent() != null;
     }
 
-    /**
-     * OTHER 只是一次临时插话：消息本身标记为 OTHER，但 SessionState 保留原 currentIntent、phase 和 pendingClarifyField。
-     * 下一轮用户继续回答澄清字段时，IntentRevise 仍能依据持久化状态恢复原业务流程。
-     */
-    private ChatResponse completeStatePreservingChitchat(String sessionId,
-                                                          String traceId,
-                                                          SessionState state,
-                                                          ResponseResult response) {
+    private ChatResponse completeStatePreservingChitchat(String sessionId, String traceId,
+                                                          SessionState state, ResponseResult response) {
         sessionStateService.save(state);
         sessionService.appendMessage(sessionId, "assistant", response.speechText(), Intent.OTHER.name(), traceId);
         ChatResponse chatResponse = withConversationContext(
                 ChatResponse.answer(sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction()), state);
         agentTraceService.recordEvent("RESPONSE_READY", "CHITCHAT",
-                traceMap(
-                        "responseIntent", Intent.OTHER,
+                traceMap("responseIntent", Intent.OTHER,
                         "businessIntent", state.currentIntent(),
                         "pendingClarifyField", state.pendingClarifyField(),
-                        "statePreserved", true),
-                chatResponse);
+                        "statePreserved", true), chatResponse);
         return chatResponse;
     }
 
     private ChatResponse completeRecommendation(String sessionId, Long userId, String userInput, String traceId,
                                                 SessionState state, List<Long> excludeActivityIds) {
-        return completeRecommendation(sessionId, userId, userInput, traceId, state, excludeActivityIds, null, false);
-    }
-
-    private ChatResponse completeRecommendation(String sessionId, Long userId, String userInput, String traceId,
-                                                SessionState state, List<Long> excludeActivityIds,
-                                                boolean publicFallbackUsed) {
-        return completeRecommendation(sessionId, userId, userInput, traceId, state, excludeActivityIds, null, publicFallbackUsed);
+        return completeRecommendation(sessionId, userId, userInput, traceId,
+                state, excludeActivityIds, null, false, false);
     }
 
     private ChatResponse completeRecommendation(String sessionId, Long userId, String userInput, String traceId,
                                                  SessionState state, List<Long> excludeActivityIds,
                                                  RelaxationSearchService.SearchResult selectedRelaxation) {
-        return completeRecommendation(sessionId, userId, userInput, traceId, state, excludeActivityIds, selectedRelaxation, false);
+        return completeRecommendation(sessionId, userId, userInput, traceId,
+                state, excludeActivityIds, selectedRelaxation, false, false);
     }
 
     private ChatResponse completeRecommendation(String sessionId, Long userId, String userInput, String traceId,
                                                  SessionState state, List<Long> excludeActivityIds,
                                                  RelaxationSearchService.SearchResult selectedRelaxation,
-                                                 boolean publicFallbackUsed) {
+                                                 boolean publicFallbackUsed, boolean fallbackParsingUsed) {
         WeatherRecommendationContext weather = weatherRecommendationService.resolve(state.slots(), state.timeConstraint());
         agentTraceService.recordEvent("WEATHER_CONTEXT_RESOLVED", "RANK",
                 traceMap("slots", state.slots(), "timeConstraint", state.timeConstraint()), weather);
-
         ActivitySearchRequest searchRequest = new ActivitySearchRequest(
-                state.sourceMode(), userId, state.slots(), excludeActivityIds, state.timeConstraint(), state.excludedSlots());
+                state.sourceMode(), userId, state.slots(), excludeActivityIds,
+                state.timeConstraint(), state.excludedSlots());
         List<ActivityItem> candidates = selectedRelaxation == null
-                ? activitySearchService.search(searchRequest)
-                : selectedRelaxation.ranked();
-        Object searchTraceInput = selectedRelaxation == null
-                ? searchRequest
+                ? activitySearchService.search(searchRequest) : selectedRelaxation.ranked();
+        Object searchTraceInput = selectedRelaxation == null ? searchRequest
                 : traceMap("selectedRelaxationLevel", selectedRelaxation.level(),
                         "querySlots", selectedRelaxation.querySlots(),
                         "excludedSlots", state.excludedSlots(),
@@ -659,13 +600,11 @@ public class CityOrchestratorService {
                         "timeConstraint", state.timeConstraint());
         agentTraceService.recordEvent("ACTIVITY_SEARCHED", "SEARCH", searchTraceInput,
                 Map.of("candidateCount", candidates.size(), "candidates", candidates));
-
         ActivityRankRequest rankRequest = new ActivityRankRequest(
                 candidates, state.slots(), state.timeConstraint(), excludeActivityIds);
         ActivityDiversityResult rankedResult = rankAndDiversify(
                 "ACTIVITY_RANKED", "ACTIVITY_DIVERSIFIED", rankRequest, weather);
         List<ActivityItem> ranked = rankedResult.ranked();
-
         if (ranked.isEmpty()) {
             if (state.sourceMode() == SourceMode.PERSONAL) {
                 agentTraceService.recordEvent("PERSONAL_NO_MATCH_FALLBACK", "RECOMMEND", state,
@@ -676,14 +615,11 @@ public class CityOrchestratorService {
                 List<ActivityItem> publicCandidates = activitySearchService.search(publicSearchRequest);
                 agentTraceService.recordEvent("ACTIVITY_SEARCHED_PUBLIC_FALLBACK", "SEARCH", publicSearchRequest,
                         Map.of("candidateCount", publicCandidates.size(), "candidates", publicCandidates));
-
                 ActivityRankRequest publicRankRequest = new ActivityRankRequest(
                         publicCandidates, state.slots(), state.timeConstraint(), excludeActivityIds);
                 ActivityDiversityResult publicRankedResult = rankAndDiversify(
-                        "ACTIVITY_RANKED_PUBLIC_FALLBACK",
-                        "ACTIVITY_DIVERSIFIED_PUBLIC_FALLBACK",
-                        publicRankRequest,
-                        weather);
+                        "ACTIVITY_RANKED_PUBLIC_FALLBACK", "ACTIVITY_DIVERSIFIED_PUBLIC_FALLBACK",
+                        publicRankRequest, weather);
                 List<ActivityItem> publicRanked = publicRankedResult.ranked();
                 if (!publicRanked.isEmpty()) {
                     ranked = publicRanked;
@@ -694,6 +630,7 @@ public class CityOrchestratorService {
                 } else {
                     ResponseResult empty = ResponseResult.textOnly(
                             "你的个人活动库和公共推荐里都暂时没有很匹配的，可以试试调整时间、预算或氛围描述。");
+                    if (fallbackParsingUsed) empty = prependFallbackParsingNotice(empty, state);
                     agentTraceService.recordEvent("NO_ACTIVITY_MATCHED_BOTH", "RECOMMEND", state, empty);
                     return completeTextOnly(sessionId, traceId, state, state.currentIntent(), empty);
                 }
@@ -703,12 +640,14 @@ public class CityOrchestratorService {
                         excludeActivityIds, state.timeConstraint());
                 if (!options.isEmpty()) {
                     String message = "没有完全匹配的活动。你可以选择查看放宽部分偏好后的相近活动，或保持当前严格条件。";
+                    if (fallbackParsingUsed) {
+                        message = fallbackParsingNotice(state) + "\n" + message;
+                        agentTraceService.recordEvent("FALLBACK_PARSE_NOTICE_APPLIED", "RESPONSE",
+                                fallbackNoticeTraceInput(state), Map.of("responseType", "RELAX_OPTIONS"));
+                    }
                     RelaxationContext relaxationContext = new RelaxationContext(
-                            state.sourceMode(),
-                            recommendationQueryKey(state),
-                            excludeActivityIds,
-                            options.stream().map(RelaxationOption::level).toList()
-                    );
+                            state.sourceMode(), recommendationQueryKey(state), excludeActivityIds,
+                            options.stream().map(RelaxationOption::level).toList());
                     agentTraceService.recordEvent("RELAXATION_OPTIONS_READY", "RECOMMEND", state.slots(),
                             traceMap("options", options, "context", relaxationContext));
                     return completeRelaxationChoice(
@@ -716,17 +655,17 @@ public class CityOrchestratorService {
                 }
                 ResponseResult empty = ResponseResult.textOnly(
                         "当前城市暂时没有符合核心条件的活动。你可以切换城市，或调整时间和活动类型后再试。");
+                if (fallbackParsingUsed) empty = prependFallbackParsingNotice(empty, state);
                 agentTraceService.recordEvent("NO_ACTIVITY_MATCHED", "RECOMMEND", state, empty);
                 return completeTextOnly(sessionId, traceId, state, state.currentIntent(), empty);
             }
         }
-
         RecommendResponseAgentService.Result merged = recommendResponseAgentService.recommendAndRespond(
                 sessionId, userInput, state.sourceMode(), state.slots(), ranked, weather);
         RecommendResult recommend = merged.recommend();
         String strategy = state.currentIntent() == null ? Intent.MEAL_RECOMMENDATION.name() : state.currentIntent().name();
-        agentTraceService.recordEvent("RECOMMEND_RESULT_BUILT", "RECOMMEND", Map.of("strategy", strategy, "ranked", ranked), recommend);
-
+        agentTraceService.recordEvent("RECOMMEND_RESULT_BUILT", "RECOMMEND",
+                Map.of("strategy", strategy, "ranked", ranked), recommend);
         ResponseResult response = merged.response();
         if (weather.active()) {
             response = new ResponseResult(weather.summary() + "\n" + response.speechText(),
@@ -734,7 +673,8 @@ public class CityOrchestratorService {
         }
         if (selectedRelaxation != null) {
             response = new ResponseResult(
-                    "没有完全匹配的活动，已" + selectedRelaxation.label() + "。以下结果按原始需求的接近程度排序。\n" + response.speechText(),
+                    "没有完全匹配的活动，已" + selectedRelaxation.label()
+                            + "。以下结果按原始需求的接近程度排序。\n" + response.speechText(),
                     response.displayBlocks(), response.nextAction());
         }
         if (publicFallbackUsed) {
@@ -742,14 +682,17 @@ public class CityOrchestratorService {
             agentTraceService.recordEvent("PUBLIC_FALLBACK_NOTICE_APPLIED", "RESPONSE",
                     Map.of("sourceMode", SourceMode.PUBLIC), response);
         }
+        if (fallbackParsingUsed) {
+            response = prependFallbackParsingNotice(response, state);
+            agentTraceService.recordEvent("FALLBACK_PARSE_NOTICE_APPLIED", "RESPONSE",
+                    fallbackNoticeTraceInput(state), response);
+        }
         agentTraceService.recordEvent("RESPONSE_AGENT_RESULT", "RESPONSE", recommend, response);
         response = applyOutputRiskGuard(userInput, state.currentIntent(), response);
-
         List<Long> lastIds = recommend.recommendations().stream().map(option -> option.itemId()).toList();
         String queryKey = recommendationQueryKey(state);
         SessionState savedState = queryKey.equals(state.recommendationQueryKey())
-                ? state.appendLastRecommendations(lastIds)
-                : state.withLastRecommendations(lastIds);
+                ? state.appendLastRecommendations(lastIds) : state.withLastRecommendations(lastIds);
         savedState = savedState.withRecommendationQueryKey(queryKey)
                 .withPendingClarifyField(null)
                 .withPendingRelaxationContext(null);
@@ -761,7 +704,6 @@ public class CityOrchestratorService {
         return chatResponse;
     }
 
-    /** 推荐/规划生成后的统一输出安全检查。 */
     private ResponseResult applyOutputRiskGuard(String userInput, Intent intent, ResponseResult response) {
         RiskGuardResult guard = riskGuardService.check(userInput, response);
         agentTraceService.recordEvent("RISK_GUARD_OUTPUT_CHECKED", "GUARD",
@@ -775,33 +717,18 @@ public class CityOrchestratorService {
         return response;
     }
 
-    private ActivityDiversityResult rankAndDiversify(String rankEvent,
-                                                     String diversityEvent,
+    private ActivityDiversityResult rankAndDiversify(String rankEvent, String diversityEvent,
                                                      ActivityRankRequest rankRequest,
                                                      WeatherRecommendationContext weather) {
         ActivityRankResult rankResult = activityRankService.rank(rankRequest, weather);
-        agentTraceService.recordEvent(
-                rankEvent,
-                "RANK",
-                rankRequest,
-                traceMap(
-                        "rankedCount", rankResult.ranked().size(),
-                        "scores", rankResult.scores(),
-                        "ranked", rankResult.ranked()
-                )
-        );
-
+        agentTraceService.recordEvent(rankEvent, "RANK", rankRequest,
+                traceMap("rankedCount", rankResult.ranked().size(),
+                        "scores", rankResult.scores(), "ranked", rankResult.ranked()));
         ActivityDiversityResult diversityResult = activityDiversityService.rerank(rankResult.ranked());
-        agentTraceService.recordEvent(
-                diversityEvent,
-                "RANK",
+        agentTraceService.recordEvent(diversityEvent, "RANK",
                 traceMap("nearTieThreshold", 0.03, "relevanceRanked", rankResult.ranked()),
-                traceMap(
-                        "rankedCount", diversityResult.ranked().size(),
-                        "decisions", diversityResult.decisions(),
-                        "ranked", diversityResult.ranked()
-                )
-        );
+                traceMap("rankedCount", diversityResult.ranked().size(),
+                        "decisions", diversityResult.decisions(), "ranked", diversityResult.ranked()));
         return diversityResult;
     }
 
@@ -809,11 +736,93 @@ public class CityOrchestratorService {
         return response;
     }
 
-    private ChatResponse completeRelaxationChoice(String sessionId,
-                                                   String traceId,
-                                                   SessionState state,
-                                                   String message,
-                                                   List<RelaxationOption> options,
+    static ResponseResult prependFallbackParsingNotice(ResponseResult response, SessionState state) {
+        if (response == null) return null;
+        String notice = fallbackParsingNotice(state);
+        if (notice.isBlank()) return response;
+        String body = response.speechText() == null || response.speechText().isBlank()
+                ? notice : notice + "\n" + response.speechText();
+        return new ResponseResult(body, response.displayBlocks(), response.nextAction());
+    }
+
+    static String fallbackParsingNotice(SessionState state) {
+        if (state == null) return "";
+        List<String> conditions = new ArrayList<>();
+        conditions.add("数据源=" + (state.sourceMode() == SourceMode.PERSONAL ? "个人活动库" : "公共活动库"));
+        SlotBundle slots = state.slots() == null ? SlotBundle.empty() : state.slots();
+        appendCondition(conditions, "城市", slots.city());
+        appendCondition(conditions, "区域", slots.location());
+        appendCondition(conditions, "体验目标", slots.experienceGoal());
+        appendCondition(conditions, "同行", slots.companion());
+        appendCondition(conditions, "预算", slots.budget());
+        appendCondition(conditions, "活动类型", slots.activityType());
+        appendCondition(conditions, "风格", slots.style());
+        appendCondition(conditions, "活动时长", slots.duration());
+        appendCondition(conditions, "特征", slots.feature());
+
+        SlotBundle excluded = state.excludedSlots() == null ? SlotBundle.empty() : state.excludedSlots();
+        appendExcludedCondition(conditions, "城市", excluded.city());
+        appendExcludedCondition(conditions, "区域", excluded.location());
+        appendExcludedCondition(conditions, "体验目标", excluded.experienceGoal());
+        appendExcludedCondition(conditions, "同行", excluded.companion());
+        appendExcludedCondition(conditions, "预算", excluded.budget());
+        appendExcludedCondition(conditions, "活动类型", excluded.activityType());
+        appendExcludedCondition(conditions, "风格", excluded.style());
+        appendExcludedCondition(conditions, "活动时长", excluded.duration());
+        appendExcludedCondition(conditions, "特征", excluded.feature());
+
+        if (state.unconstrainedSlots() != null) {
+            state.unconstrainedSlots().stream().sorted()
+                    .forEach(field -> conditions.add(slotLabel(field) + "=不限"));
+        }
+        TimeConstraint time = state.timeConstraint();
+        if (time != null && time.hasDate()) {
+            String date = time.dateStart().equals(time.dateEnd())
+                    ? time.dateStart().toString()
+                    : time.dateStart() + "至" + time.dateEnd();
+            conditions.add("日期=" + date);
+        }
+        if (time != null && time.hasTime()) {
+            conditions.add("时段=" + time.startTime() + "-" + time.endTime());
+        }
+        return "这轮我采用了保守解析，实际按以下条件进行召回："
+                + String.join("；", conditions)
+                + "。如果有遗漏或理解不准，可以继续补充或修改，我会按新条件重新搜索。";
+    }
+
+    private static void appendCondition(List<String> conditions, String label, List<String> values) {
+        if (values != null && !values.isEmpty()) conditions.add(label + "=" + String.join("、", values));
+    }
+
+    private static void appendExcludedCondition(List<String> conditions, String label, List<String> values) {
+        if (values != null && !values.isEmpty()) conditions.add("排除" + label + "=" + String.join("、", values));
+    }
+
+    private static String slotLabel(String field) {
+        return switch (field) {
+            case "city" -> "城市";
+            case "location" -> "区域";
+            case "experienceGoal" -> "体验目标";
+            case "companion" -> "同行";
+            case "budget" -> "预算";
+            case "activityType" -> "活动类型";
+            case "style" -> "风格";
+            case "duration" -> "活动时长";
+            case "feature" -> "特征";
+            default -> field;
+        };
+    }
+
+    private Map<String, Object> fallbackNoticeTraceInput(SessionState state) {
+        return traceMap("sourceMode", state.sourceMode(),
+                "slots", state.slots(),
+                "excludedSlots", state.excludedSlots(),
+                "unconstrainedSlots", state.unconstrainedSlots(),
+                "timeConstraint", state.timeConstraint());
+    }
+
+    private ChatResponse completeRelaxationChoice(String sessionId, String traceId, SessionState state,
+                                                   String message, List<RelaxationOption> options,
                                                    RelaxationContext relaxationContext) {
         SessionState savedState = state.withIntent(Intent.MEAL_RECOMMENDATION)
                 .withPendingClarifyField(null)
@@ -834,11 +843,8 @@ public class CityOrchestratorService {
         return response;
     }
 
-    /** 风险兜底只返回提示，不改变原业务状态和待澄清上下文。 */
-    private ChatResponse completeGuardedTextOnly(String sessionId,
-                                                 String traceId,
-                                                 SessionState state,
-                                                 ResponseResult response) {
+    private ChatResponse completeGuardedTextOnly(String sessionId, String traceId,
+                                                 SessionState state, ResponseResult response) {
         sessionStateService.save(state);
         String businessIntent = state.currentIntent() == null ? null : state.currentIntent().name();
         sessionService.appendMessage(sessionId, "assistant", response.speechText(), businessIntent, traceId);
@@ -849,14 +855,17 @@ public class CityOrchestratorService {
         return chatResponse;
     }
 
-    private ChatResponse completeTextOnly(String sessionId, String traceId, SessionState state, Intent intent, ResponseResult response) {
+    private ChatResponse completeTextOnly(String sessionId, String traceId, SessionState state,
+                                          Intent intent, ResponseResult response) {
         SessionState savedState = state.withIntent(intent)
                 .withPendingClarifyField(null)
                 .withPendingRelaxationContext(null);
         sessionStateService.save(savedState);
         sessionService.appendMessage(sessionId, "assistant", response.speechText(), intent.name(), traceId);
-        ChatResponse chatResponse = ChatResponse.answer(sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction());
-        agentTraceService.recordEvent("RESPONSE_READY", "RESPONSE", Map.of("intent", intent, "state", savedState), chatResponse);
+        ChatResponse chatResponse = ChatResponse.answer(
+                sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction());
+        agentTraceService.recordEvent("RESPONSE_READY", "RESPONSE",
+                Map.of("intent", intent, "state", savedState), chatResponse);
         return chatResponse;
     }
 
