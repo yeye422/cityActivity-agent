@@ -230,6 +230,17 @@ public class CityOrchestratorService {
         agentTraceService.recordEvent("INTENT_RECOGNIZED", "INTENT", request.message(), rawIntent);
 
         IntentResult intent = intentReviseService.revise(state, rawIntent, request.message());
+
+        // 安全风险是后端横切约束，不作为 Intent。明显风险请求在状态修改和业务搜索前直接拦截。
+        RiskGuardResult inputGuard = riskGuardService.checkInput(request.message());
+        agentTraceService.recordEvent("RISK_GUARD_INPUT_CHECKED", "GUARD",
+                traceMap("intent", intent.intent(), "userInput", request.message()), inputGuard);
+        if (!inputGuard.passed()) {
+            ResponseResult safeResponse = ResponseResult.textOnly(inputGuard.rewriteSuggestion());
+            agentTraceService.recordEvent("RISK_GUARD_INPUT_BLOCKED", "GUARD", inputGuard, safeResponse);
+            return completeTextOnly(sessionId, traceId, state, intent.intent(), safeResponse);
+        }
+
         TimeResolutionResult timeResolution = timeResolutionService.resolve(
                 state.timeConstraint(), intent.temporal(), request.message());
         agentTraceService.recordEvent("TIME_RESOLUTION_DECIDED", "TIME", intent.temporal(), timeResolution);
@@ -258,11 +269,10 @@ public class CityOrchestratorService {
         agentTraceService.recordEvent("ROUTE_SELECTED", "ROUTE", intent, Map.of("route", intent.intent()));
 
         return switch (intent.intent()) {
-            case MEAL_RECOMMENDATION, CLARIFY_NEEDED ->
+            case MEAL_RECOMMENDATION ->
                     handleRecommendation(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
             case MEAL_ADJUST -> handleAdjust(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
             case ACTIVITY_PLAN -> handlePlan(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
-            case HEALTH_RISK -> handleHealthRisk(sessionId, traceId, state);
             case OTHER -> handleChitchat(sessionId, traceId, state);
         };
     }
@@ -270,8 +280,7 @@ public class CityOrchestratorService {
     private boolean isActivityFlow(Intent intent) {
         return intent == Intent.MEAL_RECOMMENDATION
                 || intent == Intent.MEAL_ADJUST
-                || intent == Intent.ACTIVITY_PLAN
-                || intent == Intent.CLARIFY_NEEDED;
+                || intent == Intent.ACTIVITY_PLAN;
     }
 
     private SlotBundle contextSlots(Map<String, Object> context) {
@@ -375,12 +384,13 @@ public class CityOrchestratorService {
                 .withPendingClarifyField(field)
                 .withPendingRelaxationContext(null);
         sessionStateService.save(clarifyState);
-        sessionService.appendMessage(sessionId, "assistant", question, Intent.CLARIFY_NEEDED.name(), traceId);
+        String businessIntent = clarifyState.currentIntent() == null ? null : clarifyState.currentIntent().name();
+        sessionService.appendMessage(sessionId, "assistant", question, businessIntent, traceId);
         List<String> missingSlots = List.of(field.key());
         ChatResponse response = withConversationContext(
                 ChatResponse.clarify(sessionId, traceId, question, missingSlots), clarifyState);
         agentTraceService.recordEvent("RESPONSE_READY", "CLARIFY",
-                traceMap("field", field.key(), "question", question), response);
+                traceMap("field", field.key(), "question", question, "businessIntent", businessIntent), response);
         return response;
     }
 
@@ -536,17 +546,7 @@ public class CityOrchestratorService {
                     Map.of("sourceMode", SourceMode.PUBLIC), response);
         }
         agentTraceService.recordEvent("PLAN_RESPONSE_AGENT_RESULT", "RESPONSE", recommend, response);
-        RiskGuardResult guard = riskGuardService.check(userInput, Intent.ACTIVITY_PLAN, recommend, response);
-        agentTraceService.recordEvent(
-                "NUTRITION_GUARD_CHECKED", "GUARD",
-                Map.of("intent", Intent.ACTIVITY_PLAN, "response", response), guard);
-
-        if (!guard.passed()) {
-            response = ResponseResult.textOnly(guard.rewriteSuggestion());
-            agentTraceService.recordEvent("NUTRITION_GUARD_REWRITTEN", "GUARD", guard, response);
-        } else {
-            agentTraceService.recordEvent("COMPLIANCE_GUARD_REWRITTEN", "GUARD", null, response);
-        }
+        response = applyOutputRiskGuard(userInput, Intent.ACTIVITY_PLAN, response);
 
         List<Long> lastIds = recommend.recommendations().stream().map(option -> option.itemId()).toList();
         String queryKey = recommendationQueryKey(state);
@@ -576,11 +576,6 @@ public class CityOrchestratorService {
                 + "|" + time.startTime() + "|" + time.endTime();
         return String.valueOf(state.sourceMode()) + "|" + state.slots() + "|" + state.excludedSlots()
                 + "|" + unconstrained + "|" + timeKey;
-    }
-
-    private ChatResponse handleHealthRisk(String sessionId, String traceId, SessionState state) {
-        ResponseResult response = ResponseResult.textOnly(riskGuardService.conservativeMessage());
-        return completeTextOnly(sessionId, traceId, state, Intent.HEALTH_RISK, response);
     }
 
     private ChatResponse handleChitchat(String sessionId, String traceId, SessionState state) {
@@ -712,15 +707,7 @@ public class CityOrchestratorService {
                     Map.of("sourceMode", SourceMode.PUBLIC), response);
         }
         agentTraceService.recordEvent("RESPONSE_AGENT_RESULT", "RESPONSE", recommend, response);
-
-        RiskGuardResult guard = riskGuardService.check(userInput, state.currentIntent(), recommend, response);
-        agentTraceService.recordEvent("NUTRITION_GUARD_CHECKED", "GUARD", Map.of("intent", state.currentIntent(), "response", response), guard);
-        if (!guard.passed()) {
-            response = ResponseResult.textOnly(guard.rewriteSuggestion());
-            agentTraceService.recordEvent("NUTRITION_GUARD_REWRITTEN", "GUARD", guard, response);
-        } else {
-            agentTraceService.recordEvent("COMPLIANCE_GUARD_REWRITTEN", "GUARD", null, response);
-        }
+        response = applyOutputRiskGuard(userInput, state.currentIntent(), response);
 
         List<Long> lastIds = recommend.recommendations().stream().map(option -> option.itemId()).toList();
         String queryKey = recommendationQueryKey(state);
@@ -736,6 +723,20 @@ public class CityOrchestratorService {
                 ChatResponse.answer(sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction()), savedState);
         agentTraceService.recordEvent("RESPONSE_READY", "RESPONSE", savedState, chatResponse);
         return chatResponse;
+    }
+
+    /** 推荐/规划生成后的统一输出安全检查。 */
+    private ResponseResult applyOutputRiskGuard(String userInput, Intent intent, ResponseResult response) {
+        RiskGuardResult guard = riskGuardService.check(userInput, response);
+        agentTraceService.recordEvent("RISK_GUARD_OUTPUT_CHECKED", "GUARD",
+                traceMap("intent", intent, "response", response), guard);
+        if (!guard.passed()) {
+            ResponseResult rewritten = ResponseResult.textOnly(guard.rewriteSuggestion());
+            agentTraceService.recordEvent("RISK_GUARD_OUTPUT_REWRITTEN", "GUARD", guard, rewritten);
+            return rewritten;
+        }
+        agentTraceService.recordEvent("RISK_GUARD_OUTPUT_PASSED", "GUARD", null, response);
+        return response;
     }
 
     private ActivityDiversityResult rankAndDiversify(String rankEvent,
