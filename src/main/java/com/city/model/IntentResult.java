@@ -21,7 +21,7 @@ import java.util.List;
 @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY)
 @AllArgsConstructor
 public class IntentResult {
-    /** 当前用户输入的意图。 */
+    /** 当前用户输入的业务意图。 */
     private Intent intent;
     /** LLM 对分类结果的置信度；fallback 结果通常较低。 */
     private double confidence;
@@ -47,10 +47,13 @@ public class IntentResult {
         this(intent, confidence, operations, temporal, false);
     }
 
-    /** 构造一个保守的模型异常澄清结果。 */
-    public static IntentResult clarify() {
+    /**
+     * 构造模型异常时的保守业务结果。
+     * 澄清不再是 Intent；后续 Orchestrator 会按推荐前置条件决定是否需要追问。
+     */
+    public static IntentResult fallbackRecommendation() {
         return new IntentResult(
-                Intent.CLARIFY_NEEDED,
+                Intent.MEAL_RECOMMENDATION,
                 0.2,
                 List.of(),
                 TemporalMutation.keep(),
