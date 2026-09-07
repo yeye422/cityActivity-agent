@@ -327,17 +327,46 @@ public class IntentAgentService {
      */
     private Intent fallbackIntent(String userInput) {
         if (userInput == null || userInput.isBlank()) return Intent.OTHER;
-        if (containsAny(userInput, "换一批", "换个", "不要户外", "室内", "便宜点", "近一点", "安静点")) {
+        String text = userInput.replaceAll("\\s+", "");
+
+        // 纯安全咨询仍是 OTHER，真正的风险拦截统一由后端 RiskGuard 处理。
+        if (isPureSafetyQuestion(text)) return Intent.OTHER;
+
+        // 明确修改/排除/取消约束时按调整处理；没有历史结果时 IntentRevise 会确定性降级为首次推荐。
+        if (containsAny(text,
+                "换一批", "换个", "换成", "改成", "改为", "改到", "改看",
+                "不要", "不想", "清空", "取消限制",
+                "预算不限", "不限制预算", "类型不限", "活动不限",
+                "便宜点", "近一点", "安静点")) {
             return Intent.MEAL_ADJUST;
         }
-        if (containsActivityPlanSignal(userInput)) return Intent.ACTIVITY_PLAN;
-        if (containsAny(userInput, "你是谁", "你是 AI", "你好")) return Intent.OTHER;
-        if (containsAny(userInput,
+
+        if (containsActivityPlanSignal(text)) return Intent.ACTIVITY_PLAN;
+        if (containsAny(text, "你是谁", "你是AI", "你好")) return Intent.OTHER;
+
+        // 模型失败时，明确活动词或时间表达至少保持在推荐业务内；缺什么由后端 ClarifyRule/TimeResolution 决定。
+        if (containsAny(text,
                 "去哪", "去哪里", "玩什么", "活动", "展览", "电影", "演出", "运动", "探店", "推荐",
-                "爬山", "徒步", "露营", "半天", "一天", "一日", "全天", "一整天", "有空", "都行", "都可以")) {
+                "爬山", "徒步", "露营", "半天", "一天", "一日", "全天", "一整天", "有空", "都行", "都可以",
+                "今天", "明天", "后天", "本周", "这周", "下周", "周末",
+                "周一", "周二", "周三", "周四", "周五", "周六", "周日", "周天",
+                "上午", "早上", "中午", "下午", "晚上", "今晚", "凌晨", "几点", "时间", "时段")) {
             return Intent.MEAL_RECOMMENDATION;
         }
         return Intent.OTHER;
+    }
+
+    /** 仅区分“纯安全咨询”和“带风险条件的推荐需求”，不负责判断是否应该放行。 */
+    private boolean isPureSafetyQuestion(String text) {
+        boolean hasRiskSignal = containsAny(text,
+                "暴雨", "台风", "雷暴", "极端天气", "偏远", "无人区", "深夜独自", "凌晨一个人",
+                "酒后驾驶", "酒驾", "醉驾", "翻越围栏", "违法进入", "擅闯",
+                "未成年人", "儿童");
+        boolean asksSafety = containsAny(text,
+                "安全吗", "安全么", "安全吗", "可以吗", "能不能", "能吗", "合适吗", "行不行");
+        boolean asksRecommendation = containsAny(text,
+                "推荐", "找几个", "找点", "有什么活动", "安排", "规划", "换成", "改成");
+        return hasRiskSignal && asksSafety && !asksRecommendation;
     }
 
     /** fallback 中识别少量明确的“需要多时段规划”表达。 */
