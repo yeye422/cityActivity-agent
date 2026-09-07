@@ -20,6 +20,13 @@ class RiskGuardServiceTest {
     }
 
     @Test
+    void shouldAllowSafeAlternativeRequestMentioningRiskWords() {
+        RiskGuardResult result = service.checkInput("暴雨天不要户外，推荐几个室内展览");
+
+        assertTrue(result.passed());
+    }
+
+    @Test
     void shouldBlockDrunkDrivingSafetyRequestWithoutSafetyIntent() {
         RiskGuardResult result = service.checkInput("酒后驾驶去参加活动可以吗？");
 
