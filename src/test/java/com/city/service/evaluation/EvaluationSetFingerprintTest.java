@@ -24,6 +24,17 @@ class EvaluationSetFingerprintTest {
     }
 
     @Test
+    void objectFieldOrderDoesNotChangeFingerprint() throws Exception {
+        JsonNode leftCase = objectMapper.readTree("{\"id\":\"a\",\"message\":\"A\",\"expectedIntent\":\"OTHER\"}");
+        JsonNode rightCase = objectMapper.readTree("{\"expectedIntent\":\"OTHER\",\"message\":\"A\",\"id\":\"a\"}");
+
+        assertEquals(
+                EvaluationSetFingerprint.sha256(objectMapper, List.of(leftCase)),
+                EvaluationSetFingerprint.sha256(objectMapper, List.of(rightCase))
+        );
+    }
+
+    @Test
     void caseContentChangeProducesNewFingerprint() throws Exception {
         JsonNode before = objectMapper.readTree("{\"id\":\"a\",\"message\":\"A\"}");
         JsonNode after = objectMapper.readTree("{\"id\":\"a\",\"message\":\"changed\"}");
