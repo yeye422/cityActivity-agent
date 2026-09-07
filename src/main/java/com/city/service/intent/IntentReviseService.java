@@ -15,7 +15,8 @@ import java.util.List;
  * <p>边界非常重要：这里不重新理解自然语言，也不使用关键词覆盖模型的普通语义判断；
  * 只根据系统已经确定的会话事实修正不可能成立的状态，例如“没有历史推荐却要求调整上一批”。</p>
  *
- * <p>主链路因此保持为：LLM 负责语义理解 → 本服务做状态一致性修正 → Orchestrator 按最终 Intent 路由。</p>
+ * <p>主链路因此保持为：LLM 负责业务意图理解 → 本服务做状态一致性修正 → Orchestrator 按最终 Intent 路由。
+ * 澄清和安全风险都由后端独立处理，不属于 IntentRevise 的职责。</p>
  */
 @Service
 public class IntentReviseService {
@@ -35,8 +36,8 @@ public class IntentReviseService {
      * @return 可直接交给 Orchestrator 路由的最终意图结果
      */
     public IntentResult revise(SessionState state, IntentResult result, String userInput) {
-        // 模型异常返回 null 时统一转成 CLARIFY，防止后续链路出现空指针。
-        IntentResult safeResult = result == null ? IntentResult.clarify() : result;
+        // 正常情况下 IntentAgent 已经提供 fallback；异常 null 再保守落到推荐业务，由后端必要字段规则决定是否追问。
+        IntentResult safeResult = result == null ? IntentResult.fallbackRecommendation() : result;
 
         // “换一批”是确定性的结果集操作，不允许模型顺带修改普通槽位或时间条件。
         if (isPureBatchRefresh(userInput)) {
@@ -52,7 +53,7 @@ public class IntentReviseService {
                 && state.phase() == SessionPhase.CLARIFY
                 && state.pendingClarifyField() != null
                 && state.currentIntent() == Intent.ACTIVITY_PLAN
-                && (safeResult.intent() == Intent.MEAL_RECOMMENDATION || safeResult.intent() == Intent.CLARIFY_NEEDED)) {
+                && safeResult.intent() == Intent.MEAL_RECOMMENDATION) {
             return revised(Intent.ACTIVITY_PLAN, safeResult);
         }
 
@@ -61,8 +62,7 @@ public class IntentReviseService {
             return revised(Intent.MEAL_RECOMMENDATION, safeResult);
         }
 
-        // 其他情况下尊重模型判断：
-        // 不再做 HEALTH_RISK 关键词覆盖、Plan 正向/反向关键词纠正或低 confidence 强制澄清。
+        // 其他情况下尊重模型判断，不再做关键词意图覆盖或低 confidence 强制改路由。
         return safeResult;
     }
 
