@@ -13,6 +13,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -29,6 +30,8 @@ class RetrievalBaselineEvaluationServiceTest {
         RetrievalBaselineEvaluationService.CaseSet caseSet = service.loadCaseSet();
 
         assertEquals("retrieval-v1", caseSet.version());
+        assertNotNull(caseSet.evalSetHash());
+        assertEquals(64, caseSet.evalSetHash().length());
         assertEquals(6, caseSet.cases().size());
 
         RetrievalBaselineEvaluationService.LoadedCase first = caseSet.cases().getFirst();
@@ -81,6 +84,8 @@ class RetrievalBaselineEvaluationServiceTest {
         RetrievalBaselineEvaluationService.Report report = service.run(999999L, 5);
 
         assertEquals("retrieval-v1", report.evalSetVersion());
+        assertNotNull(report.evalSetHash());
+        assertEquals(64, report.evalSetHash().length());
         assertEquals("CURRENT_PIPELINE", report.strategy());
         assertEquals(5, report.k());
         assertEquals(6, report.cases().size());
