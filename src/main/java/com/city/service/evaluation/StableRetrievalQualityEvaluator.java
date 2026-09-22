@@ -50,6 +50,18 @@ public final class StableRetrievalQualityEvaluator {
         return new CaseResult(testCase.caseId(), k, topK, recallAtK, ndcgAtK, noResultFalsePositive);
     }
 
+    public static Summary summarize(List<CaseResult> results) {
+        List<CaseResult> safe = results == null
+                ? List.of()
+                : results.stream().filter(Objects::nonNull).toList();
+        return new Summary(
+                safe.size(),
+                average(safe.stream().map(CaseResult::recallAtK).toList()),
+                average(safe.stream().map(CaseResult::ndcgAtK).toList()),
+                average(safe.stream().map(CaseResult::noResultFalsePositive).toList())
+        );
+    }
+
     private static Double ndcg(List<String> ranked,
                                Map<String, Double> relevance,
                                int k) {
@@ -80,6 +92,13 @@ public final class StableRetrievalQualityEvaluator {
 
     private static double log2(double value) {
         return Math.log(value) / Math.log(2.0);
+    }
+
+    private static Double average(List<Double> values) {
+        List<Double> present = values.stream().filter(Objects::nonNull).toList();
+        return present.isEmpty()
+                ? null
+                : present.stream().mapToDouble(Double::doubleValue).average().orElseThrow();
     }
 
     public record CaseDefinition(
@@ -115,4 +134,11 @@ public final class StableRetrievalQualityEvaluator {
             topKActivityKeys = topKActivityKeys == null ? List.of() : List.copyOf(topKActivityKeys);
         }
     }
+
+    public record Summary(
+            int totalCases,
+            Double recallAtK,
+            Double ndcgAtK,
+            Double noResultFalsePositiveRate
+    ) { }
 }
