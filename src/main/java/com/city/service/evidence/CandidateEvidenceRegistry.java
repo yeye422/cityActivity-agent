@@ -1,21 +1,25 @@
 package com.city.service.evidence;
 
+import com.city.model.ActivityItem;
 import com.city.model.tool.RetrievalToolResult;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
  * 单次 RecommendationAgent 执行期间的候选证据登记表。
  *
- * <p>RetrievalTool 每次把真正返回给模型的 activityId 登记到这里；最终 RecommendationDecision
- * 只能引用已登记 ID。该对象只存在于一次 Agent 执行中，不承担跨请求持久化职责。</p>
+ * <p>RetrievalTool 每次把真正返回给模型的 activityId 以及对应已验证 ActivityItem 登记到这里；
+ * 最终 RecommendationDecision 只能引用已登记 ID。该对象只存在于一次 Agent 执行中，不承担跨请求持久化职责。</p>
  */
 public final class CandidateEvidenceRegistry {
     private final int maxRetrievalCalls;
     private final Set<Long> exposedActivityIds = new LinkedHashSet<>();
+    private final Map<Long, ActivityItem> verifiedCandidates = new LinkedHashMap<>();
     private final List<RetrievalRound> rounds = new ArrayList<>();
 
     public CandidateEvidenceRegistry(int maxRetrievalCalls) {
@@ -33,8 +37,8 @@ public final class CandidateEvidenceRegistry {
         rounds.add(new RetrievalRound(normalize(retrievalIntent), List.of()));
     }
 
-    /** 记录本轮 Tool 真正暴露给模型的候选 ID。 */
-    public synchronized void recordResult(RetrievalToolResult result) {
+    /** 记录本轮 Tool 真正暴露给模型的候选和对应业务实体。 */
+    public synchronized void recordResult(RetrievalToolResult result, List<ActivityItem> sourceCandidates) {
         if (rounds.isEmpty()) {
             throw new IllegalStateException("必须先 beginRetrieval 再记录候选结果");
         }
@@ -46,6 +50,15 @@ public final class CandidateEvidenceRegistry {
                         .distinct()
                         .toList();
         exposedActivityIds.addAll(ids);
+
+        if (sourceCandidates != null) {
+            for (ActivityItem candidate : sourceCandidates) {
+                if (candidate != null && candidate.id() != null && ids.contains(candidate.id())) {
+                    verifiedCandidates.put(candidate.id(), candidate);
+                }
+            }
+        }
+
         int last = rounds.size() - 1;
         RetrievalRound previous = rounds.get(last);
         rounds.set(last, new RetrievalRound(previous.retrievalIntent(), ids));
@@ -58,6 +71,19 @@ public final class CandidateEvidenceRegistry {
     public synchronized boolean allExposed(List<Long> activityIds) {
         if (activityIds == null || activityIds.isEmpty()) return false;
         return activityIds.stream().allMatch(this::wasExposed);
+    }
+
+    /** 按 Agent 最终决策顺序恢复服务器验证过的活动实体。 */
+    public synchronized List<ActivityItem> resolveSelected(List<Long> activityIds) {
+        if (activityIds == null || activityIds.isEmpty()) return List.of();
+        List<ActivityItem> result = new ArrayList<>();
+        for (Long id : activityIds) {
+            ActivityItem candidate = verifiedCandidates.get(id);
+            if (candidate != null) {
+                result.add(candidate);
+            }
+        }
+        return List.copyOf(result);
     }
 
     public synchronized Set<Long> exposedActivityIds() {
