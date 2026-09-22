@@ -8,6 +8,7 @@ import com.city.model.agent.PlanningAgentExecutionResult;
 import com.city.model.context.SemanticContext;
 import com.city.model.context.VerifiedRequestContext;
 import com.city.service.context.SemanticContextBuilder;
+import com.city.service.recommend.RecommendResponseAgentService;
 import com.city.service.trace.AgentTraceService;
 import com.city.service.worker.PlanningAgentWorker;
 import org.springframework.beans.factory.annotation.Value;
@@ -41,7 +42,11 @@ public class PlanningDecisionFacade {
         this.enabled = enabled;
     }
 
-    public Optional<DecisionResponseResult> tryPlan(
+    /**
+     * 过渡兼容：Supervisor 仍使用旧 Result 类型；新 ResponseGenerator 已完全独立。
+     * 最终薄 Supervisor 切换后会移除此适配并直接返回 DecisionResponseResult。
+     */
+    public Optional<RecommendResponseAgentService.Result> tryPlan(
             String userInput,
             String traceId,
             SessionState state,
@@ -69,7 +74,8 @@ public class PlanningDecisionFacade {
                     state.sessionId(), userInput, state.sourceMode(), state.slots(), execution, weather);
             traceService.recordEvent(
                     "PLANNING_REACT_COMPLETED", "PLAN", execution.decision(), execution.acceptedPlan());
-            return Optional.of(generated);
+            return Optional.of(new RecommendResponseAgentService.Result(
+                    generated.recommend(), generated.response()));
         } catch (RuntimeException error) {
             traceService.recordError(
                     "PLANNING_REACT_FALLBACK",
