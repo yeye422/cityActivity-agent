@@ -9,9 +9,8 @@ import com.city.model.SessionState;
 import com.city.model.SlotBundle;
 import com.city.model.SlotMutation;
 import com.city.service.clarify.ClarifyRuleService;
-import com.city.service.plan.ActivityPlanService;
+import com.city.service.plan.TimeWindowResolver;
 import com.city.service.slot.SlotMutationService;
-import com.city.service.worker.PlanningWorker;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -67,16 +66,15 @@ class WorkflowPreparationTest {
     void planningShouldResolveWindowsOnlyAfterClarificationPasses() {
         SlotMutationService mutationService = mock(SlotMutationService.class);
         ClarifyRuleService clarify = mock(ClarifyRuleService.class);
-        ActivityPlanService planService = mock(ActivityPlanService.class);
-        PlanningWorker planningWorker = new PlanningWorker(planService);
+        TimeWindowResolver timeWindowResolver = mock(TimeWindowResolver.class);
         SlotBundle slots = slots("西安", "展览");
         when(mutationService.apply(any(), any(), any(), any()))
                 .thenReturn(new SlotMutation(slots, SlotBundle.empty(), Set.of()));
         when(clarify.missingRequiredFields(eq(Intent.ACTIVITY_PLAN), any(), any()))
                 .thenReturn(List.of());
-        when(planService.resolveActivityTimes(any(), any())).thenReturn(List.of("14:00-16:00", "18:00-20:00"));
+        when(timeWindowResolver.resolve(any(), any())).thenReturn(List.of("14:00-16:00", "18:00-20:00"));
 
-        PlanningWorkflow.Preparation result = new PlanningWorkflow(mutationService, clarify, planningWorker)
+        PlanningWorkflow.Preparation result = new PlanningWorkflow(mutationService, clarify, timeWindowResolver)
                 .prepare(state(), new IntentResult(Intent.ACTIVITY_PLAN, 1.0));
 
         assertEquals(SessionPhase.PLAN, result.state().phase());
@@ -87,18 +85,17 @@ class WorkflowPreparationTest {
     void planningShouldNotResolveWindowsWhenClarificationIsRequired() {
         SlotMutationService mutationService = mock(SlotMutationService.class);
         ClarifyRuleService clarify = mock(ClarifyRuleService.class);
-        ActivityPlanService planService = mock(ActivityPlanService.class);
-        PlanningWorker planningWorker = new PlanningWorker(planService);
+        TimeWindowResolver timeWindowResolver = mock(TimeWindowResolver.class);
         when(mutationService.apply(any(), any(), any(), any())).thenReturn(SlotMutation.empty());
         when(clarify.missingRequiredFields(eq(Intent.ACTIVITY_PLAN), any(), any()))
                 .thenReturn(List.of(ClarifyField.CITY));
 
-        PlanningWorkflow.Preparation result = new PlanningWorkflow(mutationService, clarify, planningWorker)
+        PlanningWorkflow.Preparation result = new PlanningWorkflow(mutationService, clarify, timeWindowResolver)
                 .prepare(state(), new IntentResult(Intent.ACTIVITY_PLAN, 1.0));
 
         assertEquals(ClarifyField.CITY, result.missingField());
         assertTrue(result.windows().isEmpty());
-        verify(planService, never()).resolveActivityTimes(any(), any());
+        verify(timeWindowResolver, never()).resolve(any(), any());
     }
 
     private SessionState state() {
