@@ -7,7 +7,9 @@ import com.city.model.agent.PlanningDecision;
 import com.city.model.agent.PlanValidationResult;
 import com.city.model.context.PlanningToolContext;
 import com.city.model.context.VerifiedRequestContext;
+import com.city.service.evidence.DecisionEvidenceValidator;
 import com.city.service.evidence.PlanningEvidenceRegistry;
+import com.city.service.evidence.RunEvidenceStore;
 import com.city.service.plan.PlanProposalValidationService;
 import com.city.service.plan.PlanningConstraintParser;
 import com.city.service.trace.AgentTraceService;
@@ -21,7 +23,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * PlanningAgent 的执行边界。当前作为旁路新能力存在，不写 SessionState，也不替换旧 PlanningWorker。
+ * PlanningAgent 的执行边界。不写 SessionState；最终方案必须同时通过 Solver 与当前 Run Evidence 门禁。
  */
 @Component
 public final class PlanningAgentWorker {
@@ -29,6 +31,7 @@ public final class PlanningAgentWorker {
     private final PlanningAgentBuilder agentBuilder;
     private final PlanningConstraintParser constraintParser;
     private final PlanProposalValidationService validationService;
+    private final DecisionEvidenceValidator evidenceValidator = new DecisionEvidenceValidator();
     private final AgentTraceService traceService;
 
     public PlanningAgentWorker(
@@ -52,7 +55,9 @@ public final class PlanningAgentWorker {
         Objects.requireNonNull(verifiedContext, "verifiedContext");
         List<String> safeWindows = windows == null ? List.of() : List.copyOf(windows);
         List<TravelTimeEvidence> safeTravel = travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
-        PlanningEvidenceRegistry evidenceRegistry = new PlanningEvidenceRegistry();
+        RunEvidenceStore evidenceStore = new RunEvidenceStore(verifiedContext.traceId());
+        safeTravel.forEach(evidenceStore::recordTravelEvidence);
+        PlanningEvidenceRegistry evidenceRegistry = new PlanningEvidenceRegistry(evidenceStore);
         BigDecimal maxBudget = constraintParser.explicitMaxBudget(verifiedContext.effectiveSlots());
         PlanningToolContext planningContext = new PlanningToolContext(
                 verifiedContext,
@@ -91,6 +96,7 @@ public final class PlanningAgentWorker {
             if (!finalValidation.valid() || finalValidation.acceptedPlan() == null) {
                 throw new IllegalStateException("PlanningAgent 最终方案未通过 Java Solver 复核: " + finalValidation.violations());
             }
+            evidenceValidator.validatePlan(finalValidation.acceptedPlan(), evidenceStore);
 
             PlanningAgentExecutionResult result = new PlanningAgentExecutionResult(
                     decision,
@@ -102,7 +108,8 @@ public final class PlanningAgentWorker {
                     "AGENT",
                     java.util.Map.of(
                             "periods", evidenceRegistry.periods(),
-                            "travelEvidence", planningContext.allTravelTimeEvidence()
+                            "travelEvidence", planningContext.allTravelTimeEvidence(),
+                            "evidence", evidenceStore.snapshot()
                     ),
                     result
             );
@@ -114,7 +121,8 @@ public final class PlanningAgentWorker {
                     java.util.Map.of(
                             "windows", safeWindows,
                             "exposedActivityIds", evidenceRegistry.exposedActivityIds(),
-                            "travelEvidence", planningContext.allTravelTimeEvidence()
+                            "travelEvidence", planningContext.allTravelTimeEvidence(),
+                            "evidence", evidenceStore.snapshot()
                     ),
                     error
             );
