@@ -14,6 +14,7 @@ import com.city.model.PromoteBaselineRequest;
 import com.city.model.PromoteEvaluationCaseRequest;
 import com.city.model.RegressionEvaluationReport;
 import com.city.model.RegressionEvaluationRequest;
+import com.city.model.RequestTraceRow;
 import com.city.model.SlotBundle;
 import com.city.model.TraceLabelRequest;
 import com.city.service.orchestrator.CityAgentSupervisor;
@@ -121,6 +122,7 @@ public class RegressionEvaluationService {
         }
 
         EvaluationReport report = evaluationService.evaluateTraceIds(ownerUserId, traceIds, judge);
+        report = enrichRuntimeMetrics(report, traceService.findByTraceIds(ownerUserId, traceIds));
         String runId = "eval_" + UUID.randomUUID().toString().replace("-", "");
         String gitCommit = buildVersionService.gitCommit();
         EvaluationRunRow baseline = evaluationRunMapper.findBaseline(ownerUserId, evalSetVersion, evalSetHash);
@@ -223,6 +225,25 @@ public class RegressionEvaluationService {
                 runId, version, evalSetHash, gitCommit, promptVersion, ruleVersion, modelVersion,
                 report, baseline.getRunId(), baseline.getAvgScore(),
                 gate.scoreDelta(), gate.metricDeltas(), gate.passed());
+    }
+
+    private EvaluationReport enrichRuntimeMetrics(EvaluationReport report,
+                                                  List<RequestTraceRow> traces) {
+        if (report == null) return null;
+        Map<String, Double> merged = new LinkedHashMap<>();
+        if (report.metricAverages() != null) {
+            merged.putAll(report.metricAverages());
+        }
+        merged.putAll(new AgentRuntimeMetricsExtractor(objectMapper).aggregate(traces));
+        return new EvaluationReport(
+                report.startAt(),
+                report.endAt(),
+                report.totalTraces(),
+                report.labeledTraces(),
+                report.avgScore(),
+                Map.copyOf(merged),
+                report.traceResults()
+        );
     }
 
     private String normalizeBaselineName(String requestedName, EvaluationRunRow target) {
