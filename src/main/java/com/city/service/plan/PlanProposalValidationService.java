@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -113,10 +114,16 @@ public class PlanProposalValidationService {
             return PlanValidationResult.invalid(violations);
         }
 
+        List<TravelTimeEvidence> safeTravel = travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
+        violations.addAll(missingTravelEvidence(restrictedWindows, safeTravel));
+        if (!violations.isEmpty()) {
+            return PlanValidationResult.invalid(violations);
+        }
+
         List<PlanCandidate> legal = planningSolver.solve(
                 restrictedWindows,
                 maxBudget,
-                travelTimeEvidence == null ? List.of() : travelTimeEvidence
+                safeTravel
         );
         PlanCandidate accepted = legal.stream()
                 .filter(candidate -> candidate.items().size() == proposal.items().size())
@@ -132,6 +139,52 @@ public class PlanProposalValidationService {
                 "该组合未通过时间、预算、场次或交通硬约束校验",
                 "保留更符合 UserGoal 的活动，调整冲突时段的活动或场次后重新 validate_plan"
         )));
+    }
+
+    /**
+     * 对有具体场次的方案按实际开始时间排序。相邻场次位于不同场地时，必须存在 from->to 的
+     * TravelTimeEvidence；缺证据不是“默认可行”，而是要求 Agent 先调用 get_travel_time。
+     */
+    private List<PlanValidationResult.Violation> missingTravelEvidence(
+            List<ActivityPlanService.PlannedActivity> windows,
+            List<TravelTimeEvidence> travelTimeEvidence
+    ) {
+        List<ActivityPlanService.PlannedActivity> concrete = windows.stream()
+                .filter(window -> window != null && window.selectedSession() != null)
+                .filter(window -> window.selectedSession().startAt() != null)
+                .sorted(Comparator.comparing(window -> window.selectedSession().startAt()))
+                .toList();
+        if (concrete.size() < 2) return List.of();
+
+        List<PlanValidationResult.Violation> result = new ArrayList<>();
+        for (int i = 1; i < concrete.size(); i++) {
+            ActivityPlanService.PlannedActivity previous = concrete.get(i - 1);
+            ActivityPlanService.PlannedActivity next = concrete.get(i);
+            ActivitySessionResponse from = previous.selectedSession();
+            ActivitySessionResponse to = next.selectedSession();
+            if (from.venueId() == null || to.venueId() == null || from.venueId().equals(to.venueId())) {
+                continue;
+            }
+            if (!hasTravelEvidence(from.venueId(), to.venueId(), travelTimeEvidence)) {
+                result.add(violation(
+                        "MISSING_TRAVEL_EVIDENCE",
+                        next.period(),
+                        next.activity() == null ? null : next.activity().id(),
+                        to.sessionId(),
+                        "跨场地连续场次缺少真实路线时长证据",
+                        "先对前后两个已暴露场次调用 get_travel_time，再重新 validate_plan"
+                ));
+            }
+        }
+        return result;
+    }
+
+    private boolean hasTravelEvidence(Long fromVenueId,
+                                      Long toVenueId,
+                                      List<TravelTimeEvidence> travelTimeEvidence) {
+        return travelTimeEvidence.stream().anyMatch(evidence -> evidence != null
+                && fromVenueId.equals(evidence.fromVenueId())
+                && toVenueId.equals(evidence.toVenueId()));
     }
 
     private boolean matchesProposal(PlanCandidate candidate, PlanProposal proposal) {
