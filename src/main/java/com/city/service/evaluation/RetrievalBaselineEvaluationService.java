@@ -8,6 +8,7 @@ import com.city.model.SlotBundle;
 import com.city.model.retrieval.RetrievalRequest;
 import com.city.model.retrieval.RetrievalResult;
 import com.city.service.retrieval.RetrievalPipeline;
+import com.city.service.trace.BuildVersionService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.core.io.ClassPathResource;
@@ -32,11 +33,14 @@ public class RetrievalBaselineEvaluationService {
 
     private final ObjectMapper objectMapper;
     private final RetrievalPipeline retrievalPipeline;
+    private final BuildVersionService buildVersionService;
 
     public RetrievalBaselineEvaluationService(ObjectMapper objectMapper,
-                                               RetrievalPipeline retrievalPipeline) {
+                                               RetrievalPipeline retrievalPipeline,
+                                               BuildVersionService buildVersionService) {
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.retrievalPipeline = Objects.requireNonNull(retrievalPipeline, "retrievalPipeline");
+        this.buildVersionService = Objects.requireNonNull(buildVersionService, "buildVersionService");
     }
 
     public Report run(Long userId, Integer requestedK) {
@@ -84,6 +88,7 @@ public class RetrievalBaselineEvaluationService {
         return new Report(
                 caseSet.version(),
                 caseSet.evalSetHash(),
+                buildVersionService.gitCommit(),
                 "CURRENT_PIPELINE",
                 k,
                 StableRetrievalQualityEvaluator.summarize(metricResults),
@@ -198,6 +203,7 @@ public class RetrievalBaselineEvaluationService {
     public record Report(
             String evalSetVersion,
             String evalSetHash,
+            String gitCommit,
             String strategy,
             int k,
             StableRetrievalQualityEvaluator.Summary summary,
