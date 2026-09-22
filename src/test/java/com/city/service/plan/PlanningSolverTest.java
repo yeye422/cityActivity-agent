@@ -5,6 +5,7 @@ import com.city.model.ActivityItem;
 import com.city.model.ActivitySessionResponse;
 import com.city.model.PlanCandidate;
 import com.city.model.SlotBundle;
+import com.city.model.TravelTimeEvidence;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -80,6 +81,25 @@ class PlanningSolverTest {
 
         assertEquals(List.of(1L, 3L), plan.items().stream().map(item -> item.activity().id()).toList());
         assertEquals(new BigDecimal("100"), plan.totalCost());
+    }
+
+    @Test
+    void shouldRejectCrossVenuePlanWhenTravelEvidenceExceedsAvailableGap() {
+        ActivityItem first = activity(1L, "活动1");
+        ActivityItem second = activity(2L, "活动2");
+
+        ActivityPlanService.PlannedActivity w1 = window(
+                "14:00-15:00", List.of(first),
+                Map.of(1L, List.of(session(101L, 1L, 14, 15, "20", 10, "OPEN"))));
+        ActivityPlanService.PlannedActivity w2 = window(
+                "15:00-16:00", List.of(second),
+                Map.of(2L, List.of(session(201L, 2L, 15, 16, "20", 10, "OPEN"))));
+
+        List<TravelTimeEvidence> travel = List.of(
+                new TravelTimeEvidence(101L, 102L, 30, "AMAP_ROUTE"));
+        PlanCandidate plan = solver.solve(List.of(w1, w2), null, travel).getFirst();
+
+        assertEquals(1, plan.matchedCount());
     }
 
     @Test
