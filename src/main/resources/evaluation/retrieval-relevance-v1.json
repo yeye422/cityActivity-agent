@@ -1,11 +1,13 @@
 {
   "version": "retrieval-v1",
   "keyFormat": "SOURCE|CITY|ACTIVITY_NAME",
-  "description": "人工检索 relevance 标注。键使用稳定业务字段，不使用数据库自增 activityId。grade: 3=高度相关, 2=相关, 1=弱相关, 0=不相关。",
+  "description": "人工检索 relevance 标注。slots 只表达确定性硬过滤条件，query 表达软检索意图；relevance 使用稳定业务键，不使用数据库自增 activityId。grade: 3=高度相关, 2=相关, 1=弱相关, 0=不相关。",
   "cases": [
     {
       "id": "xian_date_art",
-      "query": "西安情侣周末想找文艺放松的约会活动",
+      "sourceMode": "PUBLIC",
+      "slots": {"city": ["西安"]},
+      "query": "情侣周末想找文艺放松的约会活动",
       "relevance": {
         "PUBLIC|西安|曲江艺术中心周末特展": 3,
         "PUBLIC|西安|小寨独立影院观影": 2,
@@ -15,7 +17,9 @@
     },
     {
       "id": "xian_friend_interactive",
-      "query": "西安和朋友想玩互动性强、有参与感、稍微刺激一点的活动",
+      "sourceMode": "PUBLIC",
+      "slots": {"city": ["西安"]},
+      "query": "和朋友想玩互动性强、有参与感、稍微刺激一点的活动",
       "relevance": {
         "PUBLIC|西安|高新室内攀岩体验课": 3,
         "PUBLIC|西安|钟楼商圈桌游主题夜": 2
@@ -24,7 +28,9 @@
     },
     {
       "id": "xian_quiet_relax",
-      "query": "西安一个人安静放松，最好室内文艺一点",
+      "sourceMode": "PUBLIC",
+      "slots": {"city": ["西安"]},
+      "query": "一个人安静放松，最好室内文艺一点",
       "relevance": {
         "PUBLIC|西安|曲江艺术中心周末特展": 3,
         "PUBLIC|西安|小寨独立影院观影": 2
@@ -33,7 +39,9 @@
     },
     {
       "id": "beijing_social_show",
-      "query": "北京和朋友看点轻松热闹的演出",
+      "sourceMode": "PUBLIC",
+      "slots": {"city": ["北京"]},
+      "query": "和朋友看点轻松热闹的演出",
       "relevance": {
         "PUBLIC|北京|朝阳小剧场开放麦": 3
       },
@@ -41,7 +49,9 @@
     },
     {
       "id": "shanghai_art_exhibition",
-      "query": "上海徐汇想看安静文艺的展览",
+      "sourceMode": "PUBLIC",
+      "slots": {"city": ["上海"]},
+      "query": "徐汇想看安静文艺的展览",
       "relevance": {
         "PUBLIC|上海|徐汇摄影艺术展": 3
       },
@@ -49,7 +59,9 @@
     },
     {
       "id": "unsupported_city_no_result",
-      "query": "深圳周末想看展览",
+      "sourceMode": "PUBLIC",
+      "slots": {"city": ["深圳"]},
+      "query": "周末想看展览",
       "relevance": {},
       "expectedNoResult": true
     }
