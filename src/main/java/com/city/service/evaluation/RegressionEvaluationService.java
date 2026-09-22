@@ -51,6 +51,12 @@ public class RegressionEvaluationService {
     private final String ruleVersion;
     private final String modelVersion;
 
+    @Value("${city.agent.recommendation-react.enabled:false}")
+    private boolean recommendationReactEnabled;
+
+    @Value("${city.agent.planning-react.enabled:false}")
+    private boolean planningReactEnabled;
+
     public RegressionEvaluationService(ObjectMapper objectMapper,
                                        CityAgentSupervisor supervisor,
                                        AgentTraceService traceService,
@@ -77,6 +83,7 @@ public class RegressionEvaluationService {
         boolean judge = request != null && Boolean.TRUE.equals(request.getIncludeLlmJudge());
         int limit = request == null || request.getLimit() == null ? 50 : Math.max(1, Math.min(100, request.getLimit()));
         String evalSetResource = resolveEvalSetResource(request == null ? null : request.getSuite());
+        validateSuiteRuntime(evalSetResource, recommendationReactEnabled, planningReactEnabled);
         List<String> traceIds = new ArrayList<>();
         String evalSetVersion = "v1";
         String evalSetHash;
@@ -212,6 +219,16 @@ public class RegressionEvaluationService {
             return REACT_EVAL_SET_RESOURCE;
         }
         throw new CityException("未知评测 suite，仅支持 default / react");
+    }
+
+    static void validateSuiteRuntime(String evalSetResource,
+                                     boolean recommendationReactEnabled,
+                                     boolean planningReactEnabled) {
+        if (!REACT_EVAL_SET_RESOURCE.equals(evalSetResource)) return;
+        if (!recommendationReactEnabled || !planningReactEnabled) {
+            throw new CityException(
+                    "react suite 要求同时开启 city.agent.recommendation-react.enabled 和 city.agent.planning-react.enabled；请使用 react-eval profile");
+        }
     }
 
     private boolean isReactSuite(String evalSetVersion) {
