@@ -9,11 +9,13 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
- * 单次 PlanningAgent 执行期间的窗口级活动/场次/路线证据表。
- * Agent 最终只能引用这里登记过的 period + activityId + sessionId 组合。
- * 同时承担规划 Tool 的轻量调用预算，防止 ReAct 循环重复灌入相同上下文。
+ * 单次 PlanningAgent 执行期间的窗口级证据登记表。
+ *
+ * <p>Registry 负责 period/activity/session 的窗口绑定关系和 Tool 调用预算；Activity、Session、Travel
+ * 的权威事实统一写入 RunEvidenceStore，供最终 Decision Evidence 校验复用。</p>
  */
 public final class PlanningEvidenceRegistry {
 
@@ -24,27 +26,40 @@ public final class PlanningEvidenceRegistry {
     private final int maxDiscoveryCalls;
     private final int maxValidationCalls;
     private final int maxTravelCalls;
+    private final RunEvidenceStore evidenceStore;
     private final Map<String, ActivityPlanService.PlannedActivity> windows = new LinkedHashMap<>();
-    private final Map<RouteKey, TravelTimeEvidence> travelEvidence = new LinkedHashMap<>();
     private int discoveryCalls;
     private int validationCalls;
     private int travelCalls;
 
     public PlanningEvidenceRegistry() {
-        this(DEFAULT_MAX_DISCOVERY_CALLS, DEFAULT_MAX_VALIDATION_CALLS, DEFAULT_MAX_TRAVEL_CALLS);
+        this(DEFAULT_MAX_DISCOVERY_CALLS, DEFAULT_MAX_VALIDATION_CALLS, DEFAULT_MAX_TRAVEL_CALLS,
+                RunEvidenceStore.transientStore());
+    }
+
+    public PlanningEvidenceRegistry(RunEvidenceStore evidenceStore) {
+        this(DEFAULT_MAX_DISCOVERY_CALLS, DEFAULT_MAX_VALIDATION_CALLS, DEFAULT_MAX_TRAVEL_CALLS, evidenceStore);
     }
 
     public PlanningEvidenceRegistry(int maxDiscoveryCalls, int maxValidationCalls) {
-        this(maxDiscoveryCalls, maxValidationCalls, DEFAULT_MAX_TRAVEL_CALLS);
+        this(maxDiscoveryCalls, maxValidationCalls, DEFAULT_MAX_TRAVEL_CALLS, RunEvidenceStore.transientStore());
     }
 
     public PlanningEvidenceRegistry(int maxDiscoveryCalls, int maxValidationCalls, int maxTravelCalls) {
+        this(maxDiscoveryCalls, maxValidationCalls, maxTravelCalls, RunEvidenceStore.transientStore());
+    }
+
+    public PlanningEvidenceRegistry(int maxDiscoveryCalls,
+                                    int maxValidationCalls,
+                                    int maxTravelCalls,
+                                    RunEvidenceStore evidenceStore) {
         if (maxDiscoveryCalls <= 0 || maxValidationCalls <= 0 || maxTravelCalls <= 0) {
             throw new IllegalArgumentException("规划 Tool 调用预算必须大于 0");
         }
         this.maxDiscoveryCalls = maxDiscoveryCalls;
         this.maxValidationCalls = maxValidationCalls;
         this.maxTravelCalls = maxTravelCalls;
+        this.evidenceStore = Objects.requireNonNull(evidenceStore, "evidenceStore");
     }
 
     public synchronized void beginDiscovery() {
@@ -73,12 +88,17 @@ public final class PlanningEvidenceRegistry {
         for (ActivityPlanService.PlannedActivity window : plannedActivities) {
             if (window == null || window.period() == null || window.period().isBlank()) continue;
             windows.put(window.period(), window);
+            evidenceStore.recordActivities(window.candidates());
+            if (window.sessionsByActivityId() != null) {
+                window.sessionsByActivityId().values().stream()
+                        .flatMap(List::stream)
+                        .forEach(evidenceStore::recordSession);
+            }
         }
     }
 
     public synchronized void recordTravelEvidence(TravelTimeEvidence evidence) {
-        if (evidence == null) return;
-        travelEvidence.put(new RouteKey(evidence.fromVenueId(), evidence.toVenueId()), evidence);
+        evidenceStore.recordTravelEvidence(evidence);
     }
 
     public synchronized boolean hasPeriod(String period) {
@@ -126,7 +146,7 @@ public final class PlanningEvidenceRegistry {
     }
 
     public synchronized List<TravelTimeEvidence> travelTimeEvidence() {
-        return List.copyOf(travelEvidence.values());
+        return evidenceStore.travelTimeEvidence();
     }
 
     public synchronized int discoveryCalls() {
@@ -141,5 +161,7 @@ public final class PlanningEvidenceRegistry {
         return travelCalls;
     }
 
-    private record RouteKey(Long fromVenueId, Long toVenueId) {}
+    public RunEvidenceStore evidenceStore() {
+        return evidenceStore;
+    }
 }
