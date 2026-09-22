@@ -36,6 +36,12 @@ city:
     main-model: qwen-max
     light-model: qwen-turbo
     response-model: qwen-turbo
+  agent:
+    # AgentScope ReAct 新链路灰度开关。接入 Supervisor 前默认关闭；异常时 Facade 返回 empty 由旧链回退。
+    recommendation-react:
+      enabled: ${CITY_RECOMMENDATION_REACT_ENABLED:false}
+    planning-react:
+      enabled: ${CITY_PLANNING_REACT_ENABLED:false}
   session:
     max-history-turns: 10
     max-history-chars: 1200
