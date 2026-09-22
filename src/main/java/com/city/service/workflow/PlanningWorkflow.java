@@ -13,19 +13,20 @@ import com.city.service.context.SemanticContextBuilder;
 import com.city.service.plan.TimeWindowResolver;
 import com.city.service.slot.SlotMutationService;
 import com.city.service.worker.PlanningWorker;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Objects;
 
-/**
- * 多时段规划 Workflow 的确定性准备阶段。
- * 负责 Patch、规划必需条件澄清、规划状态和时间窗口解析，不负责检索、Solver 响应生成或状态持久化。
- */
+/** 多时段规划 Workflow 的确定性准备阶段，不负责检索、Solver、响应生成或状态持久化。 */
+@Service
 public final class PlanningWorkflow {
     private final SlotMutationService slotMutationService;
     private final ClarifyRuleService clarifyRuleService;
     private final TimeWindowResolver timeWindowResolver;
 
+    @Autowired
     public PlanningWorkflow(SlotMutationService slotMutationService,
                             ClarifyRuleService clarifyRuleService,
                             TimeWindowResolver timeWindowResolver) {
@@ -34,10 +35,7 @@ public final class PlanningWorkflow {
         this.timeWindowResolver = Objects.requireNonNull(timeWindowResolver, "timeWindowResolver");
     }
 
-    /**
-     * 迁移兼容构造器。旧 Supervisor 尚未替换前仍传入 PlanningWorker，
-     * 但 Workflow 已不再读取或依赖它的行为。
-     */
+    /** 旧 Supervisor 迁移兼容构造器；最终薄 Supervisor 替换后删除。 */
     @Deprecated
     public PlanningWorkflow(SlotMutationService slotMutationService,
                             ClarifyRuleService clarifyRuleService,
@@ -76,17 +74,11 @@ public final class PlanningWorkflow {
         return missing.isEmpty() ? null : missing.getFirst();
     }
 
-    public record Preparation(
-            SessionState state,
-            SlotMutation mutation,
-            ClarifyField missingField,
-            List<String> windows
-    ) {
+    public record Preparation(SessionState state, SlotMutation mutation, ClarifyField missingField, List<String> windows) {
         public Preparation {
             windows = windows == null ? List.of() : List.copyOf(windows);
         }
 
-        /** 规划 Patch 和时间窗口准备完成后，向 PlanningAgent 暴露统一语义上下文。 */
         public SemanticContext semanticContext() {
             return new SemanticContextBuilder().build(state);
         }
