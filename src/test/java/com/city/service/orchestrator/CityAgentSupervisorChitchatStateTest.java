@@ -17,6 +17,7 @@ import com.city.service.intent.IntentReviseService;
 import com.city.service.plan.ActivityPlanService;
 import com.city.service.plan.PlanResponseAgentService;
 import com.city.service.recommend.RecommendResponseAgentService;
+import com.city.service.recommend.RecommendationDecisionFacade;
 import com.city.service.risk.RiskGuardService;
 import com.city.service.session.SessionService;
 import com.city.service.session.SessionStateService;
@@ -67,8 +68,8 @@ class CityAgentSupervisorChitchatStateTest {
     }
 
     private CityAgentSupervisor service(SessionService sessionService,
-                                            SessionStateService sessionStateService,
-                                            AgentTraceService traceService) {
+                                        SessionStateService sessionStateService,
+                                        AgentTraceService traceService) {
         return new CityAgentSupervisor(
                 sessionService,
                 sessionStateService,
@@ -88,7 +89,8 @@ class CityAgentSupervisorChitchatStateTest {
                 mock(WeatherRecommendationService.class),
                 mock(TimeResolutionService.class),
                 mock(RiskGuardService.class),
-                traceService
+                traceService,
+                mock(RecommendationDecisionFacade.class)
         );
     }
 }
