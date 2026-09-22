@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
-/** PlanningAgent 主链入口；迁移阶段仍保留 feature flag/fallback 兼容。 */
+/** PlanningAgent 的业务入口。 */
 @Service
 public class PlanningDecisionFacade {
 
@@ -26,26 +26,58 @@ public class PlanningDecisionFacade {
     private final PlanningAgentWorker planningAgentWorker;
     private final PlanningResponseGeneratorService responseGenerator;
     private final AgentTraceService traceService;
-    private final boolean enabled;
+    private final boolean legacyFeatureEnabled;
 
     public PlanningDecisionFacade(
             SemanticContextBuilder semanticContextBuilder,
             PlanningAgentWorker planningAgentWorker,
             PlanningResponseGeneratorService responseGenerator,
             AgentTraceService traceService,
-            @Value("${city.agent.planning-react.enabled:false}") boolean enabled
+            @Value("${city.agent.planning-react.enabled:false}") boolean legacyFeatureEnabled
     ) {
         this.semanticContextBuilder = Objects.requireNonNull(semanticContextBuilder, "semanticContextBuilder");
         this.planningAgentWorker = Objects.requireNonNull(planningAgentWorker, "planningAgentWorker");
         this.responseGenerator = Objects.requireNonNull(responseGenerator, "responseGenerator");
         this.traceService = Objects.requireNonNull(traceService, "traceService");
-        this.enabled = enabled;
+        this.legacyFeatureEnabled = legacyFeatureEnabled;
     }
 
-    /**
-     * 过渡兼容：Supervisor 仍使用旧 Result 类型；新 ResponseGenerator 已完全独立。
-     * 最终薄 Supervisor 切换后会移除此适配并直接返回 DecisionResponseResult。
-     */
+    /** 最终主链 API：始终执行 PlanningAgent，异常由上层降级策略处理。 */
+    public DecisionResponseResult plan(
+            String userInput,
+            String traceId,
+            SessionState state,
+            List<String> windows,
+            WeatherRecommendationContext weather,
+            List<TravelTimeEvidence> travelTimeEvidence
+    ) {
+        Objects.requireNonNull(state, "state");
+        SemanticContext semanticContext = semanticContextBuilder.build(state);
+        VerifiedRequestContext verifiedContext = VerifiedRequestContext.from(state, traceId, semanticContext, weather);
+        List<String> safeWindows = windows == null ? List.of() : List.copyOf(windows);
+        List<TravelTimeEvidence> safeTravel = travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
+
+        traceService.recordEvent(
+                "PLANNING_REACT_ROUTE_SELECTED", "PLAN", state,
+                java.util.Map.of("semanticContext", semanticContext, "windows", safeWindows));
+        try {
+            PlanningAgentExecutionResult execution = planningAgentWorker.execute(
+                    userInput, verifiedContext, safeWindows, safeTravel);
+            DecisionResponseResult generated = responseGenerator.generate(
+                    state.sessionId(), userInput, state.sourceMode(), state.slots(), execution, weather);
+            traceService.recordEvent(
+                    "PLANNING_REACT_COMPLETED", "PLAN", execution.decision(), execution.acceptedPlan());
+            return generated;
+        } catch (RuntimeException error) {
+            traceService.recordError(
+                    "PLANNING_REACT_FAILED", "PLAN",
+                    java.util.Map.of("semanticContext", semanticContext, "windows", safeWindows), error);
+            throw error;
+        }
+    }
+
+    /** 仅供旧 Supervisor 迁移期兼容；最终替换后删除。 */
+    @Deprecated
     public Optional<RecommendResponseAgentService.Result> tryPlan(
             String userInput,
             String traceId,
@@ -54,34 +86,12 @@ public class PlanningDecisionFacade {
             WeatherRecommendationContext weather,
             List<TravelTimeEvidence> travelTimeEvidence
     ) {
-        if (!enabled || state == null) return Optional.empty();
-
-        SemanticContext semanticContext = semanticContextBuilder.build(state);
-        VerifiedRequestContext verifiedContext = VerifiedRequestContext.from(state, traceId, semanticContext, weather);
-        List<String> safeWindows = windows == null ? List.of() : List.copyOf(windows);
-        List<TravelTimeEvidence> safeTravel = travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
-
-        traceService.recordEvent(
-                "PLANNING_REACT_ROUTE_SELECTED",
-                "PLAN",
-                state,
-                java.util.Map.of("semanticContext", semanticContext, "windows", safeWindows));
-
+        if (!legacyFeatureEnabled || state == null) return Optional.empty();
         try {
-            PlanningAgentExecutionResult execution = planningAgentWorker.execute(
-                    userInput, verifiedContext, safeWindows, safeTravel);
-            DecisionResponseResult generated = responseGenerator.generate(
-                    state.sessionId(), userInput, state.sourceMode(), state.slots(), execution, weather);
-            traceService.recordEvent(
-                    "PLANNING_REACT_COMPLETED", "PLAN", execution.decision(), execution.acceptedPlan());
-            return Optional.of(new RecommendResponseAgentService.Result(
-                    generated.recommend(), generated.response()));
+            DecisionResponseResult result = plan(userInput, traceId, state, windows, weather, travelTimeEvidence);
+            return Optional.of(new RecommendResponseAgentService.Result(result.recommend(), result.response()));
         } catch (RuntimeException error) {
-            traceService.recordError(
-                    "PLANNING_REACT_FALLBACK",
-                    "PLAN",
-                    java.util.Map.of("semanticContext", semanticContext, "windows", safeWindows),
-                    error);
+            traceService.recordError("PLANNING_REACT_FALLBACK", "PLAN", state, error);
             return Optional.empty();
         }
     }
