@@ -5,9 +5,12 @@ import com.city.model.context.PlanningToolContext;
 import com.city.model.context.VerifiedRequestContext;
 import com.city.model.tool.PlanningDiscoveryToolResult;
 import com.city.service.plan.ActivityPlanService;
+import com.city.service.trace.AgentTraceService;
 import io.agentscope.core.tool.Tool;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -17,9 +20,18 @@ import java.util.Objects;
 public class PlanningDiscoveryTool {
 
     private final ActivityPlanService activityPlanService;
+    private final AgentTraceService traceService;
 
+    /** 保留纯单测构造入口。 */
     public PlanningDiscoveryTool(ActivityPlanService activityPlanService) {
+        this(activityPlanService, null);
+    }
+
+    @Autowired
+    public PlanningDiscoveryTool(ActivityPlanService activityPlanService,
+                                 AgentTraceService traceService) {
         this.activityPlanService = Objects.requireNonNull(activityPlanService, "activityPlanService");
+        this.traceService = traceService;
     }
 
     @Tool(
@@ -30,6 +42,18 @@ public class PlanningDiscoveryTool {
     public PlanningDiscoveryToolResult discover(PlanningToolContext planningContext) {
         Objects.requireNonNull(planningContext, "planningContext");
         planningContext.evidenceRegistry().beginDiscovery();
+        if (traceService != null) {
+            traceService.recordEvent(
+                    "PLANNING_DISCOVERY_TOOL_CALLED",
+                    "TOOL",
+                    Map.of(
+                            "windows", planningContext.windows(),
+                            "discoveryCall", planningContext.evidenceRegistry().discoveryCalls()
+                    ),
+                    null
+            );
+        }
+
         VerifiedRequestContext verified = planningContext.verifiedRequestContext();
         PlanningResult result = activityPlanService.planWithEvidence(
                 verified.sourceMode(),
@@ -41,6 +65,18 @@ public class PlanningDiscoveryTool {
                 verified.weather()
         );
         planningContext.evidenceRegistry().record(result.plans());
-        return PlanningDiscoveryToolResult.from(result.plans());
+        PlanningDiscoveryToolResult toolResult = PlanningDiscoveryToolResult.from(result.plans());
+        if (traceService != null) {
+            traceService.recordEvent(
+                    "PLANNING_DISCOVERY_TOOL_COMPLETED",
+                    "TOOL",
+                    Map.of("windows", planningContext.windows()),
+                    Map.of(
+                            "windowCount", toolResult.windows().size(),
+                            "exposedActivityIds", planningContext.evidenceRegistry().exposedActivityIds()
+                    )
+            );
+        }
+        return toolResult;
     }
 }
