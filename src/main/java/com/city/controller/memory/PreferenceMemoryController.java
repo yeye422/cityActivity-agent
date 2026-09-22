@@ -3,7 +3,7 @@ package com.city.controller.memory;
 import com.city.constants.CityConstants;
 import com.city.model.PreferenceFact;
 import com.city.model.PreferenceFactRequest;
-import com.city.service.memory.PreferenceMemoryService;
+import com.city.service.worker.MemoryWorker;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -19,23 +19,23 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/city/preferences")
 public class PreferenceMemoryController {
-    private final PreferenceMemoryService preferenceMemoryService;
+    private final MemoryWorker memoryWorker;
 
-    public PreferenceMemoryController(PreferenceMemoryService preferenceMemoryService) {
-        this.preferenceMemoryService = preferenceMemoryService;
+    public PreferenceMemoryController(MemoryWorker memoryWorker) {
+        this.memoryWorker = memoryWorker;
     }
 
     @GetMapping
     public List<PreferenceFact> list(
             @RequestHeader(value = CityConstants.USER_ID, defaultValue = "1") Long userId) {
-        return preferenceMemoryService.findActive(userId);
+        return memoryWorker.findActive(userId);
     }
 
     @PostMapping
     public PreferenceFact remember(
             @RequestHeader(value = CityConstants.USER_ID, defaultValue = "1") Long userId,
             @RequestBody PreferenceFactRequest request) {
-        return preferenceMemoryService.remember(userId, request);
+        return memoryWorker.remember(userId, request);
     }
 
     @DeleteMapping("/{id}")
@@ -43,6 +43,6 @@ public class PreferenceMemoryController {
             @RequestHeader(value = CityConstants.USER_ID, defaultValue = "1") Long userId,
             @PathVariable Long id,
             @RequestParam Integer version) {
-        preferenceMemoryService.forget(userId, id, version);
+        memoryWorker.forget(userId, id, version);
     }
 }
