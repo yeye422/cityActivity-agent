@@ -3,7 +3,7 @@
 <mapper namespace="com.city.mapper.ActivitySessionMapper">
     <select id="findAvailableByActivityId" resultType="com.city.model.ActivitySessionRow">
         SELECT s.id AS session_id, s.activity_id, v.id AS venue_id, v.name AS venue_name,
-               v.venue_type, v.city, v.district, v.address,
+               v.venue_type, v.city, v.district, v.address, v.latitude, v.longitude,
                s.start_at, s.end_at, s.price, s.remaining_seats, s.status,
                s.registration_url, v.price_note
         FROM activity_session s
