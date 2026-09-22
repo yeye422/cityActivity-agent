@@ -15,56 +15,28 @@ import com.city.model.agent.PlanningAgentExecutionResult;
 import com.city.model.agent.PlanningDecision;
 import com.city.model.context.VerifiedRequestContext;
 import com.city.service.context.SemanticContextBuilder;
-import com.city.service.recommend.RecommendResponseAgentService;
 import com.city.service.trace.AgentTraceService;
 import com.city.service.worker.PlanningAgentWorker;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.util.List;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-@ExtendWith(MockitoExtension.class)
 class PlanningDecisionFacadeTest {
 
-    @Mock
-    PlanningAgentWorker planningAgentWorker;
-    @Mock
-    PlanningResponseGeneratorService responseGenerator;
-    @Mock
-    AgentTraceService traceService;
-
-    private final SemanticContextBuilder semanticContextBuilder = new SemanticContextBuilder();
-
     @Test
-    void shouldReturnEmptyWithoutCallingAgentWhenFeatureDisabled() {
+    void shouldExecuteAgentAndGenerateStructuredResponse() {
+        PlanningAgentWorker worker = mock(PlanningAgentWorker.class);
+        PlanningResponseGeneratorService generator = mock(PlanningResponseGeneratorService.class);
         PlanningDecisionFacade facade = new PlanningDecisionFacade(
-                semanticContextBuilder, planningAgentWorker, responseGenerator, traceService, false);
-
-        Optional<RecommendResponseAgentService.Result> result = facade.tryPlan(
-                "下午到晚上安排约会", "trace-1", state(),
-                List.of("14:00-16:00", "18:00-20:00"),
-                WeatherRecommendationContext.inactive(), List.of());
-
-        assertTrue(result.isEmpty());
-        verify(planningAgentWorker, never()).execute(any(), any(), any(), any());
-    }
-
-    @Test
-    void shouldExecuteAgentAndGenerateResponseWhenEnabled() {
-        PlanningDecisionFacade facade = new PlanningDecisionFacade(
-                semanticContextBuilder, planningAgentWorker, responseGenerator, traceService, true);
+                new SemanticContextBuilder(), worker, generator, mock(AgentTraceService.class));
         SessionState state = state();
         ActivityItem activity = new ActivityItem(
                 101L, SourceMode.PUBLIC, null, "双人陶艺", state.slots(),
@@ -79,37 +51,33 @@ class PlanningDecisionFacadeTest {
         DecisionResponseResult generated = new DecisionResponseResult(
                 RecommendResult.empty(), ResponseResult.textOnly("下午可以安排双人陶艺"));
 
-        when(planningAgentWorker.execute(
+        when(worker.execute(
                 eq("下午到晚上安排约会"), any(VerifiedRequestContext.class), any(), any()))
                 .thenReturn(execution);
-        when(responseGenerator.generate(
+        when(generator.generate(
                 eq(state.sessionId()), eq("下午到晚上安排约会"), eq(SourceMode.PUBLIC),
                 eq(state.slots()), eq(execution), any(WeatherRecommendationContext.class)))
                 .thenReturn(generated);
 
-        Optional<RecommendResponseAgentService.Result> result = facade.tryPlan(
+        DecisionResponseResult result = facade.plan(
                 "下午到晚上安排约会", "trace-1", state,
                 List.of("14:00-16:00", "18:00-20:00"),
                 WeatherRecommendationContext.inactive(), List.of());
 
-        assertTrue(result.isPresent());
-        assertEquals(generated.recommend(), result.get().recommend());
-        assertEquals(generated.response(), result.get().response());
+        assertEquals(generated, result);
     }
 
     @Test
-    void shouldFallbackToLegacyPathWhenAgentFails() {
+    void shouldPropagateAgentFailureToWorkflowDegradedPath() {
+        PlanningAgentWorker worker = mock(PlanningAgentWorker.class);
         PlanningDecisionFacade facade = new PlanningDecisionFacade(
-                semanticContextBuilder, planningAgentWorker, responseGenerator, traceService, true);
-        when(planningAgentWorker.execute(any(), any(), any(), any()))
-                .thenThrow(new IllegalStateException("agent failed"));
+                new SemanticContextBuilder(), worker,
+                mock(PlanningResponseGeneratorService.class), mock(AgentTraceService.class));
+        when(worker.execute(any(), any(), any(), any())).thenThrow(new IllegalStateException("agent failed"));
 
-        Optional<RecommendResponseAgentService.Result> result = facade.tryPlan(
+        assertThrows(IllegalStateException.class, () -> facade.plan(
                 "下午到晚上安排约会", "trace-1", state(), List.of("14:00-16:00"),
-                WeatherRecommendationContext.inactive(), List.of());
-
-        assertTrue(result.isEmpty());
-        verify(responseGenerator, never()).generate(any(), any(), any(), any(), any(), any());
+                WeatherRecommendationContext.inactive(), List.of()));
     }
 
     private SessionState state() {
