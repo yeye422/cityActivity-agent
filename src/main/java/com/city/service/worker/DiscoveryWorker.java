@@ -4,27 +4,25 @@ import com.city.model.ActivitySearchRequest;
 import com.city.model.agent.DiscoveryResult;
 import com.city.service.activity.ActivitySearchService;
 
-import java.util.concurrent.CompletableFuture;
-
-/** 活动发现 Worker；只读，并支持 PERSONAL/PUBLIC 并行预取。 */
+/**
+ * @deprecated 主链路逐步迁移到 {@link RetrievalWorker}。保留该类仅用于兼容现有调用和测试。
+ */
+@Deprecated
 public final class DiscoveryWorker {
-    private final ActivitySearchService activitySearchService;
+    private final RetrievalWorker delegate;
 
     public DiscoveryWorker(ActivitySearchService activitySearchService) {
-        this.activitySearchService = activitySearchService;
+        this.delegate = new RetrievalWorker(activitySearchService);
     }
 
     public DiscoveryResult discover(ActivitySearchRequest request) {
-        return activitySearchService.discover(request);
+        return delegate.retrieve(request);
     }
 
     public SourceResults discoverPersonalAndPublic(ActivitySearchRequest personal,
                                                    ActivitySearchRequest publicRequest) {
-        CompletableFuture<DiscoveryResult> personalFuture = CompletableFuture.supplyAsync(
-                () -> discover(personal));
-        CompletableFuture<DiscoveryResult> publicFuture = CompletableFuture.supplyAsync(
-                () -> discover(publicRequest));
-        return new SourceResults(personalFuture.join(), publicFuture.join());
+        RetrievalWorker.SourceResults results = delegate.retrievePersonalAndPublic(personal, publicRequest);
+        return new SourceResults(results.personal(), results.publicResult());
     }
 
     public record SourceResults(DiscoveryResult personal, DiscoveryResult publicResult) {

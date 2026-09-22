@@ -33,7 +33,7 @@ public class ToolContractRegistry {
         register(values, ToolCapability.RESPONSE_GENERATE, "response-model",
                 Set.of(AgentTaskType.RESPONSE_GENERATION));
         register(values, ToolCapability.PREFERENCE_READ, "city_preference_fact",
-                Set.of(AgentTaskType.ACTIVITY_DISCOVERY));
+                Set.of(AgentTaskType.ACTIVITY_DISCOVERY, AgentTaskType.MULTI_PERIOD_PLANNING));
         register(values, ToolCapability.PREFERENCE_WRITE, "city_preference_fact",
                 Set.of(AgentTaskType.MEMORY_MAINTENANCE));
         register(values, ToolCapability.SESSION_STATE_WRITE, "city_sessions",
