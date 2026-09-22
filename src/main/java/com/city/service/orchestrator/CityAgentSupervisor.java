@@ -55,6 +55,9 @@ import com.city.service.worker.PlanningWorker;
 import com.city.service.worker.ResponseWorker;
 import com.city.service.worker.RetrievalWorker;
 import com.city.service.worker.WorkerDispatcher;
+import com.city.service.workflow.AdjustWorkflow;
+import com.city.service.workflow.PlanningWorkflow;
+import com.city.service.workflow.RecommendWorkflow;
 import com.city.service.workflow.WorkflowRouter;
 import com.city.service.workflow.WorkflowType;
 import org.springframework.stereotype.Service;
@@ -95,6 +98,9 @@ public class CityAgentSupervisor {
     private final RetrievalWorker retrievalWorker;
     private final PlanningWorker planningWorker;
     private final ResponseWorker responseWorker;
+    private final RecommendWorkflow recommendWorkflow;
+    private final AdjustWorkflow adjustWorkflow;
+    private final PlanningWorkflow planningWorkflow;
     private final Map<String, Object> sessionLocks = new ConcurrentHashMap<>();
 
     public CityAgentSupervisor(
@@ -136,6 +142,9 @@ public class CityAgentSupervisor {
         this.retrievalWorker = new RetrievalWorker(activitySearchService);
         this.planningWorker = new PlanningWorker(activityPlanService);
         this.responseWorker = new ResponseWorker(recommendResponseAgentService, planResponseAgentService);
+        this.recommendWorkflow = new RecommendWorkflow(slotMutationService, clarifyRuleService);
+        this.adjustWorkflow = new AdjustWorkflow(slotMutationService, clarifyRuleService);
+        this.planningWorkflow = new PlanningWorkflow(slotMutationService, clarifyRuleService, planningWorker);
     }
 
     public ChatResponse chat(Long userId, ChatRequest request) {
@@ -345,10 +354,7 @@ public class CityAgentSupervisor {
         return value == null ? "" : String.valueOf(value).trim();
     }
 
-    /** 九维普通条件只通过 operations 修改，所有推荐/调整/规划分支共用同一执行入口。 */
-    private SlotMutation applySlotMutation(SessionState state, IntentResult intent) {
-        SlotMutation mutation = slotMutationService.apply(
-                intent.operations(), state.slots(), state.excludedSlots(), state.unconstrainedSlots());
+    private void recordSlotMutation(SessionState state, IntentResult intent, SlotMutation mutation) {
         agentTraceService.recordEvent("SLOT_MUTATION_APPLIED", "SLOT",
                 traceMap(
                         "stateSlots", state.slots(),
@@ -359,20 +365,15 @@ public class CityAgentSupervisor {
                         "resultSlots", mutation.included(),
                         "resultExcludedSlots", mutation.excluded(),
                         "resultUnconstrainedSlots", mutation.unconstrained()));
-        return mutation;
     }
 
     private ChatResponse handleRecommendation(String sessionId, Long userId, String userInput, String traceId,
                                               SessionState state, IntentResult intent, boolean publicFallbackUsed) {
-        SlotMutation mutation = applySlotMutation(state, intent);
-        SlotBundle mergedSlots = mutation.included();
-
-        SessionState workingState = state.withIntent(Intent.ACTIVITY_RECOMMENDATION)
-                .withSlots(mergedSlots)
-                .withExcludedSlots(mutation.excluded())
-                .withUnconstrainedSlots(mutation.unconstrained());
-        ClarifyField missingField = firstMissingRequiredField(
-                Intent.ACTIVITY_RECOMMENDATION, workingState);
+        RecommendWorkflow.Preparation preparation = recommendWorkflow.prepare(state, intent);
+        recordSlotMutation(state, intent, preparation.mutation());
+        SlotBundle mergedSlots = preparation.mutation().included();
+        SessionState workingState = preparation.state();
+        ClarifyField missingField = preparation.missingField();
         agentTraceService.recordEvent("CLARIFY_DECISION", "CLARIFY",
                 traceMap("slots", mergedSlots,
                         "timeConstraint", workingState.timeConstraint(),
@@ -383,14 +384,7 @@ public class CityAgentSupervisor {
                     missingField, clarifyRuleService.questionFor(missingField));
         }
         return completeRecommendation(sessionId, userId, userInput, traceId,
-                workingState.withPendingClarifyField(null).withPhase(SessionPhase.RECOMMEND),
-                List.of(), publicFallbackUsed);
-    }
-
-    private ClarifyField firstMissingRequiredField(Intent intent, SessionState state) {
-        List<ClarifyField> missing = clarifyRuleService.missingRequiredFields(
-                intent, state.slots(), state.timeConstraint());
-        return missing.isEmpty() ? null : missing.getFirst();
+                workingState, List.of(), publicFallbackUsed);
     }
 
     private Map<String, Object> clarifyDecisionPayload(ClarifyField field) {
@@ -422,15 +416,11 @@ public class CityAgentSupervisor {
 
     private ChatResponse handleAdjust(String sessionId, Long userId, String userInput, String traceId,
                                       SessionState state, IntentResult intent, boolean publicFallbackUsed) {
-        SlotMutation mutation = applySlotMutation(state, intent);
-        SlotBundle mergedSlots = mutation.included();
-        SessionState workingState = state.withIntent(Intent.ACTIVITY_ADJUST)
-                .withSlots(mergedSlots)
-                .withExcludedSlots(mutation.excluded())
-                .withUnconstrainedSlots(mutation.unconstrained());
-
-        ClarifyField missingField = firstMissingRequiredField(
-                Intent.ACTIVITY_RECOMMENDATION, workingState);
+        AdjustWorkflow.Preparation preparation = adjustWorkflow.prepare(state, intent);
+        recordSlotMutation(state, intent, preparation.mutation());
+        SlotBundle mergedSlots = preparation.mutation().included();
+        SessionState workingState = preparation.state();
+        ClarifyField missingField = preparation.missingField();
         if (missingField != null) {
             Map<String, Object> decision = clarifyDecisionPayload(missingField);
             agentTraceService.recordEvent("ADJUST_CLARIFY_DECISION", "CLARIFY",
@@ -441,8 +431,6 @@ public class CityAgentSupervisor {
                     missingField, clarifyRuleService.questionFor(missingField));
         }
 
-        workingState = workingState.withPendingClarifyField(null)
-                .withPhase(SessionPhase.RECOMMEND);
         String currentQueryKey = recommendationQueryKey(workingState);
         boolean queryChanged = !currentQueryKey.equals(state.recommendationQueryKey());
         List<Long> excludeActivityIds = queryChanged || state.lastRecommendedActivityIds() == null
@@ -458,14 +446,11 @@ public class CityAgentSupervisor {
 
     private ChatResponse handlePlan(String sessionId, Long userId, String userInput, String traceId,
                                     SessionState state, IntentResult intent, boolean publicFallbackUsed) {
-        SlotMutation mutation = applySlotMutation(state, intent);
-        SlotBundle mergedSlots = mutation.included();
-        SessionState planContextState = state.withIntent(Intent.ACTIVITY_PLAN)
-                .withSlots(mergedSlots)
-                .withExcludedSlots(mutation.excluded())
-                .withUnconstrainedSlots(mutation.unconstrained());
-
-        ClarifyField missingField = firstMissingRequiredField(Intent.ACTIVITY_PLAN, planContextState);
+        PlanningWorkflow.Preparation preparation = planningWorkflow.prepare(state, intent);
+        recordSlotMutation(state, intent, preparation.mutation());
+        SlotBundle mergedSlots = preparation.mutation().included();
+        SessionState planContextState = preparation.state();
+        ClarifyField missingField = preparation.missingField();
         Map<String, Object> decision = clarifyDecisionPayload(missingField);
         Map<String, Object> decisionInput = traceMap(
                 "slots", mergedSlots,
@@ -478,12 +463,8 @@ public class CityAgentSupervisor {
                     missingField, clarifyRuleService.questionFor(missingField));
         }
 
-        List<String> planActivityTimes = planningWorker.resolveWindows(mergedSlots, planContextState.timeConstraint());
-        SlotBundle planSlots = new SlotBundle(
-                mergedSlots.city(), mergedSlots.location(), mergedSlots.experienceGoal(), mergedSlots.companion(),
-                mergedSlots.budget(), mergedSlots.activityType(), mergedSlots.style(), mergedSlots.duration(),
-                mergedSlots.feature()
-        );
+        List<String> planActivityTimes = preparation.windows();
+        SlotBundle planSlots = planContextState.slots();
         agentTraceService.recordEvent(
                 "PLAN_CONTEXT_RESOLVED", "PLAN", intent,
                 traceMap("mergedSlots", mergedSlots,
@@ -492,10 +473,7 @@ public class CityAgentSupervisor {
                         "planActivityTimes", planActivityTimes,
                         "planSlots", planSlots)
         );
-        SessionState workingState = planContextState.withSlots(planSlots)
-                .withPendingClarifyField(null)
-                .withPhase(SessionPhase.PLAN);
-        return completePlan(sessionId, userId, userInput, traceId, workingState, planActivityTimes, publicFallbackUsed);
+        return completePlan(sessionId, userId, userInput, traceId, planContextState, planActivityTimes, publicFallbackUsed);
     }
 
     private ChatResponse completePlan(String sessionId,
