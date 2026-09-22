@@ -10,14 +10,13 @@ import com.city.model.context.SemanticContext;
 import com.city.service.clarify.ClarifyRuleService;
 import com.city.service.context.SemanticContextBuilder;
 import com.city.service.slot.SlotMutationService;
+import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Objects;
 
-/**
- * 条件调整 Workflow 的确定性准备阶段。
- * 负责 SET/ADD/REMOVE/CLEAR Patch 应用和推荐必需条件澄清，不直接执行检索或写会话状态。
- */
+/** 条件调整 Workflow 的确定性准备阶段，不直接执行检索或写会话状态。 */
+@Service
 public final class AdjustWorkflow {
     private final SlotMutationService slotMutationService;
     private final ClarifyRuleService clarifyRuleService;
@@ -50,12 +49,7 @@ public final class AdjustWorkflow {
         return missing.isEmpty() ? null : missing.getFirst();
     }
 
-    public record Preparation(
-            SessionState state,
-            SlotMutation mutation,
-            ClarifyField missingField
-    ) {
-        /** 条件调整应用完成后，向后续推荐决策层暴露统一语义上下文。 */
+    public record Preparation(SessionState state, SlotMutation mutation, ClarifyField missingField) {
         public SemanticContext semanticContext() {
             return new SemanticContextBuilder().build(state);
         }
