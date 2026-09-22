@@ -127,20 +127,31 @@ duration 中的“室内/户外/近距离/少排队/交通方便” -> feature
 
 ```text
 POST /api/v1/city/evaluations/regression
-Body: {"includeLlmJudge":false,"limit":35}
+Body: {"suite":"default","includeLlmJudge":false,"limit":35}
 ```
 
-默认配置下推荐/规划 ReAct 灰度开关关闭。需要专门验证新 ReAct 主链时，可使用：
+`suite=default` 读取 `src/main/resources/evaluation/city-dialogue-eval-set.json`，当前版本为 `v2`，用于通用意图、槽位、澄清、多轮操作等回归。
+
+默认配置下推荐/规划 ReAct 灰度开关关闭。需要专门验证新 ReAct 主链时，先使用：
 
 ```bash
 SPRING_PROFILES_ACTIVE=react-eval mvn spring-boot:run
 ```
 
-`application-react-eval.yml` 会同时开启 RecommendationAgent 和 PlanningAgent，其余数据库、模型和外部服务配置仍继承默认配置。固定回归会继续写入现有 Evaluation/Regression Gate，并额外统计 ReAct success/fallback、Tool Call、Re-Retrieval、Plan Validation/Repair 和 Evidence Violation 等运行指标。
+再执行：
 
-固定回归接口读取 `src/main/resources/evaluation/city-dialogue-eval-set.json`（当前 35 条，包含 `messages[]` 多轮用例），自动执行用例、标注本次 Trace、生成意图/槽位/澄清/缺失槽位/操作/时间/多轮一致性等评估报告，并将评估运行保存到 `evaluation_run`。Baseline 取同一评测集版本和指纹下已提升的基线运行；回归门禁会检查总分以及关键指标是否回退。
+```text
+POST /api/v1/city/evaluations/regression
+Body: {"suite":"react","includeLlmJudge":false,"limit":10}
+```
 
-线上高价值失败样本可在人工标注后通过 `POST /api/v1/city/evaluations/cases/promote` 晋级为数据库评测用例：请求体传入 `traceId` 和完整 `caseDefinition`（至少包含 `id`、`message` 或 `messages` 及 expected 标签）。下一次回归会自动合并固定 JSON 评测集与 `evaluation_case` 表中的晋级样本。
+`suite=react` 读取独立的 `src/main/resources/evaluation/city-react-eval-set.json`，当前版本为 `react-v1`，重点覆盖软目标权衡、Re-Retrieval、多时段规划、Solver Validate/Repair 和多轮上下文。ReAct suite 使用自己的 version + evalSetHash 查找 Baseline，因此不会与默认 `v2` 基线混用。
+
+`application-react-eval.yml` 会同时开启 RecommendationAgent 和 PlanningAgent，其余数据库、模型和外部服务配置仍继承默认配置。固定回归会写入现有 Evaluation/Regression Gate，并统计 ReAct success/fallback、Tool Call、Re-Retrieval、Plan Validation/Repair 和 Evidence Violation 等运行指标。
+
+回归执行会自动运行用例、标注本次 Trace、生成意图/槽位/澄清/缺失槽位/操作/时间/多轮一致性等报告，并将评估运行保存到 `evaluation_run`。Baseline 取同一评测集版本和指纹下已提升的基线运行；回归门禁会检查总分以及关键指标是否回退。
+
+线上高价值失败样本可在人工标注后通过 `POST /api/v1/city/evaluations/cases/promote` 晋级为数据库默认评测用例：请求体传入 `traceId` 和完整 `caseDefinition`（至少包含 `id`、`message` 或 `messages` 及 expected 标签）。下一次 default 回归会自动合并固定 JSON 评测集与 `evaluation_case` 表中的晋级样本。
 
 ## 规划时间模型
 
