@@ -4,7 +4,10 @@ import com.city.model.TravelTimeEvidence;
 import com.city.service.evidence.PlanningEvidenceRegistry;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /** AgentScope ToolExecutionContext 注入的模型不可见规划上下文。 */
@@ -21,4 +24,20 @@ public record PlanningToolContext(
         evidenceRegistry = Objects.requireNonNull(evidenceRegistry, "evidenceRegistry");
         travelTimeEvidence = travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
     }
+
+    /** 合并调用方已有路线证据和 Agent 本轮通过 get_travel_time 获取的证据。 */
+    public List<TravelTimeEvidence> allTravelTimeEvidence() {
+        Map<RouteKey, TravelTimeEvidence> merged = new LinkedHashMap<>();
+        for (TravelTimeEvidence evidence : travelTimeEvidence) {
+            if (evidence == null) continue;
+            merged.put(new RouteKey(evidence.fromVenueId(), evidence.toVenueId()), evidence);
+        }
+        for (TravelTimeEvidence evidence : evidenceRegistry.travelTimeEvidence()) {
+            if (evidence == null) continue;
+            merged.put(new RouteKey(evidence.fromVenueId(), evidence.toVenueId()), evidence);
+        }
+        return List.copyOf(new ArrayList<>(merged.values()));
+    }
+
+    private record RouteKey(Long fromVenueId, Long toVenueId) {}
 }
