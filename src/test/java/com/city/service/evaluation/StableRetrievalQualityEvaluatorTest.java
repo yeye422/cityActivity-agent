@@ -99,6 +99,24 @@ class StableRetrievalQualityEvaluatorTest {
         assertEquals(1.0, falsePositive.noResultFalsePositive(), 1e-9);
     }
 
+    @Test
+    void summaryShouldAverageOnlyApplicableMetrics() {
+        StableRetrievalQualityEvaluator.Summary summary =
+                StableRetrievalQualityEvaluator.summarize(List.of(
+                        new StableRetrievalQualityEvaluator.CaseResult(
+                                "a", 5, List.of("PUBLIC|西安|A"), 1.0, 0.8, null),
+                        new StableRetrievalQualityEvaluator.CaseResult(
+                                "b", 5, List.of(), null, null, 0.0),
+                        new StableRetrievalQualityEvaluator.CaseResult(
+                                "c", 5, List.of("PUBLIC|西安|C"), 0.5, 0.6, null)
+                ));
+
+        assertEquals(3, summary.totalCases());
+        assertEquals(0.75, summary.recallAtK(), 1e-9);
+        assertEquals(0.7, summary.ndcgAtK(), 1e-9);
+        assertEquals(0.0, summary.noResultFalsePositiveRate(), 1e-9);
+    }
+
     private ActivityItem activity(Long id, String city, String name) {
         SlotBundle slots = new SlotBundle(
                 List.of(city), List.of(), List.of(), List.of(), List.of(),
