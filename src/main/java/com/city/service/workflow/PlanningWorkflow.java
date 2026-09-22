@@ -12,8 +12,6 @@ import com.city.service.clarify.ClarifyRuleService;
 import com.city.service.context.SemanticContextBuilder;
 import com.city.service.plan.TimeWindowResolver;
 import com.city.service.slot.SlotMutationService;
-import com.city.service.worker.PlanningWorker;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -26,21 +24,12 @@ public final class PlanningWorkflow {
     private final ClarifyRuleService clarifyRuleService;
     private final TimeWindowResolver timeWindowResolver;
 
-    @Autowired
     public PlanningWorkflow(SlotMutationService slotMutationService,
                             ClarifyRuleService clarifyRuleService,
                             TimeWindowResolver timeWindowResolver) {
         this.slotMutationService = Objects.requireNonNull(slotMutationService, "slotMutationService");
         this.clarifyRuleService = Objects.requireNonNull(clarifyRuleService, "clarifyRuleService");
         this.timeWindowResolver = Objects.requireNonNull(timeWindowResolver, "timeWindowResolver");
-    }
-
-    /** 旧 Supervisor 迁移兼容构造器；最终薄 Supervisor 替换后删除。 */
-    @Deprecated
-    public PlanningWorkflow(SlotMutationService slotMutationService,
-                            ClarifyRuleService clarifyRuleService,
-                            PlanningWorker ignoredPlanningWorker) {
-        this(slotMutationService, clarifyRuleService, new TimeWindowResolver());
     }
 
     public Preparation prepare(SessionState state, IntentResult intent) {
