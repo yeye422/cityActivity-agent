@@ -1,5 +1,6 @@
 package com.city.service.recommend;
 
+import com.city.model.DecisionResponseResult;
 import com.city.model.SessionState;
 import com.city.model.WeatherRecommendationContext;
 import com.city.model.agent.RecommendationExecutionResult;
@@ -15,16 +16,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
-/**
- * 新 RecommendationAgent 主链的单一业务入口。
- *
- * <p>该 Facade 不写 SessionState。调用方传入当前已应用完本轮 Patch 的状态和本轮应排除的历史 ID，
- * Facade 负责构造模型不可修改的 VerifiedRequestContext，执行 RecommendationAgent，随后仅把 Agent
- * 已选定且经过候选白名单校验的实体交给响应生成层。</p>
- *
- * <p>迁移期间通过 city.agent.recommendation-react.enabled 控制。关闭或新链路异常时返回 Optional.empty()，
- * 由现有 Orchestrator 继续执行旧推荐链，保证可以随时回退。</p>
- */
+/** RecommendationAgent 主链入口；迁移阶段仍保留 feature flag/fallback 兼容。 */
 @Service
 public class RecommendationDecisionFacade {
 
@@ -48,10 +40,7 @@ public class RecommendationDecisionFacade {
         this.enabled = enabled;
     }
 
-    /**
-     * 尝试执行新 RecommendationAgent 链路；返回 empty 表示调用方应继续旧链路。
-     */
-    public Optional<RecommendResponseAgentService.Result> tryRecommend(
+    public Optional<DecisionResponseResult> tryRecommend(
             String userInput,
             String traceId,
             SessionState state,
@@ -72,37 +61,17 @@ public class RecommendationDecisionFacade {
                 weather
         );
 
-        traceService.recordEvent(
-                "RECOMMENDATION_REACT_ROUTE_SELECTED",
-                "RECOMMEND",
-                state,
-                semanticContext
-        );
+        traceService.recordEvent("RECOMMENDATION_REACT_ROUTE_SELECTED", "RECOMMEND", state, semanticContext);
 
         try {
             RecommendationExecutionResult execution = recommendationWorker.execute(userInput, verifiedContext);
-            RecommendResponseAgentService.Result generated = responseGenerator.generate(
-                    state.sessionId(),
-                    userInput,
-                    state.sourceMode(),
-                    state.slots(),
-                    execution,
-                    weather
-            );
+            DecisionResponseResult generated = responseGenerator.generate(
+                    state.sessionId(), userInput, state.sourceMode(), state.slots(), execution, weather);
             traceService.recordEvent(
-                    "RECOMMENDATION_REACT_COMPLETED",
-                    "RECOMMEND",
-                    execution.decision(),
-                    generated.recommend()
-            );
+                    "RECOMMENDATION_REACT_COMPLETED", "RECOMMEND", execution.decision(), generated.recommend());
             return Optional.of(generated);
         } catch (RuntimeException error) {
-            traceService.recordError(
-                    "RECOMMENDATION_REACT_FALLBACK",
-                    "RECOMMEND",
-                    semanticContext,
-                    error
-            );
+            traceService.recordError("RECOMMENDATION_REACT_FALLBACK", "RECOMMEND", semanticContext, error);
             return Optional.empty();
         }
     }
