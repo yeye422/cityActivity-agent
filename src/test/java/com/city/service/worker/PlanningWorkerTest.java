@@ -5,8 +5,10 @@ import com.city.model.ActivityItem;
 import com.city.model.ActivitySessionResponse;
 import com.city.model.PlanCandidate;
 import com.city.model.SlotBundle;
+import com.city.model.TravelTimeEvidence;
 import com.city.model.WeatherRecommendationContext;
 import com.city.model.agent.AgentResult;
+import com.city.model.agent.EvidenceType;
 import com.city.model.agent.PlanningExecutionResult;
 import com.city.model.agent.PlanningResult;
 import com.city.service.plan.ActivityPlanService;
@@ -48,6 +50,33 @@ class PlanningWorkerTest {
         assertEquals(planning, result.planning());
         assertEquals(1, result.planCandidates().size());
         assertEquals(new BigDecimal("80"), result.planCandidates().getFirst().totalCost());
+    }
+
+    @Test
+    void shouldCarryTravelEvidenceIntoResultAndSolverConstraint() {
+        ActivityPlanService planService = mock(ActivityPlanService.class);
+        PlanningWorker worker = new PlanningWorker(planService);
+        ActivityItem first = activity(1L, "候选1");
+        ActivityItem second = activity(2L, "候选2");
+        ActivityPlanService.PlannedActivity w1 = new ActivityPlanService.PlannedActivity(
+                "14:00-15:00", null, SlotBundle.empty(), List.of(first),
+                Map.of(1L, List.of(session(101L, 1L, 14, 15, "20"))), null);
+        ActivityPlanService.PlannedActivity w2 = new ActivityPlanService.PlannedActivity(
+                "15:00-16:00", null, SlotBundle.empty(), List.of(second),
+                Map.of(2L, List.of(session(201L, 2L, 15, 16, "20"))), null);
+        when(planService.planWithEvidence(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(planning(List.of(w1, w2)));
+
+        PlanningExecutionResult result = worker.planAndSolve(
+                SourceMode.PUBLIC, 1L, SlotBundle.empty(), SlotBundle.empty(),
+                List.of("14:00-15:00", "15:00-16:00"), null,
+                WeatherRecommendationContext.inactive(),
+                List.of(new TravelTimeEvidence(11L, 12L, 30, "AMAP_ROUTE")));
+
+        assertEquals(1, result.planCandidates().getFirst().matchedCount());
+        assertTrue(result.planning().agentResult().evidenceRefs().stream()
+                .anyMatch(ref -> ref.type() == EvidenceType.MAP_ROUTE && "11->12".equals(ref.id())));
+        assertEquals(1, result.planning().agentResult().metrics().get("routeEvidenceCount"));
     }
 
     @Test
