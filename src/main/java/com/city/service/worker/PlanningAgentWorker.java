@@ -86,7 +86,7 @@ public final class PlanningAgentWorker {
                     decision.plan(),
                     evidenceRegistry,
                     maxBudget,
-                    safeTravel
+                    planningContext.allTravelTimeEvidence()
             );
             if (!finalValidation.valid() || finalValidation.acceptedPlan() == null) {
                 throw new IllegalStateException("PlanningAgent 最终方案未通过 Java Solver 复核: " + finalValidation.violations());
@@ -100,7 +100,10 @@ public final class PlanningAgentWorker {
             traceService.recordEvent(
                     "PLANNING_AGENT_DECIDED",
                     "AGENT",
-                    evidenceRegistry.periods(),
+                    java.util.Map.of(
+                            "periods", evidenceRegistry.periods(),
+                            "travelEvidence", planningContext.allTravelTimeEvidence()
+                    ),
                     result
             );
             return result;
@@ -108,7 +111,11 @@ public final class PlanningAgentWorker {
             traceService.recordError(
                     "PLANNING_AGENT_FAILED",
                     "AGENT",
-                    java.util.Map.of("windows", safeWindows, "exposedActivityIds", evidenceRegistry.exposedActivityIds()),
+                    java.util.Map.of(
+                            "windows", safeWindows,
+                            "exposedActivityIds", evidenceRegistry.exposedActivityIds(),
+                            "travelEvidence", planningContext.allTravelTimeEvidence()
+                    ),
                     error
             );
             throw error;
@@ -125,8 +132,9 @@ public final class PlanningAgentWorker {
                 当前已生效槽位：%s
                 服务器硬约束摘要：%s
 
-                请先调用 discover_plan_candidates，再组合方案并调用 validate_plan。
-                如果校验失败，根据 violations 定向修改冲突窗口；只有 valid 后才能输出最终 PlanningDecision。
+                请先调用 discover_plan_candidates 获取真实活动和 OPEN 场次。
+                当方案包含不同 venueId 的连续场次时，先调用 get_travel_time 获取对应场次间的真实路线时长证据，
+                再调用 validate_plan。若校验失败，根据 violations 定向修改冲突窗口；只有 valid 后才能输出最终 PlanningDecision。
                 """.formatted(
                 userInput == null ? "" : userInput.trim(),
                 verifiedContext.userGoal(),
