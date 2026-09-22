@@ -70,11 +70,7 @@ class ChatRequestIdempotencyServiceTest {
 
         when(mapper.insertPending(any())).thenAnswer(invocation -> {
             ChatRequestIdempotencyRow attempted = invocation.getArgument(0);
-            ChatRequestIdempotencyRow row = new ChatRequestIdempotencyRow();
-            row.setUserId(attempted.getUserId());
-            row.setIdempotencyKey(attempted.getIdempotencyKey());
-            row.setRequestHash(attempted.getRequestHash());
-            row.setStatus("SUCCESS");
+            ChatRequestIdempotencyRow row = copyClaim(attempted, "SUCCESS");
             row.setResponseJson(cachedJson);
             existing.set(row);
             return 0;
@@ -92,6 +88,29 @@ class ChatRequestIdempotencyServiceTest {
         assertEquals("cached", actual.speechText());
         assertEquals(0, calls.get());
         verify(mapper, never()).markSuccess(any(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void pendingDuplicateShouldFailClosedWithoutExecutingAgain() {
+        ChatRequestIdempotencyMapper mapper = mock(ChatRequestIdempotencyMapper.class);
+        AtomicReference<ChatRequestIdempotencyRow> existing = new AtomicReference<>();
+        when(mapper.insertPending(any())).thenAnswer(invocation -> {
+            ChatRequestIdempotencyRow attempted = invocation.getArgument(0);
+            existing.set(copyClaim(attempted, "PENDING"));
+            return 0;
+        });
+        when(mapper.find(1L, "key-1")).thenAnswer(ignored -> existing.get());
+        ChatRequestIdempotencyService service = new ChatRequestIdempotencyService(mapper, objectMapper);
+        AtomicInteger calls = new AtomicInteger();
+
+        assertThrows(CityException.class,
+                () -> service.execute(1L, "key-1", request, () -> {
+                    calls.incrementAndGet();
+                    return ChatResponse.answer("s1", "should-not-run", List.of(), "WAIT_USER");
+                }));
+
+        assertEquals(0, calls.get());
+        verify(mapper, never()).deletePending(any(), anyString(), anyString());
     }
 
     @Test
@@ -122,5 +141,14 @@ class ChatRequestIdempotencyServiceTest {
 
         verify(mapper).deletePending(org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq("key-1"), anyString());
+    }
+
+    private ChatRequestIdempotencyRow copyClaim(ChatRequestIdempotencyRow attempted, String status) {
+        ChatRequestIdempotencyRow row = new ChatRequestIdempotencyRow();
+        row.setUserId(attempted.getUserId());
+        row.setIdempotencyKey(attempted.getIdempotencyKey());
+        row.setRequestHash(attempted.getRequestHash());
+        row.setStatus(status);
+        return row;
     }
 }
