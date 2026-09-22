@@ -4,6 +4,7 @@ import com.city.model.ActivityItem;
 import com.city.model.ActivitySessionResponse;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
+import com.city.model.TravelTimeEvidence;
 import com.city.model.WeatherRecommendationContext;
 import com.city.model.agent.EvidenceRef;
 import com.city.model.agent.EvidenceType;
@@ -67,6 +68,18 @@ public final class EvidenceRefFactory {
         String id = city + '@' + date;
         String canonical = id + '|' + weather.status() + '|' + weather.summary();
         return new EvidenceRef(EvidenceType.WEATHER, id, sha256(canonical), Instant.now());
+    }
+
+    public EvidenceRef mapRoute(TravelTimeEvidence travelTime) {
+        if (travelTime == null) {
+            throw new IllegalArgumentException("路线证据不能为空");
+        }
+        String id = travelTime.fromVenueId() + "->" + travelTime.toVenueId();
+        String canonical = String.join("|",
+                id,
+                String.valueOf(travelTime.durationMinutes()),
+                travelTime.source());
+        return new EvidenceRef(EvidenceType.MAP_ROUTE, id, sha256(canonical), Instant.now());
     }
 
     private String sha256(String value) {
