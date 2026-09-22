@@ -1,0 +1,138 @@
+package com.city.service.worker;
+
+import com.city.agent.builder.PlanningAgentBuilder;
+import com.city.model.TravelTimeEvidence;
+import com.city.model.agent.PlanningAgentExecutionResult;
+import com.city.model.agent.PlanningDecision;
+import com.city.model.agent.PlanValidationResult;
+import com.city.model.context.PlanningToolContext;
+import com.city.model.context.VerifiedRequestContext;
+import com.city.service.evidence.PlanningEvidenceRegistry;
+import com.city.service.plan.PlanProposalValidationService;
+import com.city.service.plan.PlanningConstraintParser;
+import com.city.service.trace.AgentTraceService;
+import io.agentscope.core.ReActAgent;
+import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.MsgRole;
+import org.springframework.stereotype.Component;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Objects;
+
+/**
+ * PlanningAgent 的执行边界。当前作为旁路新能力存在，不写 SessionState，也不替换旧 PlanningWorker。
+ */
+@Component
+public final class PlanningAgentWorker {
+
+    private final PlanningAgentBuilder agentBuilder;
+    private final PlanningConstraintParser constraintParser;
+    private final PlanProposalValidationService validationService;
+    private final AgentTraceService traceService;
+
+    public PlanningAgentWorker(
+            PlanningAgentBuilder agentBuilder,
+            PlanningConstraintParser constraintParser,
+            PlanProposalValidationService validationService,
+            AgentTraceService traceService
+    ) {
+        this.agentBuilder = Objects.requireNonNull(agentBuilder, "agentBuilder");
+        this.constraintParser = Objects.requireNonNull(constraintParser, "constraintParser");
+        this.validationService = Objects.requireNonNull(validationService, "validationService");
+        this.traceService = Objects.requireNonNull(traceService, "traceService");
+    }
+
+    public PlanningAgentExecutionResult execute(
+            String userInput,
+            VerifiedRequestContext verifiedContext,
+            List<String> windows,
+            List<TravelTimeEvidence> travelTimeEvidence
+    ) {
+        Objects.requireNonNull(verifiedContext, "verifiedContext");
+        List<String> safeWindows = windows == null ? List.of() : List.copyOf(windows);
+        List<TravelTimeEvidence> safeTravel = travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
+        PlanningEvidenceRegistry evidenceRegistry = new PlanningEvidenceRegistry();
+        BigDecimal maxBudget = constraintParser.explicitMaxBudget(verifiedContext.effectiveSlots());
+        PlanningToolContext planningContext = new PlanningToolContext(
+                verifiedContext,
+                safeWindows,
+                evidenceRegistry,
+                maxBudget,
+                safeTravel
+        );
+        ReActAgent agent = agentBuilder.build(planningContext);
+
+        traceService.recordEvent(
+                "PLANNING_AGENT_STARTED",
+                "AGENT",
+                verifiedContext.userGoal(),
+                java.util.Map.of("windows", safeWindows)
+        );
+
+        try {
+            Msg response = agent.call(
+                    Msg.builder()
+                            .role(MsgRole.USER)
+                            .textContent(buildPrompt(userInput, verifiedContext, safeWindows))
+                            .build(),
+                    PlanningDecision.class
+            ).block();
+            if (response == null) {
+                throw new IllegalStateException("PlanningAgent 返回为空");
+            }
+            PlanningDecision decision = response.getStructuredData(PlanningDecision.class);
+            PlanValidationResult finalValidation = validationService.validate(
+                    decision.plan(),
+                    evidenceRegistry,
+                    maxBudget,
+                    safeTravel
+            );
+            if (!finalValidation.valid() || finalValidation.acceptedPlan() == null) {
+                throw new IllegalStateException("PlanningAgent 最终方案未通过 Java Solver 复核: " + finalValidation.violations());
+            }
+
+            PlanningAgentExecutionResult result = new PlanningAgentExecutionResult(
+                    decision,
+                    finalValidation.acceptedPlan(),
+                    finalValidation
+            );
+            traceService.recordEvent(
+                    "PLANNING_AGENT_DECIDED",
+                    "AGENT",
+                    evidenceRegistry.periods(),
+                    result
+            );
+            return result;
+        } catch (RuntimeException error) {
+            traceService.recordError(
+                    "PLANNING_AGENT_FAILED",
+                    "AGENT",
+                    java.util.Map.of("windows", safeWindows, "exposedActivityIds", evidenceRegistry.exposedActivityIds()),
+                    error
+            );
+            throw error;
+        }
+    }
+
+    private String buildPrompt(String userInput,
+                               VerifiedRequestContext verifiedContext,
+                               List<String> windows) {
+        return """
+                用户原话：%s
+                UserGoal：%s
+                规划窗口：%s
+                当前已生效槽位：%s
+                服务器硬约束摘要：%s
+
+                请先调用 discover_plan_candidates，再组合方案并调用 validate_plan。
+                如果校验失败，根据 violations 定向修改冲突窗口；只有 valid 后才能输出最终 PlanningDecision。
+                """.formatted(
+                userInput == null ? "" : userInput.trim(),
+                verifiedContext.userGoal(),
+                windows,
+                verifiedContext.effectiveSlots(),
+                verifiedContext.hardConstraints()
+        );
+    }
+}
