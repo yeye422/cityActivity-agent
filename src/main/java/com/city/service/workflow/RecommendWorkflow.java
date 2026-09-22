@@ -6,7 +6,9 @@ import com.city.enums.SessionPhase;
 import com.city.model.IntentResult;
 import com.city.model.SessionState;
 import com.city.model.SlotMutation;
+import com.city.model.context.SemanticContext;
 import com.city.service.clarify.ClarifyRuleService;
+import com.city.service.context.SemanticContextBuilder;
 import com.city.service.slot.SlotMutationService;
 
 import java.util.List;
@@ -53,5 +55,13 @@ public final class RecommendWorkflow {
             SessionState state,
             SlotMutation mutation,
             ClarifyField missingField
-    ) {}
+    ) {
+        /**
+         * 返回应用完本轮 Slot Patch 后的只读决策语义视图。
+         * 旧调用方仍可继续只使用 state/mutation/missingField，因此本阶段不改变现有执行链。
+         */
+        public SemanticContext semanticContext() {
+            return new SemanticContextBuilder().build(state);
+        }
+    }
 }
