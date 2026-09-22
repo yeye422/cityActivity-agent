@@ -2,6 +2,7 @@ package com.city.service.recommend;
 
 import com.city.enums.SourceMode;
 import com.city.model.ActivityItem;
+import com.city.model.DecisionResponseResult;
 import com.city.model.SlotBundle;
 import com.city.model.WeatherRecommendationContext;
 import com.city.model.agent.RecommendationDecision;
@@ -37,7 +38,7 @@ class RecommendationResponseGeneratorServiceTest {
                 List.of()
         );
 
-        RecommendResponseAgentService.Result result = service.generate(
+        DecisionResponseResult result = service.generate(
                 "s1", "想约会", SourceMode.PUBLIC, slots, execution,
                 WeatherRecommendationContext.inactive()
         );
@@ -63,7 +64,7 @@ class RecommendationResponseGeneratorServiceTest {
         RecommendationExecutionResult execution = new RecommendationExecutionResult(
                 decision, List.of(selected), 1, List.of());
 
-        RecommendResponseAgentService.Result result = service.generate(
+        DecisionResponseResult result = service.generate(
                 "s1", "想特别一点", SourceMode.PUBLIC, SlotBundle.empty(), execution,
                 WeatherRecommendationContext.inactive());
 
