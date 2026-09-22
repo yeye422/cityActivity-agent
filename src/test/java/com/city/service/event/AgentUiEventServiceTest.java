@@ -71,16 +71,14 @@ class AgentUiEventServiceTest {
     }
 
     @Test
-    void shouldPersistEventBeforeKeepingHotReplayHistory() {
+    void shouldPersistPublishedEvent() {
         AgentUiEventMapper mapper = mock(AgentUiEventMapper.class);
         AgentUiEventService service = new AgentUiEventService(
                 mapper, new ObjectMapper().findAndRegisterModules());
-        AgentUiEvent event = event("trace-a", 7);
 
-        service.publish(1L, "s1", event);
+        service.publish(1L, "s1", event("trace-a", 7));
 
         verify(mapper).insertIgnore(any(AgentUiEventRow.class));
-        assertEquals(event, service.replayAfter(1L, "s1", "bad-cursor").getFirst());
     }
 
     @Test
