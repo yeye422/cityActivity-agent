@@ -1,10 +1,13 @@
 package com.city.service.recommend;
 
+import com.city.enums.SourceMode;
+import com.city.model.ActivityItem;
 import com.city.model.agent.RecommendationDecision;
 import com.city.model.tool.RetrievalToolResult;
 import com.city.service.evidence.CandidateEvidenceRegistry;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -31,6 +34,8 @@ class RecommendationDecisionValidatorTest {
         RecommendationDecision validated = validator.validate(decision, registry);
 
         assertEquals(List.of(101L, 202L), validated.selectedActivityIds());
+        assertEquals(List.of(101L, 202L), registry.resolveSelected(validated.selectedActivityIds())
+                .stream().map(ActivityItem::id).toList());
         assertEquals(1.0, validated.confidence());
     }
 
@@ -65,11 +70,17 @@ class RecommendationDecisionValidatorTest {
     private CandidateEvidenceRegistry registryWith(Long... ids) {
         CandidateEvidenceRegistry registry = new CandidateEvidenceRegistry(2);
         registry.beginRetrieval("test");
-        List<RetrievalToolResult.Candidate> candidates = java.util.Arrays.stream(ids)
-                .map(id -> new RetrievalToolResult.Candidate(
-                        id, "candidate-" + id, null, null, null, null, null, null, 0.9))
+        List<ActivityItem> activities = Arrays.stream(ids)
+                .map(id -> new ActivityItem(
+                        id, SourceMode.PUBLIC, null, "candidate-" + id,
+                        null, null, null, null, null, null, 0.9))
                 .toList();
-        registry.recordResult(new RetrievalToolResult("test", candidates));
+        List<RetrievalToolResult.Candidate> candidates = activities.stream()
+                .map(item -> new RetrievalToolResult.Candidate(
+                        item.id(), item.name(), item.slots(), item.validFrom(), item.validTo(),
+                        item.validStartTime(), item.validEndTime(), item.durationMinutes(), item.matchScore()))
+                .toList();
+        registry.recordResult(new RetrievalToolResult("test", candidates), activities);
         return registry;
     }
 }
