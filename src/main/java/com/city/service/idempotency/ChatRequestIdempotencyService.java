@@ -11,7 +11,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
@@ -98,22 +97,44 @@ public class ChatRequestIdempotencyService {
                                            String key,
                                            String requestHash,
                                            Supplier<ChatResponse> action) {
+        ChatResponse response;
         try {
-            ChatResponse response = action.get();
-            String json = objectMapper.writeValueAsString(response);
+            response = action.get();
+        } catch (RuntimeException error) {
+            safeReleasePending(userId, key, requestHash);
+            throw error;
+        }
+
+        final String json;
+        try {
+            json = objectMapper.writeValueAsString(response);
+        } catch (Exception error) {
+            // 业务已经执行成功，此时绝不能释放 claim，否则客户端重试可能再次执行 Agent。
+            log.warn("Chat succeeded but idempotency response serialization failed; keep claim PENDING to prevent duplicate execution: userId={}, key={}",
+                    userId, key, error);
+            return response;
+        }
+
+        try {
             int updated = mapper.markSuccess(userId, key, requestHash, json);
             if (updated != 1) {
-                // 业务响应已经完成，不能因为幂等结果落库异常反向诱导客户端重试并重复执行业务。
+                // 同理：业务已成功，宁可保留 PENDING 阻止重复，也不能释放后诱导二次执行。
                 log.warn("Chat idempotency response was produced but SUCCESS snapshot was not updated: userId={}, key={}",
                         userId, key);
             }
-            return response;
         } catch (RuntimeException error) {
+            log.warn("Chat succeeded but idempotency SUCCESS persistence failed; keep claim to prevent duplicate execution: userId={}, key={}",
+                    userId, key, error);
+        }
+        return response;
+    }
+
+    private void safeReleasePending(Long userId, String key, String requestHash) {
+        try {
             mapper.deletePending(userId, key, requestHash);
-            throw error;
-        } catch (Exception error) {
-            mapper.deletePending(userId, key, requestHash);
-            throw new CityException("聊天幂等响应序列化失败", error);
+        } catch (RuntimeException releaseError) {
+            log.warn("Failed to release failed chat idempotency claim: userId={}, key={}",
+                    userId, key, releaseError);
         }
     }
 
