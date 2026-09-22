@@ -15,6 +15,7 @@ import com.city.service.agent.EvidenceRefFactory;
 import com.city.service.activity.ActivityRankService;
 import com.city.service.activity.ActivitySearchService;
 import com.city.service.activity.ActivitySessionService;
+import com.city.service.worker.RetrievalWorker;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -50,18 +51,27 @@ public class ActivityPlanService {
 
     private static final int PLAN_CANDIDATE_LIMIT = 3;
 
-    private final ActivitySearchService activitySearchService;
+    private final RetrievalWorker retrievalWorker;
     private final ActivityRankService activityRankService;
     private final ActivitySessionService activitySessionService;
     private final EvidenceRefFactory evidenceRefFactory = new EvidenceRefFactory();
 
     @Autowired
+    public ActivityPlanService(RetrievalWorker retrievalWorker,
+                               ActivityRankService activityRankService,
+                               ActivitySessionService activitySessionService) {
+        this.retrievalWorker = retrievalWorker;
+        this.activityRankService = activityRankService;
+        this.activitySessionService = activitySessionService;
+    }
+
+    /**
+     * 保留测试和旧调用方的兼容构造方式；生产运行时由 Spring 注入统一 RetrievalWorker。
+     */
     public ActivityPlanService(ActivitySearchService activitySearchService,
                                ActivityRankService activityRankService,
                                ActivitySessionService activitySessionService) {
-        this.activitySearchService = activitySearchService;
-        this.activityRankService = activityRankService;
-        this.activitySessionService = activitySessionService;
+        this(new RetrievalWorker(activitySearchService), activityRankService, activitySessionService);
     }
 
     /**
@@ -177,7 +187,7 @@ public class ActivityPlanService {
                                            WeatherRecommendationContext weather) {
         SlotBundle querySlots = slotsForActivityTime(baseSlots, activityTime);
         TimeConstraint targetTimeConstraint = timeConstraintForActivityTime(timeConstraint, activityTime);
-        List<ActivityItem> candidates = activitySearchService.search(new ActivitySearchRequest(
+        List<ActivityItem> candidates = retrievalWorker.retrieveCandidates(new ActivitySearchRequest(
                 sourceMode, userId, querySlots, List.of(), targetTimeConstraint, excludedSlots));
         List<ActivityItem> topCandidates = activityRankService.rank(
                         new ActivityRankRequest(candidates, querySlots, targetTimeConstraint, List.of()), weather)
