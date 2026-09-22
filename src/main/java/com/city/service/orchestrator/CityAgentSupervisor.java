@@ -42,6 +42,7 @@ import com.city.service.intent.IntentReviseService;
 import com.city.service.plan.ActivityPlanService;
 import com.city.service.plan.PlanResponseAgentService;
 import com.city.service.recommend.RecommendResponseAgentService;
+import com.city.service.recommend.RecommendationDecisionFacade;
 import com.city.service.risk.RiskGuardService;
 import com.city.service.session.SessionService;
 import com.city.service.session.SessionStateService;
@@ -91,6 +92,7 @@ public class CityAgentSupervisor {
     private final TimeResolutionService timeResolutionService;
     private final RiskGuardService riskGuardService;
     private final AgentTraceService agentTraceService;
+    private final RecommendationDecisionFacade recommendationDecisionFacade;
     private final ToolContractRegistry toolContractRegistry = new ToolContractRegistry();
     private final WorkflowRouter workflowRouter = new WorkflowRouter();
     private final WorkerDispatcher workerDispatcher;
@@ -122,7 +124,8 @@ public class CityAgentSupervisor {
             WeatherRecommendationService weatherRecommendationService,
             TimeResolutionService timeResolutionService,
             RiskGuardService riskGuardService,
-            AgentTraceService agentTraceService
+            AgentTraceService agentTraceService,
+            RecommendationDecisionFacade recommendationDecisionFacade
     ) {
         this.sessionService = sessionService;
         this.sessionStateService = sessionStateService;
@@ -137,6 +140,7 @@ public class CityAgentSupervisor {
         this.timeResolutionService = timeResolutionService;
         this.riskGuardService = riskGuardService;
         this.agentTraceService = agentTraceService;
+        this.recommendationDecisionFacade = recommendationDecisionFacade;
         this.workerDispatcher = new WorkerDispatcher(toolContractRegistry, agentTraceService);
         this.contextWorker = new ContextWorker(intentAgentService, intentReviseService);
         this.retrievalWorker = new RetrievalWorker(activitySearchService);
@@ -261,10 +265,8 @@ public class CityAgentSupervisor {
         agentTraceService.recordEvent("INTENT_RECOGNIZED", "INTENT", request.message(), rawIntent);
 
         IntentResult intent = contextResult.revised();
-        // 即使后续被 RiskGuard 短路，也先记录最终业务 Intent，保证 Trace/评估仍能观察意图分类结果。
         agentTraceService.recordEvent("INTENT_REVISED", "INTENT", rawIntent, intent);
 
-        // 安全风险是后端横切约束，不作为 Intent。明显风险请求在状态修改和业务搜索前直接拦截。
         RiskGuardResult inputGuard = riskGuardService.checkInput(request.message());
         agentTraceService.recordEvent("RISK_GUARD_INPUT_CHECKED", "GUARD",
                 traceMap("intent", intent.intent(), "userInput", request.message()), inputGuard);
@@ -610,7 +612,6 @@ public class CityAgentSupervisor {
         return completeTextOnly(sessionId, traceId, state, Intent.OTHER, response);
     }
 
-    /** 闲聊插入未完成澄清时只回复当前问题，不终止原来的业务状态机。 */
     private boolean hasPendingClarification(SessionState state) {
         return state != null
                 && state.phase() == SessionPhase.CLARIFY
@@ -618,10 +619,6 @@ public class CityAgentSupervisor {
                 && state.currentIntent() != null;
     }
 
-    /**
-     * OTHER 只是一次临时插话：消息本身标记为 OTHER，但 SessionState 保留原 currentIntent、phase 和 pendingClarifyField。
-     * 下一轮用户继续回答澄清字段时，IntentRevise 仍能依据持久化状态恢复原业务流程。
-     */
     private ChatResponse completeStatePreservingChitchat(String sessionId,
                                                           String traceId,
                                                           SessionState state,
@@ -664,6 +661,18 @@ public class CityAgentSupervisor {
         WeatherRecommendationContext weather = weatherRecommendationService.resolve(state.slots(), state.timeConstraint());
         agentTraceService.recordEvent("WEATHER_CONTEXT_RESOLVED", "RANK",
                 traceMap("slots", state.slots(), "timeConstraint", state.timeConstraint()), weather);
+
+        if (selectedRelaxation == null) {
+            var reactResult = recommendationDecisionFacade.tryRecommend(
+                    userInput, traceId, state, excludeActivityIds, weather);
+            if (reactResult.isPresent()) {
+                agentTraceService.recordEvent("RECOMMENDATION_REACT_MAINLINE_USED", "RECOMMEND",
+                        traceMap("sourceMode", state.sourceMode(), "excludeActivityIds", excludeActivityIds),
+                        reactResult.get().recommend());
+                return completeReactRecommendation(
+                        sessionId, userInput, traceId, state, weather, publicFallbackUsed, reactResult.get());
+            }
+        }
 
         ActivitySearchRequest searchRequest = new ActivitySearchRequest(
                 state.sourceMode(), userId, state.slots(), excludeActivityIds, state.timeConstraint(), state.excludedSlots());
@@ -842,6 +851,78 @@ public class CityAgentSupervisor {
         return chatResponse;
     }
 
+    private ChatResponse completeReactRecommendation(
+            String sessionId,
+            String userInput,
+            String traceId,
+            SessionState state,
+            WeatherRecommendationContext weather,
+            boolean publicFallbackUsed,
+            RecommendResponseAgentService.Result merged
+    ) {
+        RecommendResult recommend = merged.recommend();
+        String strategy = state.currentIntent() == null
+                ? Intent.ACTIVITY_RECOMMENDATION.name()
+                : state.currentIntent().name();
+        agentTraceService.recordEvent(
+                "RECOMMEND_RESULT_BUILT",
+                "RECOMMEND",
+                traceMap("strategy", strategy, "decisionSource", "REACT_AGENT"),
+                recommend
+        );
+
+        ResponseResult response = merged.response();
+        if (weather.active()) {
+            response = new ResponseResult(
+                    weather.summary() + "\n" + response.speechText(),
+                    response.displayBlocks(),
+                    response.nextAction()
+            );
+        }
+        if (publicFallbackUsed) {
+            response = prependPublicFallbackNotice(response);
+            agentTraceService.recordEvent(
+                    "PUBLIC_FALLBACK_NOTICE_APPLIED",
+                    "RESPONSE",
+                    Map.of("sourceMode", SourceMode.PUBLIC),
+                    response
+            );
+        }
+        agentTraceService.recordEvent("RESPONSE_AGENT_RESULT", "RESPONSE", recommend, response);
+        response = applyOutputRiskGuard(userInput, state.currentIntent(), response);
+
+        List<Long> lastIds = recommend.recommendations().stream()
+                .map(option -> option.itemId())
+                .toList();
+        String queryKey = recommendationQueryKey(state);
+        SessionState savedState = queryKey.equals(state.recommendationQueryKey())
+                ? state.appendLastRecommendations(lastIds)
+                : state.withLastRecommendations(lastIds);
+        savedState = savedState.withRecommendationQueryKey(queryKey)
+                .withPendingClarifyField(null)
+                .withPendingRelaxationContext(null);
+        sessionStateService.save(savedState);
+        sessionService.appendMessage(
+                sessionId,
+                "assistant",
+                response.speechText(),
+                state.currentIntent().name(),
+                traceId
+        );
+        ChatResponse chatResponse = withConversationContext(
+                ChatResponse.answer(
+                        sessionId,
+                        traceId,
+                        response.speechText(),
+                        response.displayBlocks(),
+                        response.nextAction()
+                ),
+                savedState
+        );
+        agentTraceService.recordEvent("RESPONSE_READY", "RESPONSE", savedState, chatResponse);
+        return chatResponse;
+    }
+
     /** 推荐/规划生成后的统一输出安全检查。 */
     private ResponseResult applyOutputRiskGuard(String userInput, Intent intent, ResponseResult response) {
         RiskGuardResult guard = riskGuardService.check(userInput, response);
@@ -890,8 +971,7 @@ public class CityAgentSupervisor {
         String notice = "你的个人活动库暂时没有匹配项，我先从公共活动中帮你挑了几个。";
         return new ResponseResult(
                 notice + "\n" + response.speechText(),
-                response.displayBlocks(),
-                response.nextAction());
+                response.displayBlocks(), response.nextAction());
     }
 
     private ChatResponse completeRelaxationChoice(String sessionId,
@@ -919,7 +999,6 @@ public class CityAgentSupervisor {
         return response;
     }
 
-    /** 风险兜底只返回提示，不改变原业务状态和待澄清上下文。 */
     private ChatResponse completeGuardedTextOnly(String sessionId,
                                                  String traceId,
                                                  SessionState state,
