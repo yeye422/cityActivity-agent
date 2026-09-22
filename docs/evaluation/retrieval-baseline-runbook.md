@@ -46,7 +46,7 @@ SOURCE|CITY|ACTIVITY_NAME
 PUBLIC|西安|曲江艺术中心周末特展
 ```
 
-禁止将数据库自增 `activityId` 写入人工 relevance，因为不同环境重建数据后 ID 可能变化。
+禁止将数据库自增 `activityId` 写入人工 relevance，因为不同环境重建 seed 后 ID 可能变化。
 
 ## 2. 运行当前 Pipeline 基线
 
@@ -56,7 +56,7 @@ PUBLIC|西安|曲江艺术中心周末特展
 mvn spring-boot:run
 ```
 
-执行：
+可以直接调用接口：
 
 ```http
 POST /api/v1/city/evaluations/retrieval
@@ -68,6 +68,22 @@ Content-Type: application/json
 }
 ```
 
+也可以在 PowerShell 中使用仓库脚本：
+
+```powershell
+.\scripts\run-retrieval-baseline.ps1 -K 5
+```
+
+需要保存完整基线 JSON 时显式指定输出路径：
+
+```powershell
+.\scripts\run-retrieval-baseline.ps1 `
+  -K 5 `
+  -OutputPath .\artifacts\retrieval-current-k5.json
+```
+
+脚本默认只打印报告，不会自动写文件，也不会改变 Retrieval 策略。
+
 `k` 默认 5，服务端限制在 1~20。
 
 ## 3. 返回结果
@@ -76,11 +92,27 @@ Content-Type: application/json
 
 ```text
 evalSetVersion = retrieval-v1
+evalSetHash
+gitCommit
 strategy = CURRENT_PIPELINE
 k
 summary
 cases[]
 ```
+
+其中：
+
+```text
+evalSetHash
+```
+
+是实际参与评测的 `cases` 内容指纹。即使版本号仍叫 `retrieval-v1`，只要人工 relevance / query / slots 发生变化，指纹就会变化。
+
+```text
+gitCommit
+```
+
+用于定位本次运行对应的代码版本。
 
 `summary` 包含：
 
@@ -136,7 +168,37 @@ query
 
 避免把主观目标提前变成 SQL Hard Filter，否则无法公平评估 BM25 / Vector / Hybrid 的检索能力。
 
-## 5. Vector / RRF 实验规则
+## 5. 基线可比性要求
+
+两次 Retrieval 结果只有同时满足以下条件时才能直接比较：
+
+```text
+evalSetVersion 相同
+evalSetHash 相同
+k 相同
+```
+
+同时必须记录各自的：
+
+```text
+gitCommit
+strategy
+```
+
+例如：
+
+```text
+retrieval-v1
+hash = abc...
+k = 5
+CURRENT_PIPELINE @ commit A
+vs
+BM25_VECTOR_RRF @ commit B
+```
+
+如果 `evalSetHash` 不同，说明评测集内容已经发生变化，应重新建立所有待比较策略的基线，而不是直接计算前后分数提升。
+
+## 6. Vector / RRF 实验规则
 
 当前默认策略保持不变。
 
@@ -144,6 +206,7 @@ query
 
 ```text
 retrieval-v1 cases
+evalSetHash
 stable activity key
 K
 Recall@K
