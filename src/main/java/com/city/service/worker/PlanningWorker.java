@@ -4,14 +4,19 @@ import com.city.enums.SourceMode;
 import com.city.model.PlanCandidate;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
+import com.city.model.TravelTimeEvidence;
 import com.city.model.WeatherRecommendationContext;
+import com.city.model.agent.AgentResult;
+import com.city.model.agent.EvidenceRef;
 import com.city.model.agent.PlanningExecutionResult;
 import com.city.model.agent.PlanningResult;
+import com.city.service.agent.EvidenceRefFactory;
 import com.city.service.plan.ActivityPlanService;
 import com.city.service.plan.PlanningSolver;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -25,6 +30,7 @@ public final class PlanningWorker {
 
     private final ActivityPlanService activityPlanService;
     private final PlanningSolver planningSolver;
+    private final EvidenceRefFactory evidenceRefFactory = new EvidenceRefFactory();
 
     public PlanningWorker(ActivityPlanService activityPlanService) {
         this(activityPlanService, new PlanningSolver());
@@ -41,7 +47,7 @@ public final class PlanningWorker {
 
     /**
      * 线上兼容入口：先执行候选发现和 Solver，再只向下游暴露 Solver 排名第一的合法方案。
-     * 保留 PlanningResult 类型，避免当前 Supervisor 在 Workflow 拆分前再次承担大范围改动。
+     * 当前调用方尚未提供路线证据，因此默认使用空 TravelTimeEvidence；后续接入地图工具时无需修改 Solver 合同。
      */
     public PlanningResult plan(SourceMode sourceMode,
                                Long userId,
@@ -50,8 +56,19 @@ public final class PlanningWorker {
                                List<String> windows,
                                TimeConstraint timeConstraint,
                                WeatherRecommendationContext weather) {
+        return plan(sourceMode, userId, slots, excludedSlots, windows, timeConstraint, weather, List.of());
+    }
+
+    public PlanningResult plan(SourceMode sourceMode,
+                               Long userId,
+                               SlotBundle slots,
+                               SlotBundle excludedSlots,
+                               List<String> windows,
+                               TimeConstraint timeConstraint,
+                               WeatherRecommendationContext weather,
+                               List<TravelTimeEvidence> travelTimeEvidence) {
         PlanningExecutionResult execution = planAndSolve(
-                sourceMode, userId, slots, excludedSlots, windows, timeConstraint, weather);
+                sourceMode, userId, slots, excludedSlots, windows, timeConstraint, weather, travelTimeEvidence);
         return new PlanningResult(
                 responsePlans(execution),
                 execution.planning().agentResult()
@@ -68,11 +85,28 @@ public final class PlanningWorker {
                                                 List<String> windows,
                                                 TimeConstraint timeConstraint,
                                                 WeatherRecommendationContext weather) {
+        return planAndSolve(
+                sourceMode, userId, slots, excludedSlots, windows, timeConstraint, weather, List.of());
+    }
+
+    public PlanningExecutionResult planAndSolve(SourceMode sourceMode,
+                                                Long userId,
+                                                SlotBundle slots,
+                                                SlotBundle excludedSlots,
+                                                List<String> windows,
+                                                TimeConstraint timeConstraint,
+                                                WeatherRecommendationContext weather,
+                                                List<TravelTimeEvidence> travelTimeEvidence) {
         PlanningResult planning = discover(
                 sourceMode, userId, slots, excludedSlots, windows, timeConstraint, weather);
+        List<TravelTimeEvidence> safeTravelEvidence = travelTimeEvidence == null
+                ? List.of()
+                : List.copyOf(travelTimeEvidence);
+        PlanningResult evidencedPlanning = attachTravelEvidence(planning, safeTravelEvidence);
         return new PlanningExecutionResult(
-                planning,
-                planningSolver.solve(planning.plans(), explicitMaxBudget(slots))
+                evidencedPlanning,
+                planningSolver.solve(
+                        evidencedPlanning.plans(), explicitMaxBudget(slots), safeTravelEvidence)
         );
     }
 
@@ -85,6 +119,30 @@ public final class PlanningWorker {
                                     WeatherRecommendationContext weather) {
         return activityPlanService.planWithEvidence(
                 sourceMode, userId, slots, excludedSlots, windows, timeConstraint, weather);
+    }
+
+    private PlanningResult attachTravelEvidence(PlanningResult planning,
+                                                List<TravelTimeEvidence> travelTimeEvidence) {
+        if (travelTimeEvidence == null || travelTimeEvidence.isEmpty()) return planning;
+
+        AgentResult source = planning.agentResult();
+        List<EvidenceRef> evidence = new ArrayList<>(source.evidenceRefs());
+        travelTimeEvidence.stream()
+                .map(evidenceRefFactory::mapRoute)
+                .forEach(evidence::add);
+        Map<String, Number> metrics = new LinkedHashMap<>(source.metrics());
+        metrics.put("routeEvidenceCount", travelTimeEvidence.size());
+
+        AgentResult enriched = new AgentResult(
+                source.status(),
+                source.summary(),
+                source.verifiedActivityIds(),
+                source.verifiedSessionIds(),
+                evidence,
+                source.warnings(),
+                metrics
+        );
+        return new PlanningResult(planning.plans(), enriched);
     }
 
     /**
