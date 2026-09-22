@@ -19,7 +19,7 @@ class MemoryWorkerTest {
         PreferenceMemoryService service = mock(PreferenceMemoryService.class);
         MemoryWorker worker = new MemoryWorker(service);
         PreferenceFactRequest request = new PreferenceFactRequest(
-                "activityType", "展览", PreferencePolarity.POSITIVE, "EXPLICIT");
+                "activityType", "展览", PreferencePolarity.PREFER, "EXPLICIT");
         when(service.findActive(1L)).thenReturn(List.of());
 
         assertEquals(List.of(), worker.findActive(1L));
