@@ -57,6 +57,11 @@ public class CityChatController {
         );
     }
 
+    /** 兼容已有直接方法调用/纯单测，不暴露第二个 HTTP Mapping。 */
+    public ChatResponse chat(Long userId, ChatRequest request) {
+        return chat(userId, null, request);
+    }
+
     @PostMapping("/chat/relax")
     public ChatResponse showRelaxedRecommendation(
             @RequestHeader(value = CityConstants.USER_ID, defaultValue = "1") Long userId,
