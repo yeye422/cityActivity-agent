@@ -32,6 +32,7 @@ class AgentRuntimeMetricsExtractorTest {
 
         Map<String, Double> metrics = extractor.aggregate(List.of(trace));
 
+        assertEquals(1.0, metrics.get("reactRouteCoverage"));
         assertEquals(1.0, metrics.get("recommendationReactSuccessRate"));
         assertEquals(1.0, metrics.get("reRetrievalRate"));
         assertEquals(2.0, metrics.get("retrievalToolCallCount"));
@@ -59,6 +60,7 @@ class AgentRuntimeMetricsExtractorTest {
 
         Map<String, Double> metrics = extractor.aggregate(List.of(trace));
 
+        assertEquals(1.0, metrics.get("reactRouteCoverage"));
         assertEquals(1.0, metrics.get("planningReactSuccessRate"));
         assertEquals(1.0, metrics.get("planValidationFailureRate"));
         assertEquals(1.0, metrics.get("planRepairSuccessRate"));
@@ -81,6 +83,7 @@ class AgentRuntimeMetricsExtractorTest {
 
         Map<String, Double> metrics = extractor.aggregate(List.of(trace));
 
+        assertEquals(1.0, metrics.get("reactRouteCoverage"));
         assertEquals(0.0, metrics.get("recommendationReactSuccessRate"));
         assertEquals(1.0, metrics.get("reactFallbackRate"));
         assertEquals(1.0, metrics.get("evidenceViolationRate"));
@@ -94,9 +97,24 @@ class AgentRuntimeMetricsExtractorTest {
 
         Map<String, Double> metrics = extractor.aggregate(List.of(trace));
 
+        assertEquals(0.0, metrics.get("reactRouteCoverage"));
         assertFalse(metrics.containsKey("recommendationReactSuccessRate"));
         assertFalse(metrics.containsKey("planningReactSuccessRate"));
         assertFalse(metrics.containsKey("reactFallbackRate"));
+    }
+
+    @Test
+    void shouldAverageRouteCoverageAcrossAllTraces() {
+        RequestTraceRow react = trace("""
+                {"events":[{"eventType":"RECOMMENDATION_REACT_ROUTE_SELECTED"}]}
+                """);
+        RequestTraceRow clarify = trace("""
+                {"events":[{"eventType":"CLARIFY_DECISION"}]}
+                """);
+
+        Map<String, Double> metrics = extractor.aggregate(List.of(react, clarify));
+
+        assertEquals(0.5, metrics.get("reactRouteCoverage"));
     }
 
     private RequestTraceRow trace(String traceJson) {
