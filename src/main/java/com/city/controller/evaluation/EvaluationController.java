@@ -8,8 +8,10 @@ import com.city.model.PromoteBaselineRequest;
 import com.city.model.PromoteEvaluationCaseRequest;
 import com.city.model.RegressionEvaluationReport;
 import com.city.model.RegressionEvaluationRequest;
+import com.city.service.evaluation.EvaluationCasePromotionService;
 import com.city.service.evaluation.EvaluationService;
 import com.city.service.evaluation.RegressionEvaluationService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -21,11 +23,21 @@ import org.springframework.web.bind.annotation.RestController;
 public class EvaluationController {
     private final EvaluationService evaluationService;
     private final RegressionEvaluationService regressionEvaluationService;
+    private final EvaluationCasePromotionService casePromotionService;
 
+    @Autowired
     public EvaluationController(EvaluationService evaluationService,
-                                RegressionEvaluationService regressionEvaluationService) {
+                                RegressionEvaluationService regressionEvaluationService,
+                                EvaluationCasePromotionService casePromotionService) {
         this.evaluationService = evaluationService;
         this.regressionEvaluationService = regressionEvaluationService;
+        this.casePromotionService = casePromotionService;
+    }
+
+    /** 向后兼容直接构造 Controller 的旧单测；生产环境由 Spring 使用三参数构造器。 */
+    public EvaluationController(EvaluationService evaluationService,
+                                RegressionEvaluationService regressionEvaluationService) {
+        this(evaluationService, regressionEvaluationService, null);
     }
 
     @PostMapping
@@ -48,7 +60,12 @@ public class EvaluationController {
     @PostMapping("/cases/promote")
     public void promoteCase(@RequestHeader(value = CityConstants.USER_ID, defaultValue = "1") Long userId,
                             @RequestBody PromoteEvaluationCaseRequest request) {
-        regressionEvaluationService.promote(userId, request);
+        if (casePromotionService != null) {
+            casePromotionService.promote(userId, request);
+        } else {
+            // 仅供旧单测/手工直接构造 Controller 兼容；Spring 运行时不会进入此分支。
+            regressionEvaluationService.promote(userId, request);
+        }
     }
 
     /** 将一次已通过的评测 Run 显式提升为同一评测集指纹下的 Baseline。 */
