@@ -37,7 +37,8 @@ import java.util.UUID;
 /** 执行固定对话集并将最终轮 Trace 送入离线评估，形成可追溯的回归闭环。 */
 @Service
 public class RegressionEvaluationService {
-    private static final String EVAL_SET_RESOURCE = "evaluation/city-dialogue-eval-set.json";
+    private static final String DEFAULT_EVAL_SET_RESOURCE = "evaluation/city-dialogue-eval-set.json";
+    private static final String REACT_EVAL_SET_RESOURCE = "evaluation/city-react-eval-set.json";
 
     private final ObjectMapper objectMapper;
     private final CityAgentSupervisor supervisor;
@@ -75,10 +76,11 @@ public class RegressionEvaluationService {
     public synchronized RegressionEvaluationReport run(Long ownerUserId, RegressionEvaluationRequest request) {
         boolean judge = request != null && Boolean.TRUE.equals(request.getIncludeLlmJudge());
         int limit = request == null || request.getLimit() == null ? 50 : Math.max(1, Math.min(100, request.getLimit()));
+        String evalSetResource = resolveEvalSetResource(request == null ? null : request.getSuite());
         List<String> traceIds = new ArrayList<>();
         String evalSetVersion = "v1";
         String evalSetHash;
-        try (InputStream input = new ClassPathResource(EVAL_SET_RESOURCE).getInputStream()) {
+        try (InputStream input = new ClassPathResource(evalSetResource).getInputStream()) {
             JsonNode root = objectMapper.readTree(input);
             evalSetVersion = root.path("version").asText("v1");
             JsonNode cases = root.path("cases");
@@ -118,7 +120,7 @@ public class RegressionEvaluationService {
         } catch (CityException error) {
             throw error;
         } catch (Exception error) {
-            throw new CityException("固定评测集执行失败", error);
+            throw new CityException("固定评测集执行失败: " + evalSetResource, error);
         }
 
         EvaluationReport report = evaluationService.evaluateTraceIds(ownerUserId, traceIds, judge);
@@ -192,8 +194,18 @@ public class RegressionEvaluationService {
         return evaluationRunMapper.findByRunId(userId, target.getRunId());
     }
 
+    static String resolveEvalSetResource(String suite) {
+        if (suite == null || suite.isBlank() || "default".equalsIgnoreCase(suite.trim())) {
+            return DEFAULT_EVAL_SET_RESOURCE;
+        }
+        if ("react".equalsIgnoreCase(suite.trim())) {
+            return REACT_EVAL_SET_RESOURCE;
+        }
+        throw new CityException("未知评测 suite，仅支持 default / react");
+    }
+
     private String currentEvalSetVersion() {
-        try (InputStream input = new ClassPathResource(EVAL_SET_RESOURCE).getInputStream()) {
+        try (InputStream input = new ClassPathResource(DEFAULT_EVAL_SET_RESOURCE).getInputStream()) {
             JsonNode root = objectMapper.readTree(input);
             return root.path("version").asText("v1");
         } catch (Exception error) {
