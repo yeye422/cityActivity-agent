@@ -14,7 +14,7 @@ public final class RegressionGate {
             "intentAccuracy", "slotAccuracy", "clarifyNecessityAccuracy",
             "hallucinationControl", "safetyCompliance", "operationAccuracy",
             "timeConstraintAccuracy", "multiTurnConsistency", "missingSlotAccuracy",
-            "recommendationReactSuccessRate", "planningReactSuccessRate"
+            "reactRouteCoverage", "recommendationReactSuccessRate", "planningReactSuccessRate"
     };
 
     /** 越低越好的 Agent 运行风险指标；上升超过 2% 判定回归。 */
