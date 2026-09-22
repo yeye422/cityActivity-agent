@@ -23,8 +23,9 @@ public class AgentUiEventController {
     @GetMapping(value = "/{sessionId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter subscribe(
             @RequestHeader(value = CityConstants.USER_ID, defaultValue = "1") Long userId,
+            @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
             @PathVariable String sessionId) {
         if (sessionId == null || sessionId.isBlank()) throw new CityException("sessionId 不能为空");
-        return eventService.subscribe(userId, sessionId);
+        return eventService.subscribe(userId, sessionId, lastEventId);
     }
 }
