@@ -13,8 +13,8 @@ import java.util.Objects;
 /**
  * 从现有 request trace 事件中提取 AgentScope ReAct 运行指标。
  *
- * <p>不新增数据库字段，只消费 trace_json.events；没有启用 ReAct 的历史 Trace 对相关比例返回 null，
- * 因而不会被错误计入 0 分。</p>
+ * <p>不新增数据库字段，只消费 trace_json.events；没有启用 ReAct 的历史 Trace 对成功率等比例返回 null，
+ * reactRouteCoverage 则始终按全部 Trace 统计，用于识别“专项评测实际上没有走新链”。</p>
  */
 public final class AgentRuntimeMetricsExtractor {
 
@@ -44,6 +44,7 @@ public final class AgentRuntimeMetricsExtractor {
         RuntimeFacts facts = parse(trace);
         Map<String, Double> metrics = new LinkedHashMap<>();
 
+        metrics.put("reactRouteCoverage", bool(facts.anyReactRouteSelected()));
         metrics.put("recommendationReactSuccessRate", facts.recommendationRouteSelected()
                 ? bool(facts.recommendationMainlineUsed()) : null);
         metrics.put("planningReactSuccessRate", facts.planningRouteSelected()
