@@ -15,49 +15,26 @@ import com.city.service.context.SemanticContextBuilder;
 import com.city.service.trace.AgentTraceService;
 import com.city.service.worker.RecommendationWorker;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-@ExtendWith(MockitoExtension.class)
 class RecommendationDecisionFacadeTest {
 
-    @Mock
-    RecommendationWorker recommendationWorker;
-    @Mock
-    RecommendationResponseGeneratorService responseGenerator;
-    @Mock
-    AgentTraceService traceService;
-
-    private final SemanticContextBuilder semanticContextBuilder = new SemanticContextBuilder();
-
     @Test
-    void shouldReturnEmptyWithoutCallingAgentWhenFeatureDisabled() {
+    void shouldExecuteAgentAndGenerateStructuredResponse() {
+        RecommendationWorker worker = mock(RecommendationWorker.class);
+        RecommendationResponseGeneratorService generator = mock(RecommendationResponseGeneratorService.class);
+        AgentTraceService trace = mock(AgentTraceService.class);
         RecommendationDecisionFacade facade = new RecommendationDecisionFacade(
-                semanticContextBuilder, recommendationWorker, responseGenerator, traceService, false);
-
-        Optional<RecommendResponseAgentService.Result> result = facade.tryRecommend(
-                "想约会", "trace-1", state(), List.of(88L), WeatherRecommendationContext.inactive());
-
-        assertTrue(result.isEmpty());
-        verify(recommendationWorker, never()).execute(any(), any());
-    }
-
-    @Test
-    void shouldExecuteAgentAndGenerateResponseWhenEnabled() {
-        RecommendationDecisionFacade facade = new RecommendationDecisionFacade(
-                semanticContextBuilder, recommendationWorker, responseGenerator, traceService, true);
+                new SemanticContextBuilder(), worker, generator, trace);
         SessionState state = state();
         ActivityItem selected = new ActivityItem(
                 101L, SourceMode.PUBLIC, null, "双人陶艺", state.slots(),
@@ -71,33 +48,28 @@ class RecommendationDecisionFacadeTest {
         DecisionResponseResult generated = new DecisionResponseResult(
                 RecommendResult.empty(), ResponseResult.textOnly("推荐双人陶艺"));
 
-        when(recommendationWorker.execute(eq("想约会"), any(VerifiedRequestContext.class)))
-                .thenReturn(execution);
-        when(responseGenerator.generate(
+        when(worker.execute(eq("想约会"), any(VerifiedRequestContext.class))).thenReturn(execution);
+        when(generator.generate(
                 eq(state.sessionId()), eq("想约会"), eq(SourceMode.PUBLIC), eq(state.slots()),
-                eq(execution), any(WeatherRecommendationContext.class)))
-                .thenReturn(generated);
+                eq(execution), any(WeatherRecommendationContext.class))).thenReturn(generated);
 
-        Optional<RecommendResponseAgentService.Result> result = facade.tryRecommend(
+        DecisionResponseResult result = facade.recommend(
                 "想约会", "trace-1", state, List.of(88L), WeatherRecommendationContext.inactive());
 
-        assertTrue(result.isPresent());
-        assertEquals(generated.recommend(), result.get().recommend());
-        assertEquals(generated.response(), result.get().response());
-        verify(recommendationWorker).execute(eq("想约会"), any(VerifiedRequestContext.class));
+        assertEquals(generated, result);
+        verify(worker).execute(eq("想约会"), any(VerifiedRequestContext.class));
     }
 
     @Test
-    void shouldFallbackToLegacyPathWhenAgentFails() {
+    void shouldPropagateAgentFailureToWorkflowDegradedPath() {
+        RecommendationWorker worker = mock(RecommendationWorker.class);
         RecommendationDecisionFacade facade = new RecommendationDecisionFacade(
-                semanticContextBuilder, recommendationWorker, responseGenerator, traceService, true);
-        when(recommendationWorker.execute(any(), any())).thenThrow(new IllegalStateException("agent failed"));
+                new SemanticContextBuilder(), worker,
+                mock(RecommendationResponseGeneratorService.class), mock(AgentTraceService.class));
+        when(worker.execute(any(), any())).thenThrow(new IllegalStateException("agent failed"));
 
-        Optional<RecommendResponseAgentService.Result> result = facade.tryRecommend(
-                "想约会", "trace-1", state(), List.of(), WeatherRecommendationContext.inactive());
-
-        assertTrue(result.isEmpty());
-        verify(responseGenerator, never()).generate(any(), any(), any(), any(), any(), any());
+        assertThrows(IllegalStateException.class, () -> facade.recommend(
+                "想约会", "trace-1", state(), List.of(), WeatherRecommendationContext.inactive()));
     }
 
     private SessionState state() {
