@@ -3,7 +3,9 @@ package com.city.service.agent;
 import com.city.model.ActivitySessionResponse;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
+import com.city.model.TravelTimeEvidence;
 import com.city.model.WeatherRecommendationContext;
+import com.city.model.agent.EvidenceRef;
 import com.city.model.agent.EvidenceType;
 import org.junit.jupiter.api.Test;
 
@@ -33,5 +35,15 @@ class EvidenceRefFactoryTest {
                 factory.weather(WeatherRecommendationContext.indoorPriority("小雨"),
                         slots, TimeConstraint.empty()).type());
         assertFalse(factory.session(session).fingerprint().isBlank());
+    }
+
+    @Test
+    void travelTimeShouldBecomeTraceableMapRouteEvidence() {
+        EvidenceRef route = factory.mapRoute(
+                new TravelTimeEvidence(101L, 102L, 30, "AMAP_ROUTE"));
+
+        assertEquals(EvidenceType.MAP_ROUTE, route.type());
+        assertEquals("101->102", route.id());
+        assertFalse(route.fingerprint().isBlank());
     }
 }
