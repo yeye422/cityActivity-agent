@@ -125,11 +125,21 @@ public class RegressionEvaluationService {
 
         EvaluationReport report = evaluationService.evaluateTraceIds(ownerUserId, traceIds, judge);
         report = enrichRuntimeMetrics(report, traceService.findByTraceIds(ownerUserId, traceIds));
+
+        ReactReleaseGate.Result absoluteReactGate = null;
+        if (isReactSuite(evalSetVersion)) {
+            absoluteReactGate = ReactReleaseGate.evaluate(report.metricAverages());
+            report = withReactReleaseGateMetrics(report, absoluteReactGate);
+        }
+
         String runId = "eval_" + UUID.randomUUID().toString().replace("-", "");
         String gitCommit = buildVersionService.gitCommit();
         EvaluationRunRow baseline = evaluationRunMapper.findBaseline(ownerUserId, evalSetVersion, evalSetHash);
         RegressionEvaluationReport result = compare(
                 report, runId, evalSetVersion, evalSetHash, gitCommit, baseline);
+        if (absoluteReactGate != null && !absoluteReactGate.passed() && result.passed()) {
+            result = withPassed(result, false);
+        }
 
         EvaluationRunRow current = new EvaluationRunRow();
         current.setRunId(runId);
@@ -202,6 +212,28 @@ public class RegressionEvaluationService {
             return REACT_EVAL_SET_RESOURCE;
         }
         throw new CityException("未知评测 suite，仅支持 default / react");
+    }
+
+    private boolean isReactSuite(String evalSetVersion) {
+        return evalSetVersion != null && evalSetVersion.toLowerCase().startsWith("react-");
+    }
+
+    private EvaluationReport withReactReleaseGateMetrics(EvaluationReport report,
+                                                         ReactReleaseGate.Result gate) {
+        Map<String, Double> metrics = new LinkedHashMap<>();
+        if (report.metricAverages() != null) metrics.putAll(report.metricAverages());
+        metrics.put("reactReleaseGatePass", gate.passed() ? 1.0 : 0.0);
+        metrics.put("reactReleaseGateFailureCount", (double) gate.failures().size());
+        return new EvaluationReport(
+                report.startAt(), report.endAt(), report.totalTraces(), report.labeledTraces(),
+                report.avgScore(), Map.copyOf(metrics), report.traceResults());
+    }
+
+    private RegressionEvaluationReport withPassed(RegressionEvaluationReport report, boolean passed) {
+        return new RegressionEvaluationReport(
+                report.runId(), report.evalSetVersion(), report.evalSetHash(), report.gitCommit(),
+                report.promptVersion(), report.ruleVersion(), report.modelVersion(), report.report(),
+                report.baselineRunId(), report.baselineScore(), report.scoreDelta(), report.metricDeltas(), passed);
     }
 
     private String currentEvalSetVersion() {
