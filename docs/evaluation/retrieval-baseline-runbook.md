@@ -106,13 +106,13 @@ cases[]
 evalSetHash
 ```
 
-是实际参与评测的 `cases` 内容指纹。即使版本号仍叫 `retrieval-v1`，只要人工 relevance / query / slots 发生变化，指纹就会变化。
+是实际参与评测的 `cases` 内容指纹。即使版本号仍叫 `retrieval-v1`，只要人工 relevance、query 或 slots 发生变化，指纹就会变化。
 
 ```text
 gitCommit
 ```
 
-用于定位本次运行对应的代码版本。
+用于定位本次运行对应的代码版本。CI 的 pull request merge ref 与本地分支 commit 可能不同，因此正式基线应记录真实运行环境返回的该字段，而不是手工猜测提交号。
 
 `summary` 包含：
 
