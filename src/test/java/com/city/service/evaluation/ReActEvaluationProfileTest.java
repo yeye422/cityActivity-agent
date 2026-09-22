@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -48,5 +49,22 @@ class ReActEvaluationProfileTest {
             assertTrue(root.path("cases").isArray());
             assertTrue(root.path("cases").size() >= 8);
         }
+    }
+
+    @Test
+    void reactSuiteShouldRequireBothFeatureFlagsBeforeExecutingCases() {
+        String reactResource = RegressionEvaluationService.resolveEvalSetResource("react");
+        String defaultResource = RegressionEvaluationService.resolveEvalSetResource("default");
+
+        assertDoesNotThrow(() -> RegressionEvaluationService.validateSuiteRuntime(
+                defaultResource, false, false));
+        assertDoesNotThrow(() -> RegressionEvaluationService.validateSuiteRuntime(
+                reactResource, true, true));
+        assertThrows(CityException.class, () -> RegressionEvaluationService.validateSuiteRuntime(
+                reactResource, true, false));
+        assertThrows(CityException.class, () -> RegressionEvaluationService.validateSuiteRuntime(
+                reactResource, false, true));
+        assertThrows(CityException.class, () -> RegressionEvaluationService.validateSuiteRuntime(
+                reactResource, false, false));
     }
 }
