@@ -3,6 +3,7 @@ package com.city.service.worker;
 import com.city.model.PreferenceFact;
 import com.city.model.PreferenceFactRequest;
 import com.city.service.memory.PreferenceMemoryService;
+import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Objects;
@@ -12,6 +13,7 @@ import java.util.Objects;
  *
  * <p>只执行已经通过上层 Policy Check 的显式记忆读写，不负责自行判断“什么值得记住”。</p>
  */
+@Component
 public final class MemoryWorker {
     private final PreferenceMemoryService preferenceMemoryService;
 
