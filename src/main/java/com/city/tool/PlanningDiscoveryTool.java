@@ -29,6 +29,7 @@ public class PlanningDiscoveryTool {
     )
     public PlanningDiscoveryToolResult discover(PlanningToolContext planningContext) {
         Objects.requireNonNull(planningContext, "planningContext");
+        planningContext.evidenceRegistry().beginDiscovery();
         VerifiedRequestContext verified = planningContext.verifiedRequestContext();
         PlanningResult result = activityPlanService.planWithEvidence(
                 verified.sourceMode(),
