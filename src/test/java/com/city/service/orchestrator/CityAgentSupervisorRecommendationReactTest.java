@@ -103,7 +103,7 @@ class CityAgentSupervisorRecommendationReactTest {
                 false
         );
 
-        assertEquals("ReAct 推荐结果", response.message());
+        assertEquals("ReAct 推荐结果", response.speechText());
         verify(activitySearchService, never()).search(any());
         verify(decisionFacade).tryRecommend(
                 eq("想找特别一点的约会活动"), eq("trace-react"), eq(state), eq(List.of()), eq(weather));
