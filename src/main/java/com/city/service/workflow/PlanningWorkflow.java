@@ -7,7 +7,9 @@ import com.city.model.IntentResult;
 import com.city.model.SessionState;
 import com.city.model.SlotBundle;
 import com.city.model.SlotMutation;
+import com.city.model.context.SemanticContext;
 import com.city.service.clarify.ClarifyRuleService;
+import com.city.service.context.SemanticContextBuilder;
 import com.city.service.slot.SlotMutationService;
 import com.city.service.worker.PlanningWorker;
 
@@ -70,6 +72,11 @@ public final class PlanningWorkflow {
     ) {
         public Preparation {
             windows = windows == null ? List.of() : List.copyOf(windows);
+        }
+
+        /** 规划 Patch 和时间窗口准备完成后，向 PlanningAgent 暴露统一语义上下文。 */
+        public SemanticContext semanticContext() {
+            return new SemanticContextBuilder().build(state);
         }
     }
 }
