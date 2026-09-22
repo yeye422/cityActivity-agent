@@ -6,7 +6,9 @@ import com.city.enums.SessionPhase;
 import com.city.model.IntentResult;
 import com.city.model.SessionState;
 import com.city.model.SlotMutation;
+import com.city.model.context.SemanticContext;
 import com.city.service.clarify.ClarifyRuleService;
+import com.city.service.context.SemanticContextBuilder;
 import com.city.service.slot.SlotMutationService;
 
 import java.util.List;
@@ -52,5 +54,10 @@ public final class AdjustWorkflow {
             SessionState state,
             SlotMutation mutation,
             ClarifyField missingField
-    ) {}
+    ) {
+        /** 条件调整应用完成后，向后续推荐决策层暴露统一语义上下文。 */
+        public SemanticContext semanticContext() {
+            return new SemanticContextBuilder().build(state);
+        }
+    }
 }
