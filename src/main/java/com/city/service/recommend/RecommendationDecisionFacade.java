@@ -40,7 +40,11 @@ public class RecommendationDecisionFacade {
         this.enabled = enabled;
     }
 
-    public Optional<DecisionResponseResult> tryRecommend(
+    /**
+     * 过渡兼容：Supervisor 仍使用旧 Result 类型；新 ResponseGenerator 已完全独立。
+     * 最终薄 Supervisor 切换后会移除此适配并直接返回 DecisionResponseResult。
+     */
+    public Optional<RecommendResponseAgentService.Result> tryRecommend(
             String userInput,
             String traceId,
             SessionState state,
@@ -69,7 +73,8 @@ public class RecommendationDecisionFacade {
                     state.sessionId(), userInput, state.sourceMode(), state.slots(), execution, weather);
             traceService.recordEvent(
                     "RECOMMENDATION_REACT_COMPLETED", "RECOMMEND", execution.decision(), generated.recommend());
-            return Optional.of(generated);
+            return Optional.of(new RecommendResponseAgentService.Result(
+                    generated.recommend(), generated.response()));
         } catch (RuntimeException error) {
             traceService.recordError("RECOMMENDATION_REACT_FALLBACK", "RECOMMEND", semanticContext, error);
             return Optional.empty();
