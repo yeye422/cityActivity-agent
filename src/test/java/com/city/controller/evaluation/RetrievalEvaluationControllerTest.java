@@ -19,6 +19,8 @@ class RetrievalEvaluationControllerTest {
         RetrievalBaselineEvaluationService service = mock(RetrievalBaselineEvaluationService.class);
         RetrievalBaselineEvaluationService.Report expected = new RetrievalBaselineEvaluationService.Report(
                 "retrieval-v1",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "test-commit",
                 "CURRENT_PIPELINE",
                 7,
                 new StableRetrievalQualityEvaluator.Summary(0, null, null, null),
