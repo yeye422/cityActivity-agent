@@ -6,6 +6,7 @@ import com.city.model.SlotBundle;
 import com.city.model.retrieval.RetrievalRequest;
 import com.city.model.retrieval.RetrievalResult;
 import com.city.service.retrieval.RetrievalPipeline;
+import com.city.service.trace.BuildVersionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -24,8 +25,7 @@ class RetrievalBaselineEvaluationServiceTest {
 
     @Test
     void shouldLoadStableRetrievalCaseSetWithHardCityAndSoftQuery() {
-        RetrievalBaselineEvaluationService service =
-                new RetrievalBaselineEvaluationService(objectMapper, mock(RetrievalPipeline.class));
+        RetrievalBaselineEvaluationService service = serviceWith(mock(RetrievalPipeline.class));
 
         RetrievalBaselineEvaluationService.CaseSet caseSet = service.loadCaseSet();
 
@@ -78,14 +78,14 @@ class RetrievalBaselineEvaluationServiceTest {
             return new RetrievalResult(ranked, ranked, ranked, List.of(), List.of());
         });
 
-        RetrievalBaselineEvaluationService service =
-                new RetrievalBaselineEvaluationService(objectMapper, pipeline);
+        RetrievalBaselineEvaluationService service = serviceWith(pipeline);
 
         RetrievalBaselineEvaluationService.Report report = service.run(999999L, 5);
 
         assertEquals("retrieval-v1", report.evalSetVersion());
         assertNotNull(report.evalSetHash());
         assertEquals(64, report.evalSetHash().length());
+        assertEquals("test-commit", report.gitCommit());
         assertEquals("CURRENT_PIPELINE", report.strategy());
         assertEquals(5, report.k());
         assertEquals(6, report.cases().size());
@@ -100,11 +100,16 @@ class RetrievalBaselineEvaluationServiceTest {
         RetrievalPipeline pipeline = mock(RetrievalPipeline.class);
         when(pipeline.retrieve(any())).thenReturn(
                 new RetrievalResult(List.of(), List.of(), List.of(), List.of(), List.of()));
-        RetrievalBaselineEvaluationService service =
-                new RetrievalBaselineEvaluationService(objectMapper, pipeline);
+        RetrievalBaselineEvaluationService service = serviceWith(pipeline);
 
         assertEquals(1, service.run(1L, -10).k());
         assertEquals(20, service.run(1L, 100).k());
+    }
+
+    private RetrievalBaselineEvaluationService serviceWith(RetrievalPipeline pipeline) {
+        BuildVersionService buildVersionService = mock(BuildVersionService.class);
+        when(buildVersionService.gitCommit()).thenReturn("test-commit");
+        return new RetrievalBaselineEvaluationService(objectMapper, pipeline, buildVersionService);
     }
 
     private ActivityItem activity(Long id, String city, String name) {
