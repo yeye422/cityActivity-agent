@@ -39,7 +39,10 @@ public final class PlanningWorker {
         return activityPlanService.resolveActivityTimes(slots, timeConstraint);
     }
 
-    /** 兼容窗口级规划结果；后续调用方优先使用 planAndSolve。 */
+    /**
+     * 线上兼容入口：先执行候选发现和 Solver，再只向下游暴露 Solver 排名第一的合法方案。
+     * 保留 PlanningResult 类型，避免当前 Supervisor 在 Workflow 拆分前再次承担大范围改动。
+     */
     public PlanningResult plan(SourceMode sourceMode,
                                Long userId,
                                SlotBundle slots,
@@ -47,8 +50,12 @@ public final class PlanningWorker {
                                List<String> windows,
                                TimeConstraint timeConstraint,
                                WeatherRecommendationContext weather) {
-        return activityPlanService.planWithEvidence(
+        PlanningExecutionResult execution = planAndSolve(
                 sourceMode, userId, slots, excludedSlots, windows, timeConstraint, weather);
+        return new PlanningResult(
+                responsePlans(execution),
+                execution.planning().agentResult()
+        );
     }
 
     /**
@@ -61,12 +68,23 @@ public final class PlanningWorker {
                                                 List<String> windows,
                                                 TimeConstraint timeConstraint,
                                                 WeatherRecommendationContext weather) {
-        PlanningResult planning = plan(
+        PlanningResult planning = discover(
                 sourceMode, userId, slots, excludedSlots, windows, timeConstraint, weather);
         return new PlanningExecutionResult(
                 planning,
                 planningSolver.solve(planning.plans(), explicitMaxBudget(slots))
         );
+    }
+
+    private PlanningResult discover(SourceMode sourceMode,
+                                    Long userId,
+                                    SlotBundle slots,
+                                    SlotBundle excludedSlots,
+                                    List<String> windows,
+                                    TimeConstraint timeConstraint,
+                                    WeatherRecommendationContext weather) {
+        return activityPlanService.planWithEvidence(
+                sourceMode, userId, slots, excludedSlots, windows, timeConstraint, weather);
     }
 
     /**
