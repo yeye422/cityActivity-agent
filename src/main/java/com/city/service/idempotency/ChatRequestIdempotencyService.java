@@ -13,8 +13,6 @@ import org.springframework.stereotype.Service;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
-import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.Objects;
 import java.util.function.Supplier;
@@ -24,12 +22,14 @@ import java.util.function.Supplier;
  *
  * <p>没有 Idempotency-Key 时完全保持原行为；有 key 时先用 userId + key 原子 claim。
  * SUCCESS 直接返回持久化响应，PENDING 阻断重复执行，同一 key 绑定不同请求指纹会明确拒绝。</p>
+ *
+ * <p>PENDING 不做基于时间的自动回收：进程崩溃时无法判断业务是否已经提交，自动重跑可能产生
+ * 重复 SessionState/消息/Tool 副作用。只有 action 明确抛异常时才释放本次 claim。</p>
  */
 @Service
 public class ChatRequestIdempotencyService {
     private static final Logger log = LoggerFactory.getLogger(ChatRequestIdempotencyService.class);
     private static final int MAX_KEY_LENGTH = 128;
-    private static final Duration STALE_PENDING_AFTER = Duration.ofMinutes(5);
 
     private final ChatRequestIdempotencyMapper mapper;
     private final ObjectMapper objectMapper;
@@ -55,14 +55,13 @@ public class ChatRequestIdempotencyService {
         }
         String key = normalizeKey(idempotencyKey);
         String requestHash = fingerprint(request);
-        return executeClaimed(userId, key, requestHash, action, true);
+        return executeClaimed(userId, key, requestHash, action);
     }
 
     private ChatResponse executeClaimed(Long userId,
                                         String key,
                                         String requestHash,
-                                        Supplier<ChatResponse> action,
-                                        boolean allowStaleReclaim) {
+                                        Supplier<ChatResponse> action) {
         ChatRequestIdempotencyRow claim = new ChatRequestIdempotencyRow();
         claim.setUserId(userId);
         claim.setIdempotencyKey(key);
@@ -82,13 +81,7 @@ public class ChatRequestIdempotencyService {
             return deserialize(existing.getResponseJson());
         }
         if ("PENDING".equals(existing.getStatus())) {
-            if (allowStaleReclaim && isStale(existing.getUpdatedAt())) {
-                int deleted = mapper.deletePending(userId, key, requestHash);
-                if (deleted == 1) {
-                    return executeClaimed(userId, key, requestHash, action, false);
-                }
-            }
-            throw new CityException("相同聊天请求正在处理中，请使用同一 Idempotency-Key 稍后重试");
+            throw new CityException("相同聊天请求正在处理中或上次执行状态未知；为避免重复执行，不会自动重跑该 Idempotency-Key");
         }
         throw new CityException("未知幂等请求状态: " + existing.getStatus());
     }
@@ -118,7 +111,6 @@ public class ChatRequestIdempotencyService {
         try {
             int updated = mapper.markSuccess(userId, key, requestHash, json);
             if (updated != 1) {
-                // 同理：业务已成功，宁可保留 PENDING 阻止重复，也不能释放后诱导二次执行。
                 log.warn("Chat idempotency response was produced but SUCCESS snapshot was not updated: userId={}, key={}",
                         userId, key);
             }
@@ -147,10 +139,6 @@ public class ChatRequestIdempotencyService {
         } catch (Exception error) {
             throw new CityException("幂等响应快照损坏", error);
         }
-    }
-
-    private boolean isStale(LocalDateTime updatedAt) {
-        return updatedAt != null && updatedAt.isBefore(LocalDateTime.now().minus(STALE_PENDING_AFTER));
     }
 
     private String normalizeKey(String value) {
