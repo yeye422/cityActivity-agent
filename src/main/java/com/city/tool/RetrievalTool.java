@@ -7,11 +7,14 @@ import com.city.model.retrieval.RetrievalResult;
 import com.city.model.tool.RetrievalToolResult;
 import com.city.service.evidence.CandidateEvidenceRegistry;
 import com.city.service.retrieval.RetrievalPipeline;
+import com.city.service.trace.AgentTraceService;
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -26,9 +29,18 @@ public class RetrievalTool {
     private static final int DEFAULT_TOP_K = 8;
 
     private final RetrievalPipeline retrievalPipeline;
+    private final AgentTraceService traceService;
 
+    /** 保留纯单测构造入口。 */
     public RetrievalTool(RetrievalPipeline retrievalPipeline) {
+        this(retrievalPipeline, null);
+    }
+
+    @Autowired
+    public RetrievalTool(RetrievalPipeline retrievalPipeline,
+                         AgentTraceService traceService) {
         this.retrievalPipeline = Objects.requireNonNull(retrievalPipeline, "retrievalPipeline");
+        this.traceService = traceService;
     }
 
     @Tool(
@@ -48,6 +60,14 @@ public class RetrievalTool {
         Objects.requireNonNull(evidenceRegistry, "evidenceRegistry");
         String safeIntent = retrievalIntent == null ? "" : retrievalIntent.trim();
         evidenceRegistry.beginRetrieval(safeIntent);
+        if (traceService != null) {
+            traceService.recordEvent(
+                    "RETRIEVAL_TOOL_CALLED",
+                    "TOOL",
+                    Map.of("retrievalIntent", safeIntent, "retrievalCall", evidenceRegistry.retrievalCalls()),
+                    null
+            );
+        }
 
         ActivitySearchRequest searchRequest = new ActivitySearchRequest(
                 verifiedContext.sourceMode(),
@@ -66,6 +86,19 @@ public class RetrievalTool {
         ));
         RetrievalToolResult toolResult = RetrievalToolResult.from(safeIntent, result.finalCandidates());
         evidenceRegistry.recordResult(toolResult, result.finalCandidates());
+        if (traceService != null) {
+            traceService.recordEvent(
+                    "RETRIEVAL_TOOL_COMPLETED",
+                    "TOOL",
+                    Map.of("retrievalIntent", safeIntent, "retrievalCall", evidenceRegistry.retrievalCalls()),
+                    Map.of(
+                            "candidateCount", toolResult.candidates().size(),
+                            "candidateActivityIds", toolResult.candidates().stream()
+                                    .map(RetrievalToolResult.Candidate::activityId)
+                                    .toList()
+                    )
+            );
+        }
         return toolResult;
     }
 }
