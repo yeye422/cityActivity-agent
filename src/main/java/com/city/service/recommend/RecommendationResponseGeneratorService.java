@@ -3,6 +3,7 @@ package com.city.service.recommend;
 import com.city.enums.SourceMode;
 import com.city.model.ActivityItem;
 import com.city.model.ActivityResponse;
+import com.city.model.DecisionResponseResult;
 import com.city.model.RecommendResult;
 import com.city.model.RecommendedActivityOption;
 import com.city.model.ResponseResult;
@@ -17,17 +18,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-/**
- * RecommendationAgent 的确定性响应生成层。
- *
- * <p>候选选择和软目标解释已经由 RecommendationAgent 以结构化 RecommendationDecision 完成，
- * 这里不再调用第二个 LLM。服务只把经过 Evidence 校验的 ActivityItem 与 decision.assessments
- * 组合为前端结构，并用确定性模板生成 speechText。旧 RecommendResponseAgent 仅保留给 legacy fallback。</p>
- */
+/** RecommendationAgent 的确定性响应生成层，不再依赖旧 ResponseAgent。 */
 @Service
 public class RecommendationResponseGeneratorService {
 
-    public RecommendResponseAgentService.Result generate(
+    public DecisionResponseResult generate(
             String sessionId,
             String userInput,
             SourceMode sourceMode,
@@ -41,7 +36,7 @@ public class RecommendationResponseGeneratorService {
                 ? List.of()
                 : List.copyOf(execution.selectedActivities());
         if (selected.isEmpty()) {
-            return new RecommendResponseAgentService.Result(
+            return new DecisionResponseResult(
                     RecommendResult.empty(),
                     ResponseResult.textOnly("暂时没有找到足够匹配的活动，可以补充时间、活动类型或体验偏好。")
             );
@@ -67,7 +62,7 @@ public class RecommendationResponseGeneratorService {
                 displayBlocks,
                 "WAIT_USER"
         );
-        return new RecommendResponseAgentService.Result(recommend, response);
+        return new DecisionResponseResult(recommend, response);
     }
 
     private Map<Long, String> assessmentReasons(RecommendationDecision decision) {
@@ -96,11 +91,7 @@ public class RecommendationResponseGeneratorService {
                                WeatherRecommendationContext weather) {
         StringBuilder builder = new StringBuilder();
         String summary = decision.decisionSummary() == null ? "" : decision.decisionSummary().trim();
-        if (!summary.isBlank()) {
-            builder.append(summary);
-        } else {
-            builder.append("结合你这轮的需求，我更推荐这些活动：");
-        }
+        builder.append(summary.isBlank() ? "结合你这轮的需求，我更推荐这些活动：" : summary);
         for (int i = 0; i < options.size(); i++) {
             RecommendedActivityOption option = options.get(i);
             builder.append("\n").append(i + 1).append(". ")
