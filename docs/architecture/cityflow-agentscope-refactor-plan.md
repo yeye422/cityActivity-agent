@@ -1,365 +1,96 @@
-# CityFlow 基于 AgentScope 1.0 的架构改造计划
+# CityFlow AgentScope ReAct 重构计划
 
-> 当前实施状态（2026-09-22）：`refactor/agentscope-react` 已完成 P1-P9 主体迁移，并前置完成 P14 的 ReAct 运行指标接入；RecommendationAgent / PlanningAgent 均已接入 Supervisor 灰度主链，默认 feature flag 关闭。旧链仍保留作为 fallback，P10/P12 等收口阶段尚未执行。
+> 本文档描述 CityFlow 从旧 Supervisor/Worker + ResponseAgent 结构迁移到 AgentScope Java 1.x 受控 ReAct 架构的分阶段计划。迁移原则是：新链先并行接入、可观测、可回退；只有在固定回归与运行指标证明稳定后才删除旧链。
 
-## 1. 改造目标
+## 一、最终架构原则
 
-在保留现有数据库、领域模型、SessionState、多轮槽位、检索排序、PlanningSolver、Memory、Trace、Evaluation、Feedback 和前端接口的基础上，将当前“Java 主导业务执行 + LLM 负责理解和最终响应”的架构，逐步升级为：
-
-```text
-Java Supervisor / Workflow
-负责业务流程、状态提交和硬约束边界
-
-AgentScope ReActAgent
-负责推荐 / 规划中的动态决策、Tool Use 和方案修复
-
-RetrievalPipeline / PlanningSolver
-负责事实检索、召回排序和确定性约束校验
-```
-
-最终目标架构：
+CityFlow 的最终线上职责边界：
 
 ```text
-API / AG-UI / SSE
-        ↓
+API / SSE
+↓
 CityAgentSupervisor
-        ↓
+↓
 WorkflowRouter
-        ↓
+↓
 RecommendWorkflow / AdjustWorkflow / PlanningWorkflow
-        ↓
-ContextWorker
-        ↓
-IntentAgent
-        ↓
-HardConstraints + UserGoal
-        ↓
-Java Clarify / State Patch
-        ↓
-┌───────────────────────────────┐
-│ RecommendationAgent           │
-│ PlanningAgent + PlanNotebook  │
-│      AgentScope ReActAgent    │
-└───────────────────────────────┘
-        ↓
-      Toolkit
-        ↓
-RetrievalTool / EvidenceTool
-PreferenceTool / WeatherTool
-TravelTool / PlanValidationTool
-        ↓
-RetrievalPipeline / PlanningSolver
-        ↓
-Structured Decision
-        ↓
-Final Validator
-        ↓
-ResponseGenerator
-        ↓
+↓
+ContextWorker + IntentAgent
+↓
+HardConstraints + UserGoal + StatePatch
+↓
+Java Clarify / State Boundary
+↓
+RecommendationAgent / PlanningAgent
+AgentScope ReAct Runtime
+↓
+受限 Toolkit
+↓
+RetrievalPipeline / Travel Service / PlanningSolver
+↓
+Evidence / Final Validator
+↓
+ResponseGeneratorService
+↓
 Supervisor Commit SessionState
 ```
 
-核心原则：
+核心分工：
 
-- Supervisor 控制一轮请求，不承担推荐、排序、规划等具体业务实现。
-- Workflow 描述推荐、调整、规划三个稳定业务流程。
-- AgentScope `ReActAgent` 负责“下一步做什么”，而不是接管业务事实。
-- Tool 是 Agent 可调用的业务能力边界。
-- RetrievalPipeline 保证单个候选合法并完成召回排序。
-- PlanningSolver 保证多个候选组成的方案合法。
-- SessionState 是业务真实状态，只由 Java 提交。
-- EvidenceStore 保证 Agent 输出的实体全部可追溯。
-- Agent 不允许修改用户已确认的硬约束。
+```text
+AgentScope ReActAgent
+= Reason -> Tool -> Observe 循环
+
+CityFlow Java
+= 状态、权限、硬约束、事实、检索、确定性校验、提交
+
+Agent
+= 软目标理解、候选权衡、动态检索、规划策略、冲突修复
+```
+
+不得把数据库事实、硬约束判断或最终状态写入交给模型。
 
 ---
 
-## 2. 当前项目基础与改造范围
+# P1：冻结旧链与语义边界
 
-当前项目已经具备：
+## 目标
 
-```text
-Spring Boot + Java 21
-AgentScope 1.0.11
+在不改变线上行为的前提下明确新链需要的输入边界。
 
-CityAgentSupervisor
-
-RecommendWorkflow
-AdjustWorkflow
-PlanningWorkflow
-WorkflowRouter
-
-ContextWorker
-RetrievalWorker
-PlanningWorker
-ResponseWorker
-MemoryWorker
-WorkerDispatcher
-
-ActivitySearchService
-ActivityRankService
-ActivityDiversityService
-
-PlanningSolver
-AgentExecutionHarness
-
-SessionState
-Memory
-Trace
-Evaluation
-Feedback
-```
-
-因此本轮不重新搭建项目，采用原地渐进式架构迁移。
-
-当前主要问题：
-
-1. `CityAgentSupervisor` 仍直接依赖大量业务 Service 和 Worker，职责过重。
-2. `RecommendResponseAgent` 和 `PlanResponseAgent` 虽然基于 AgentScope `ReActAgent`，但主要用于最终响应生成，没有真正使用 Toolkit 进行动态 Tool Use。
-3. Retrieval 仍主要由 Java 主动调用，Agent 无法根据 Candidate Pool 质量主动调整检索方向。
-4. Planning 目前主要由 Java 生成和筛选方案，Agent 缺少 `Plan -> Validate -> Repair` 的动态规划能力。
-5. Retrieval 尚未形成完整的 `Hard Filter + BM25 + Vector + RRF + Reranker + Diversity` Pipeline。
-6. Harness 已有模型调用预算、重复调用检测和熔断，但缺少 Agent Tool 白名单、Tool Budget、Evidence / Candidate 校验等业务治理。
-
-本次改造不重写以下业务底座：
-
-```text
-数据库 / Mapper
-Activity / Session / Venue
-SessionState
-SlotBundle
-TimeConstraint
-SET / ADD / REMOVE / CLEAR
-Memory
-Trace
-Evaluation
-Feedback
-Weather
-ActivitySearchService
-ActivityRankService
-ActivityDiversityService
-PlanningSolver
-```
-
----
-
-## 3. 改造总原则
-
-### 3.1 硬约束与软目标分离
-
-明确区分：
+新增：
 
 ```text
 HardConstraints
-= 必须满足
-
 UserGoal
-= 尽量满足
+SemanticContext
+VerifiedRequestContext
 ```
 
-例如：
-
-```text
-用户：
-“周六下午约会，预算 200，别太累，最好特别一点”
-```
-
-解析为：
-
-```text
-HardConstraints
-- 周六下午
-- budget <= 200
-
-UserGoal
-- DATE
-- LOW_FATIGUE
-- NOVELTY
-- INTERACTION
-```
-
-预算、时间、城市、Session OPEN 等硬约束由 Java 保证；“约会、轻松、新鲜、有互动”等软目标由 Agent 参与决策。
-
-### 3.2 Agent 不修改硬约束
-
-Agent 调用 Retrieval Tool 时，只允许提供：
-
-```text
-retrievalIntent
-preferredFeatures
-emphasizeGoals
-```
-
-以下参数由 `VerifiedRequestContext` 注入：
+HardConstraints 包括：
 
 ```text
 city
-time
+date / time
 budget
-participantCount
-excludedCategories
-excludedActivityIds
-SessionState
+sourceMode
+explicit exclusions
+OPEN Session / capacity 等确定性限制
 ```
 
-因此 Agent 可以决定“怎么找”，但不能决定“预算是否还要遵守”。
-
-### 3.3 新旧链路渐进替换
-
-统一使用：
+UserGoal 表达：
 
 ```text
-Add
-↓
-Adapt
-↓
-Switch
-↓
-Verify
-↓
-Delete
+约会感
+互动性
+新鲜感
+轻松
+低疲劳
+社交
+多样性
 ```
 
-禁止先删除旧链路，再等待新链路全部完成。
-
-### 3.4 每个阶段保持可运行
-
-每一阶段至少满足：
-
-```text
-编译通过
-核心单测通过
-现有接口可用
-Regression Gate 不低于基线
-```
-
----
-
-# P0：冻结当前基线
-
-## 目标
-
-建立改造前可比较的功能和评测基线。
-
-## 任务
-
-### P0.1 固定高频场景
-
-至少覆盖：
-
-```text
-普通推荐
-条件不足澄清
-预算调整
-类别排除
-换一批
-PERSONAL -> PUBLIC fallback
-单时段规划
-多时段规划
-无候选降级
-Session 不可用
-天气影响
-长期偏好
-多轮约束修改
-```
-
-### P0.2 保存基线指标
-
-记录：
-
-```text
-Intent 准确率
-Slot 准确率
-推荐成功率
-规划合法率
-Fallback 率
-平均 Token
-P50 / P95 延迟
-平均 LLM 调用次数
-```
-
-没有真实数据的指标统一记录为 `UNKNOWN`，禁止为了简历或计划虚构提升数字。
-
-### P0.3 建立迁移分支
-
-```text
-refactor/agentscope-react
-```
-
-每阶段完成后：
-
-```text
-mvn test
-Regression Gate
-核心场景 smoke test
-```
-
-全部通过再进入下一阶段。
-
----
-
-# P1：引入 HardConstraints + UserGoal
-
-## 目标
-
-解决现有九维槽位同时承担硬条件和软偏好的问题。
-
-### P1.1 新增 HardConstraints
-
-```java
-record HardConstraints(
-    String city,
-    Set<String> districts,
-    TimeConstraint time,
-    Integer maxBudget,
-    Integer participantCount,
-    Set<String> excludedCategories,
-    Set<Long> excludedActivityIds
-) {}
-```
-
-### P1.2 新增 UserGoal
-
-```java
-record UserGoal(
-    Occasion occasion,
-    List<Goal> goals,
-    Map<Goal, Priority> priorities
-) {}
-```
-
-### P1.3 ContextResult 调整
-
-```java
-record ContextResult(
-    Intent intent,
-    SlotPatch slotPatch,
-    TimeConstraint timeConstraint,
-    HardConstraints hardConstraints,
-    UserGoal userGoal,
-    MemoryMutationProposal memoryProposal
-) {}
-```
-
-现有 `SlotBundle` 不删除。
-
-最终关系：
-
-```text
-SlotBundle
-= 多轮业务状态
-
-HardConstraints
-= 本轮必须满足的条件
-
-UserGoal
-= 推荐 / 规划 Agent 的软目标
-```
-
-## 验收
-
-- 原有九维槽位和 SET / ADD / REMOVE / CLEAR 不退化。
-- 预算、时间、城市等不会错误进入 UserGoal。
-- “约会、轻松、新鲜、互动”等不再被大量 Java if/else 固化。
+原则：九维槽位继续存在，但不能把所有自然语言偏好都强行塞成硬槽位。
 
 ---
 
@@ -367,186 +98,78 @@ UserGoal
 
 ## 目标
 
-将推荐、调整、规划中的候选发现收敛为统一入口。
-
-第一版先复用现有：
+推荐和规划共用同一个确定性 Retrieval Pipeline。
 
 ```text
-ActivitySearchService
+HardFilter
 ↓
-ActivityRankService
+Keyword / BM25
 ↓
-ActivityDiversityService
-```
-
-包装成：
-
-```java
-class RetrievalPipeline {
-    RetrievalResult retrieve(RetrievalRequest request);
-}
-```
-
-### P2.1 RetrievalRequest
-
-```java
-record RetrievalRequest(
-    HardConstraints hardConstraints,
-    String retrievalIntent,
-    List<String> preferredFeatures,
-    Set<Long> excludedIds,
-    Integer topK
-) {}
-```
-
-### P2.2 最终演进结构
-
-```text
-Hard Filter
+Vector Retriever（评测证明有效后接入）
 ↓
-BM25 / Keyword
-+
-Vector Semantic Retrieval
-↓
-RRF
+RRF（评测证明有效后接入）
 ↓
 Reranker
 ↓
 Diversity
 ↓
-History Dedup
-↓
-LegalCandidateSet
+History De-dup
 ```
 
-注意：
+当前先复用已有：
 
 ```text
-时间 / 预算 / Session / 城市
-属于 Filter
-
-BM25 / Vector
-属于 Recall
-
-天气 / 距离 / 偏好
-属于 Rank
-
-多样性 / 历史去重
-属于 Post-process
+ActivitySearchService
+ActivityRankService
+ActivityDiversityService
 ```
 
-不要把所有因素都叫“混合召回”。
-
-### P2.3 Hard Filter
-
-进入 Agent 前至少保证：
+并统一封装到：
 
 ```text
-Activity 存在
-Session 存在
-Session OPEN
-容量满足
-时间满足
-预算满足
-城市满足
-排除项满足
+RetrievalPipeline
 ```
 
-## 验收
-
-- Recommend / Planning 可以共享 RetrievalPipeline。
-- 历史推荐去重仍生效。
-- PERSONAL / PUBLIC 逻辑不退化。
-- 无效 Session 不会进入 Agent CandidateSet。
+Agent 不直接执行数据库查询。
 
 ---
 
-# P3：建立受控 RetrievalTool
+# P3：ToolExecutionContext + 隐藏硬约束
 
 ## 目标
 
-允许 Agent 自主决定“什么时候搜、搜什么软方向”，但不允许修改硬约束。
-
-### P3.1 VerifiedRequestContext
-
-```java
-record VerifiedRequestContext(
-    Long userId,
-    String sessionId,
-    String runId,
-    String traceId,
-    HardConstraints hardConstraints,
-    UserGoal userGoal,
-    SessionSnapshot sessionSnapshot,
-    AgentBudget budget
-) {}
-```
-
-该对象由 Java 创建，并通过 AgentScope Runtime / Tool Context 提供给 Tool。
-
-### P3.2 RetrievalTool
-
-Agent Tool Schema 只允许：
+让模型只控制软检索意图，不允许修改服务器验证后的业务约束。
 
 ```text
-retrievalIntent
-preferredFeatures
-```
-
-Tool 内部自动合并：
-
-```text
-VerifiedRequestContext.hardConstraints
-```
-
-即：
-
-```text
-Agent：
-“找互动性更强、更有新鲜感的活动”
-
+RecommendationAgent
 ↓
-
-RetrievalTool：
-软检索意图
-+
-服务器固定的上海 / 周六下午 / <=200 / Session OPEN
+search_activities(retrievalIntent)
+↓
+ToolExecutionContext
+↓
+VerifiedRequestContext
+↓
+RetrievalPipeline
 ```
 
-### P3.3 Recommendation / Planning Toolkit 隔离
-
-RecommendationAgent：
+模型可传：
 
 ```text
-searchActivities
-searchAlternativeActivities
-getActivityEvidence
-getUserPreferences
-getWeather
+“更有互动性和参与感的活动”
 ```
 
-PlanningAgent：
+模型不可传/覆盖：
 
 ```text
-searchActivities
-searchAlternativeActivities
-getActivityEvidence
-getTravelTime
-getWeather
-validatePlan
+city
+budget
+date
+time
+sourceMode
+explicit exclusions
 ```
 
-禁止：
-
-```text
-updateSessionState
-writeMemory
-rawSQL
-```
-
-## P3.4 过渡方式
-
-第一阶段：
+迁移阶段：
 
 ```text
 RetrievalTool
@@ -736,6 +359,8 @@ class ResponseGeneratorService {
 更换 Activity
 修改 Decision
 ```
+
+当前新 ReAct 主链已经直接使用 `RecommendationDecision + verified activities` 生成响应，不再调用第二个 Response LLM。旧 `RecommendResponseAgentService` 仅为 legacy fallback 保留。
 
 完成新链路并通过 Regression Gate 后，再删除：
 
@@ -959,6 +584,8 @@ Final Validator
 ↓
 ResponseGenerator
 ```
+
+当前新 ReAct 主链已经使用合法 `acceptedPlan + decisionSummary` 确定性生成响应，不再调用第二个 `PlanResponseAgent`。旧 PlanResponseAgent 仅为 legacy fallback 保留。
 
 新链路通过后，再删除旧 `PlanResponseAgent` 的决策职责。
 
@@ -1243,6 +870,18 @@ Retrieval Tool
 PlanningSolver
 ```
 
+当前已实现：
+
+```text
+traceId:eventSeq SSE id
+Last-Event-ID replay
+agent_ui_event MySQL 持久化事件日志
+每会话 256 条内存热缓存
+/chat Idempotency-Key + 原子 claim
+SUCCESS response replay
+PENDING fail-closed
+```
+
 ---
 
 # P14：Trace 与 Evaluation 扩展
@@ -1266,6 +905,7 @@ PLAN_VALIDATED
 当前已前置接入的运行指标：
 
 ```text
+reactRouteCoverage
 recommendationReactSuccessRate
 planningReactSuccessRate
 reactFallbackRate
@@ -1279,9 +919,72 @@ planRepairSuccessRate
 evidenceViolationRate
 ```
 
-这些指标直接从现有 `trace_json.events` 聚合并并入固定评测的 `metricSnapshot`。Regression Gate 对 ReAct 成功率下降、fallback 率上升和 Evidence 违规率上升设置方向性门禁；Tool Call / Re-Retrieval / Validation Failure 目前只用于观测，不直接判定失败。
+这些指标直接从现有 `trace_json.events` 聚合并并入固定评测的 `metricSnapshot`。
+
+## P14.1 通用回归与 ReAct 专项回归隔离
+
+通用评测：
+
+```text
+suite=default
+resource=evaluation/city-dialogue-eval-set.json
+version=v2
+```
+
+ReAct 专项评测：
+
+```text
+SPRING_PROFILES_ACTIVE=react-eval
+suite=react
+resource=evaluation/city-react-eval-set.json
+version=react-v1
+```
+
+两套 suite 使用各自 `version + evalSetHash` 查找 Baseline，禁止互相污染。
+
+`react` suite 执行前会校验：
+
+```text
+recommendation-react.enabled == true
+planning-react.enabled == true
+```
+
+任一未开启则在实际执行评测用例、调用模型前直接拒绝。
+
+## P14.2 ReAct 三层发布门禁
+
+第一层：运行配置门禁
+
+```text
+两个 ReAct feature flag 必须开启
+```
+
+第二层：首次运行绝对质量门禁 `ReactReleaseGate`
+
+```text
+reactRouteCoverage >= 0.60
+recommendationReactSuccessRate >= 0.80
+planningReactSuccessRate >= 0.70
+reactFallbackRate <= 0.20
+evidenceViolationRate == 0
+```
+
+即使 `react-v1` 还没有 Baseline，未达到上述条件也不能标记为 passed，更不能提升成 Baseline。
+
+第三层：后续相对 Baseline 门禁 `RegressionGate`
+
+```text
+总分不得显著下降
+reactRouteCoverage 不得下降超过阈值
+ReAct success rate 不得下降超过阈值
+fallback / evidence violation 不得上升超过阈值
+```
+
+Tool Call / Re-Retrieval / Validation Failure 目前只用于观测，不直接作为发布失败条件。
 
 ## Retrieval 评测
+
+当前新增纯函数 `RetrievalQualityEvaluator`：
 
 ```text
 Recall@K
@@ -1289,7 +992,7 @@ NDCG@K
 No-result false positive
 ```
 
-比较：
+计划比较：
 
 ```text
 BM25 only
@@ -1297,297 +1000,31 @@ Vector only
 BM25 + Vector + RRF
 ```
 
-混合召回只有在离线评测证明有效后才作为默认方案。
-
-## RecommendationAgent 评测
-
-```text
-UserGoal Coverage
-Re-Retrieval Rate
-Candidate 外实体率
-平均 Tool Call
-```
-
-## PlanningAgent 评测
-
-```text
-Plan Valid Rate
-Repair Success Rate
-时间冲突率
-预算违规率
-Session 幻觉率
-```
-
-## 系统指标
-
-```text
-Token
-P50 / P95 latency
-Fallback Rate
-Tool Error Rate
-```
+混合召回只有在稳定人工 relevance case 上的离线评测证明有效后才作为默认方案。演示库 activityId 使用自增 ID，因此评测数据不能硬编码环境相关 ID；应使用稳定 case label / activity key，并在运行时映射到真实实体。
 
 ---
 
-# P15：清理兼容层
+# 删除旧链的前置条件
 
-只有新链路稳定并通过 Regression Gate 后执行。
-
-删除：
+只有同时满足以下条件才开始物理删除 legacy：
 
 ```text
-RecommendResponseAgentBuilder
-PlanResponseAgentBuilder
+1. JDK 21 mvn clean verify 通过
+2. react-v1 固定专项评测通过 ReactReleaseGate
+3. 已存在一个明确提升的 react-v1 Baseline
+4. 后续回归通过 RegressionGate
+5. evidenceViolationRate = 0
+6. 推荐 / 规划新链 fallback 率达到门禁要求
+```
+
+在此之前继续保留：
+
+```text
 RecommendResponseAgentService
 PlanResponseAgentService
-DiscoveryWorker
-旧 ResponseWorker
-过渡期 RetrievalWorker
-Supervisor 内遗留业务逻辑
-```
-
-`EvaluationJudgeAgent` 可以继续作为离线评测 Agent，不进入在线 Runtime。
-
----
-
-# 最终推荐链
-
-```text
-User
-↓
-Supervisor
-↓
-RecommendWorkflow
-↓
-ContextWorker
-↓
-IntentAgent
-↓
-HardConstraints + UserGoal
-↓
-Java Clarify
-↓
-RecommendationWorker
-↓
-RecommendationAgent
-↓
-RetrievalTool
-↓
-RetrievalPipeline
-↓
-Legal TopK
-↓
-Agent Evaluate Candidate Pool
-↓
-候选池足够？
-├─ Yes -> Select
-└─ No
-    ↓
-  修改 RetrievalIntent
-    ↓
-  Re-Retrieve
-    ↓
-  Re-Rank
-    ↓
-  Select
-↓
-RecommendationDecision
-↓
-CandidateValidator
-↓
-ResponseGenerator
-↓
-Supervisor Commit
-```
-
----
-
-# 最终规划链
-
-```text
-User
-↓
-Supervisor
-↓
-PlanningWorkflow
-↓
-ContextWorker
-↓
-IntentAgent
-↓
-HardConstraints + UserGoal
-↓
+RetrievalWorker
 PlanningWorker
-↓
-PlanningAgent + PlanNotebook
-↓
-RetrievalTool
-↓
-CandidateSet
-↓
-PlanProposal
-↓
-validatePlan
-↓
-PlanningSolver
-↓
-VALID？
-├─ Yes -> PlanDecision
-└─ No
-    ↓
-  ConstraintViolation
-    ↓
-  PlanningAgent Repair
-    ↓
-  Re-Retrieve / Change Session
-    ↓
-  validatePlan
-↓
-Final Validator
-↓
-ResponseGenerator
-↓
-Supervisor Commit
+ResponseWorker
 ```
 
----
-
-# 最终实施顺序
-
-```text
-P0  冻结基线
-↓
-P1  HardConstraints + UserGoal
-↓
-P2  RetrievalPipeline
-↓
-P3  RetrievalTool + VerifiedRequestContext
-↓
-P4  RecommendationAgent ReAct
-↓
-P5  RecommendWorkflow 切换
-↓
-P6  PlanningAgent + PlanNotebook
-↓
-P7  PlanValidationTool + Solver Feedback
-↓
-P8  PlanningWorkflow 切换
-↓
-P9  EvidenceStore
-↓
-P10 Harness -> Hook / Guard
-↓
-P11 Memory Policy
-↓
-P12 Supervisor 瘦身
-↓
-P13 SSE Recovery
-↓
-P14 Trace / Evaluation / Regression Gate
-↓
-P15 删除旧兼容链
-```
-
-每阶段统一执行：
-
-```text
-Add
-↓
-Adapt
-↓
-Switch
-↓
-Verify
-↓
-Delete
-```
-
----
-
-# 最终验收标准
-
-完成全部改造后至少满足：
-
-1. Supervisor 不承担具体推荐 / 规划算法。
-2. RecommendationAgent 可以完成 `Retrieval -> Evaluate -> Re-Retrieve -> Select`。
-3. PlanningAgent 可以完成 `Plan -> Validate -> Repair -> Validate`。
-4. Agent 无法修改 HardConstraints。
-5. 所有推荐 Activity 来自 Retrieval Evidence。
-6. 所有 Planning Session 真实存在且可参加。
-7. PlanningSolver 可完全脱离 LLM 单元测试。
-8. Worker / Agent 不直接修改 SessionState。
-9. 长期记忆写入必须经过 MemoryPolicy。
-10. Tool 调用受权限和 Budget 限制。
-11. SSE 重连不会重新执行已经完成的 Agent / Tool。
-12. 推荐和规划核心指标不低于旧 Baseline。
-13. Regression Gate 通过后才能删除旧链路。
-14. 不存在 Candidate Set 外实体进入最终 Response。
-15. 不存在确定性时间冲突的 Plan 被返回给用户。
-
----
-
-# 改造策略总结
-
-本次改造不是：
-
-```text
-重新写一个 CityFlow
-```
-
-也不是：
-
-```text
-继续向当前 Supervisor 堆逻辑
-```
-
-而是：
-
-```text
-保留现有业务底座
-↓
-建立 AgentScope ReAct 决策层
-↓
-把 Java 业务能力逐步收敛为受控 Tool
-↓
-通过 Pipeline / Solver 保证确定性约束
-↓
-通过 Evidence / Guard 限制 Agent 边界
-↓
-逐条切换推荐 / 规划链
-↓
-Regression Gate 验证
-↓
-删除旧兼容链
-```
-
-最终从：
-
-```text
-LLM 理解
-↓
-Java 完成绝大多数决策
-↓
-LLM 写答案
-```
-
-升级为：
-
-```text
-LLM 理解
-↓
-Java 固定 HardConstraints
-↓
-AgentScope ReActAgent
-自主检索 / 判断 / 修复
-↓
-Java Pipeline / Solver
-提供事实与确定性校验
-↓
-Structured Decision
-↓
-Java Validator
-↓
-Supervisor Commit
-```
-
-这样既保留 Agent 的动态推理能力，又不会把真实业务状态、时间、预算、Session 和数据库事实交给模型控制。
+它们只承担迁移期 fallback，不代表最终架构。
