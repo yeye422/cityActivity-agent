@@ -1,0 +1,10 @@
+# ReAct 回归评测专用 Profile。
+# 启动示例：SPRING_PROFILES_ACTIVE=react-eval mvn spring-boot:run
+# 该 Profile 只切换 Recommendation / Planning ReAct 主链，其他数据库、模型和外部服务配置继续继承 application.yml。
+
+city:
+  agent:
+    recommendation-react:
+      enabled: true
+    planning-react:
+      enabled: true
