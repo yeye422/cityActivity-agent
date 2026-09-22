@@ -2,6 +2,7 @@ package com.city.service.orchestrator;
 
 import com.city.enums.ClarifyField;
 import com.city.enums.Intent;
+import com.city.enums.SourceMode;
 import com.city.model.ChatResponse;
 import com.city.model.DecisionResponseResult;
 import com.city.model.IntentResult;
@@ -136,25 +137,41 @@ public class CityFlowWorkflowExecutor {
                 state.slots(), state.timeConstraint());
         traceService.recordEvent("WEATHER_CONTEXT_RESOLVED", "RANK", state, weather);
         try {
+            SessionState decisionState = state;
+            boolean fallbackUsed = publicFallbackUsed;
             DecisionResponseResult result = recommendationDecisionFacade.recommend(
-                    userInput, traceId, state, excludeIds, weather);
-            traceService.recordEvent("RECOMMEND_RESULT_BUILT", "RECOMMEND", state, result.recommend());
+                    userInput, traceId, decisionState, excludeIds, weather);
+
+            if (result.recommend().recommendations().isEmpty()
+                    && decisionState.sourceMode() == SourceMode.PERSONAL) {
+                SessionState publicState = decisionState.withSourceMode(SourceMode.PUBLIC);
+                traceService.recordEvent(
+                        "PERSONAL_QUERY_EMPTY_FALLBACK_TO_PUBLIC", "ROUTE",
+                        Map.of("sourceMode", SourceMode.PERSONAL, "excludeActivityIds", excludeIds),
+                        Map.of("sourceMode", SourceMode.PUBLIC));
+                result = recommendationDecisionFacade.recommend(
+                        userInput, traceId, publicState, excludeIds, weather);
+                decisionState = publicState;
+                fallbackUsed = true;
+            }
+
+            traceService.recordEvent("RECOMMEND_RESULT_BUILT", "RECOMMEND", decisionState, result.recommend());
             if (result.recommend().recommendations().isEmpty()) {
                 List<RelaxationOption> options = relaxationSearchService.options(
-                        state.sourceMode(), state.userId(), state.slots(), state.excludedSlots(),
-                        excludeIds, state.timeConstraint());
+                        decisionState.sourceMode(), decisionState.userId(), decisionState.slots(),
+                        decisionState.excludedSlots(), excludeIds, decisionState.timeConstraint());
                 if (!options.isEmpty()) {
-                    String queryKey = DecisionCommitService.recommendationQueryKey(state);
+                    String queryKey = DecisionCommitService.recommendationQueryKey(decisionState);
                     RelaxationContext context = new RelaxationContext(
-                            state.sourceMode(), queryKey, excludeIds,
+                            decisionState.sourceMode(), queryKey, excludeIds,
                             options.stream().map(RelaxationOption::level).toList());
                     String message = "没有找到完全匹配的活动。可以选择一个放宽方案，我只会放宽软偏好，不会改动城市、时间、预算和显式排除条件。";
-                    traceService.recordEvent("RELAXATION_OPTIONS_READY", "SEARCH", state, options);
-                    return commitService.commitRelaxation(traceId, state, message, options, context);
+                    traceService.recordEvent("RELAXATION_OPTIONS_READY", "SEARCH", decisionState, options);
+                    return commitService.commitRelaxation(traceId, decisionState, message, options, context);
                 }
             }
             return commitService.commitDecision(
-                    userInput, traceId, state, result, publicFallbackUsed);
+                    userInput, traceId, decisionState, result, fallbackUsed);
         } catch (RuntimeException error) {
             traceService.recordError("RECOMMENDATION_DEGRADED", "RECOMMEND", state, error);
             return commitService.commitText(
