@@ -5,10 +5,13 @@ import com.city.enums.Intent;
 import com.city.model.ChatResponse;
 import com.city.model.DecisionResponseResult;
 import com.city.model.IntentResult;
+import com.city.model.RelaxationContext;
+import com.city.model.RelaxationOption;
 import com.city.model.ResponseResult;
 import com.city.model.SessionState;
 import com.city.model.SlotMutation;
 import com.city.model.WeatherRecommendationContext;
+import com.city.service.activity.RelaxationSearchService;
 import com.city.service.clarify.ClarifyRuleService;
 import com.city.service.plan.PlanningDecisionFacade;
 import com.city.service.recommend.RecommendationDecisionFacade;
@@ -22,10 +25,7 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Workflow 执行层：Java 负责业务顺序和 Clarify，ReAct Agent 负责动态推荐/规划决策。
- * 不允许回退到旧 RetrievalWorker/PlanningWorker/ResponseAgent 链。
- */
+/** Java 负责 Workflow/Clarify，ReAct Agent 负责动态推荐/规划决策；不回退旧 Worker/ResponseAgent。 */
 @Service
 public class CityFlowWorkflowExecutor {
     private final RecommendWorkflow recommendWorkflow;
@@ -34,6 +34,7 @@ public class CityFlowWorkflowExecutor {
     private final RecommendationDecisionFacade recommendationDecisionFacade;
     private final PlanningDecisionFacade planningDecisionFacade;
     private final WeatherRecommendationService weatherRecommendationService;
+    private final RelaxationSearchService relaxationSearchService;
     private final ClarifyRuleService clarifyRuleService;
     private final DecisionCommitService commitService;
     private final AgentTraceService traceService;
@@ -44,6 +45,7 @@ public class CityFlowWorkflowExecutor {
                                     RecommendationDecisionFacade recommendationDecisionFacade,
                                     PlanningDecisionFacade planningDecisionFacade,
                                     WeatherRecommendationService weatherRecommendationService,
+                                    RelaxationSearchService relaxationSearchService,
                                     ClarifyRuleService clarifyRuleService,
                                     DecisionCommitService commitService,
                                     AgentTraceService traceService) {
@@ -53,6 +55,7 @@ public class CityFlowWorkflowExecutor {
         this.recommendationDecisionFacade = recommendationDecisionFacade;
         this.planningDecisionFacade = planningDecisionFacade;
         this.weatherRecommendationService = weatherRecommendationService;
+        this.relaxationSearchService = relaxationSearchService;
         this.clarifyRuleService = clarifyRuleService;
         this.commitService = commitService;
         this.traceService = traceService;
@@ -119,11 +122,8 @@ public class CityFlowWorkflowExecutor {
         } catch (RuntimeException error) {
             traceService.recordError("PLANNING_DEGRADED", "PLAN", workingState, error);
             return commitService.commitText(
-                    traceId,
-                    workingState,
-                    Intent.ACTIVITY_PLAN,
-                    ResponseResult.textOnly("规划服务暂时无法完成这次组合，请稍后重试或调整一个时间条件。"),
-                    false);
+                    traceId, workingState, Intent.ACTIVITY_PLAN,
+                    ResponseResult.textOnly("规划服务暂时无法完成这次组合，请稍后重试或调整一个时间条件。"), false);
         }
     }
 
@@ -139,16 +139,28 @@ public class CityFlowWorkflowExecutor {
             DecisionResponseResult result = recommendationDecisionFacade.recommend(
                     userInput, traceId, state, excludeIds, weather);
             traceService.recordEvent("RECOMMEND_RESULT_BUILT", "RECOMMEND", state, result.recommend());
+            if (result.recommend().recommendations().isEmpty()) {
+                List<RelaxationOption> options = relaxationSearchService.options(
+                        state.sourceMode(), state.userId(), state.slots(), state.excludedSlots(),
+                        excludeIds, state.timeConstraint());
+                if (!options.isEmpty()) {
+                    String queryKey = DecisionCommitService.recommendationQueryKey(state);
+                    RelaxationContext context = new RelaxationContext(
+                            state.sourceMode(), queryKey, excludeIds,
+                            options.stream().map(RelaxationOption::level).toList());
+                    String message = "没有找到完全匹配的活动。可以选择一个放宽方案，我只会放宽软偏好，不会改动城市、时间、预算和显式排除条件。";
+                    traceService.recordEvent("RELAXATION_OPTIONS_READY", "SEARCH", state, options);
+                    return commitService.commitRelaxation(traceId, state, message, options, context);
+                }
+            }
             return commitService.commitDecision(
                     userInput, traceId, state, result, publicFallbackUsed);
         } catch (RuntimeException error) {
             traceService.recordError("RECOMMENDATION_DEGRADED", "RECOMMEND", state, error);
             return commitService.commitText(
-                    traceId,
-                    state,
+                    traceId, state,
                     state.currentIntent() == null ? Intent.ACTIVITY_RECOMMENDATION : state.currentIntent(),
-                    ResponseResult.textOnly("推荐服务暂时无法完成这次决策，请稍后重试或补充一个活动偏好。"),
-                    false);
+                    ResponseResult.textOnly("推荐服务暂时无法完成这次决策，请稍后重试或补充一个活动偏好。"), false);
         }
     }
 
