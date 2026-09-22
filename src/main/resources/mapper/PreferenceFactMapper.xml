@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.city.mapper.PreferenceFactMapper">
+
+    <resultMap id="PreferenceFactMap" type="com.city.model.PreferenceFact">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="slotName" column="slot_name"/>
+        <result property="slotValue" column="slot_value"/>
+        <result property="polarity" column="polarity" javaType="com.city.enums.PreferencePolarity"/>
+        <result property="source" column="source"/>
+        <result property="version" column="version"/>
+        <result property="active" column="active"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <select id="findActiveByUserId" resultMap="PreferenceFactMap">
+        SELECT id, user_id, slot_name, slot_value, polarity, source,
+               version, active, created_at, updated_at
+        FROM city_preference_fact
+        WHERE user_id = #{userId} AND active = 1
+        ORDER BY updated_at DESC, id DESC
+    </select>
+
+    <select id="findByNaturalKey" resultMap="PreferenceFactMap">
+        SELECT id, user_id, slot_name, slot_value, polarity, source,
+               version, active, created_at, updated_at
+        FROM city_preference_fact
+        WHERE user_id = #{userId}
+          AND slot_name = #{slotName}
+          AND slot_value = #{slotValue}
+          AND polarity = #{polarity}
+        LIMIT 1
+    </select>
+
+    <insert id="upsert">
+        INSERT INTO city_preference_fact (
+            user_id, slot_name, slot_value, polarity, source, version, active, created_at, updated_at
+        ) VALUES (
+            #{userId}, #{slotName}, #{slotValue}, #{polarity}, #{source}, 1, 1, NOW(), NOW()
+        )
+        ON DUPLICATE KEY UPDATE
+            source = VALUES(source),
+            active = 1,
+            version = version + 1,
+            updated_at = NOW()
+    </insert>
+
+    <update id="softDelete">
+        UPDATE city_preference_fact
+        SET active = 0,
+            version = version + 1,
+            updated_at = NOW()
+        WHERE id = #{id}
+          AND user_id = #{userId}
+          AND version = #{expectedVersion}
+          AND active = 1
+    </update>
+
+</mapper>
