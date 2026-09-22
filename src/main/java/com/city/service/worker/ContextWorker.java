@@ -5,10 +5,12 @@ import com.city.model.IntentResult;
 import com.city.model.SessionState;
 import com.city.service.intent.IntentAgentService;
 import com.city.service.intent.IntentReviseService;
+import org.springframework.stereotype.Service;
 
 import java.util.List;
 
 /** 只负责把会话输入转换为结构化语义 Patch，不写 SessionState。 */
+@Service
 public final class ContextWorker {
     private final IntentAgentService intentAgentService;
     private final IntentReviseService intentReviseService;
