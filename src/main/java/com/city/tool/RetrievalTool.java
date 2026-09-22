@@ -65,7 +65,7 @@ public class RetrievalTool {
                 DEFAULT_TOP_K
         ));
         RetrievalToolResult toolResult = RetrievalToolResult.from(safeIntent, result.finalCandidates());
-        evidenceRegistry.recordResult(toolResult);
+        evidenceRegistry.recordResult(toolResult, result.finalCandidates());
         return toolResult;
     }
 }
