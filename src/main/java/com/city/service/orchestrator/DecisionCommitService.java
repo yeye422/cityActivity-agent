@@ -3,9 +3,10 @@ package com.city.service.orchestrator;
 import com.city.enums.ClarifyField;
 import com.city.enums.Intent;
 import com.city.enums.SessionPhase;
-import com.city.enums.SourceMode;
 import com.city.model.ChatResponse;
 import com.city.model.DecisionResponseResult;
+import com.city.model.RelaxationContext;
+import com.city.model.RelaxationOption;
 import com.city.model.ResponseResult;
 import com.city.model.RiskGuardResult;
 import com.city.model.SessionState;
@@ -19,12 +20,7 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Supervisor 唯一状态提交边界。
- *
- * <p>Worker/Agent 只返回结构化结果；本服务统一完成输出安全校验、推荐历史更新、
- * SessionState 持久化、assistant message 落库与 ChatResponse 构造。</p>
- */
+/** Supervisor 唯一状态提交边界。Worker/Agent 不直接写 SessionState。 */
 @Service
 public class DecisionCommitService {
     private final SessionStateService sessionStateService;
@@ -49,14 +45,11 @@ public class DecisionCommitService {
                                        boolean publicFallbackUsed) {
         Intent intent = state.currentIntent() == null ? Intent.ACTIVITY_RECOMMENDATION : state.currentIntent();
         ResponseResult response = result.response();
-        if (publicFallbackUsed) {
-            response = prependPublicFallbackNotice(response);
-        }
+        if (publicFallbackUsed) response = prependPublicFallbackNotice(response);
         response = applyOutputRiskGuard(userInput, intent, response);
 
         List<Long> lastIds = result.recommend().recommendations().stream()
-                .map(option -> option.itemId())
-                .toList();
+                .map(option -> option.itemId()).toList();
         String queryKey = recommendationQueryKey(state);
         SessionState savedState = queryKey.equals(state.recommendationQueryKey())
                 ? state.appendLastRecommendations(lastIds)
@@ -69,8 +62,7 @@ public class DecisionCommitService {
         sessionService.appendMessage(savedState.sessionId(), "assistant", response.speechText(), intent.name(), traceId);
         ChatResponse chatResponse = withConversationContext(
                 ChatResponse.answer(savedState.sessionId(), traceId, response.speechText(),
-                        response.displayBlocks(), response.nextAction()),
-                savedState);
+                        response.displayBlocks(), response.nextAction()), savedState);
         traceService.recordEvent("STATE_COMMITTED", "SESSION", state, savedState);
         traceService.recordEvent("RESPONSE_READY", "RESPONSE", savedState, chatResponse);
         return chatResponse;
@@ -87,10 +79,27 @@ public class DecisionCommitService {
         String businessIntent = savedState.currentIntent() == null ? null : savedState.currentIntent().name();
         sessionService.appendMessage(savedState.sessionId(), "assistant", question, businessIntent, traceId);
         ChatResponse response = withConversationContext(
-                ChatResponse.clarify(savedState.sessionId(), traceId, question, List.of(field.key())),
-                savedState);
+                ChatResponse.clarify(savedState.sessionId(), traceId, question, List.of(field.key())), savedState);
         traceService.recordEvent("STATE_COMMITTED", "SESSION", state, savedState);
         traceService.recordEvent("RESPONSE_READY", "CLARIFY", savedState, response);
+        return response;
+    }
+
+    public ChatResponse commitRelaxation(String traceId,
+                                         SessionState state,
+                                         String message,
+                                         List<RelaxationOption> options,
+                                         RelaxationContext context) {
+        SessionState savedState = state.withIntent(Intent.ACTIVITY_RECOMMENDATION)
+                .withPendingClarifyField(null)
+                .withPendingRelaxationContext(context);
+        sessionStateService.save(savedState);
+        sessionService.appendMessage(savedState.sessionId(), "assistant", message,
+                Intent.ACTIVITY_RECOMMENDATION.name(), traceId);
+        ChatResponse response = withConversationContext(
+                ChatResponse.relaxation(savedState.sessionId(), traceId, message, options), savedState);
+        traceService.recordEvent("STATE_COMMITTED", "SESSION", state, savedState);
+        traceService.recordEvent("RESPONSE_READY", "RESPONSE", savedState, response);
         return response;
     }
 
@@ -109,8 +118,7 @@ public class DecisionCommitService {
         sessionService.appendMessage(savedState.sessionId(), "assistant", response.speechText(), messageIntent, traceId);
         ChatResponse chatResponse = withConversationContext(
                 ChatResponse.answer(savedState.sessionId(), traceId, response.speechText(),
-                        response.displayBlocks(), response.nextAction()),
-                savedState);
+                        response.displayBlocks(), response.nextAction()), savedState);
         traceService.recordEvent("STATE_COMMITTED", "SESSION", state, savedState);
         traceService.recordEvent("RESPONSE_READY", "RESPONSE", savedState, chatResponse);
         return chatResponse;
