@@ -16,6 +16,8 @@ public class ActivitySessionRow {
     private String city;
     private String district;
     private String address;
+    private BigDecimal latitude;
+    private BigDecimal longitude;
     private LocalDateTime startAt;
     private LocalDateTime endAt;
     private BigDecimal price;
@@ -26,6 +28,6 @@ public class ActivitySessionRow {
 
     public ActivitySessionResponse toResponse() {
         return new ActivitySessionResponse(sessionId, activityId, venueId, venueName, venueType, city, district,
-                address, startAt, endAt, price, remainingSeats, status, registrationUrl, priceNote);
+                address, latitude, longitude, startAt, endAt, price, remainingSeats, status, registrationUrl, priceNote);
     }
 }
