@@ -14,6 +14,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PlanningSolverTest {
 
@@ -90,6 +91,29 @@ class PlanningSolverTest {
 
         assertEquals(1, plan.matchedCount());
         assertNull(plan.items().getFirst().session());
+    }
+
+    @Test
+    void shouldReturnSeveralLegalAlternativesForResponseAgentSelection() {
+        ActivityItem first = activity(1L, "活动1");
+        ActivityItem second = activity(2L, "活动2");
+        ActivityItem third = activity(3L, "活动3");
+
+        ActivityPlanService.PlannedActivity w1 = window(
+                "14:00-16:00", List.of(first, second),
+                Map.of(
+                        1L, List.of(session(101L, 1L, 14, 15, "20", 10, "OPEN")),
+                        2L, List.of(session(201L, 2L, 14, 15, "30", 10, "OPEN"))));
+        ActivityPlanService.PlannedActivity w2 = window(
+                "16:00-18:00", List.of(third),
+                Map.of(3L, List.of(session(301L, 3L, 16, 17, "40", 10, "OPEN"))));
+
+        List<PlanCandidate> plans = solver.solve(List.of(w1, w2));
+
+        assertTrue(plans.size() >= 2);
+        assertTrue(plans.stream().allMatch(plan -> plan.items().stream()
+                .map(item -> item.activity().id()).distinct().count() == plan.items().size()));
+        assertTrue(plans.stream().allMatch(plan -> plan.totalCost().compareTo(BigDecimal.ZERO) >= 0));
     }
 
     private ActivityPlanService.PlannedActivity window(
