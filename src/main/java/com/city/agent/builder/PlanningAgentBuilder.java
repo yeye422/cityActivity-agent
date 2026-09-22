@@ -4,6 +4,7 @@ import com.city.agent.loader.PromptLoader;
 import com.city.model.context.PlanningToolContext;
 import com.city.tool.PlanValidationTool;
 import com.city.tool.PlanningDiscoveryTool;
+import com.city.tool.TravelTimeTool;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.memory.InMemoryMemory;
 import io.agentscope.core.model.Model;
@@ -21,17 +22,20 @@ public class PlanningAgentBuilder {
     private final Model mainModel;
     private final PromptLoader promptLoader;
     private final PlanningDiscoveryTool discoveryTool;
+    private final TravelTimeTool travelTimeTool;
     private final PlanValidationTool validationTool;
 
     public PlanningAgentBuilder(
             @Qualifier("CityMainChatModel") Model mainModel,
             PromptLoader promptLoader,
             PlanningDiscoveryTool discoveryTool,
+            TravelTimeTool travelTimeTool,
             PlanValidationTool validationTool
     ) {
         this.mainModel = mainModel;
         this.promptLoader = promptLoader;
         this.discoveryTool = discoveryTool;
+        this.travelTimeTool = travelTimeTool;
         this.validationTool = validationTool;
     }
 
@@ -40,6 +44,7 @@ public class PlanningAgentBuilder {
 
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(discoveryTool);
+        toolkit.registerTool(travelTimeTool);
         toolkit.registerTool(validationTool);
 
         ToolExecutionContext toolContext = ToolExecutionContext.builder()
