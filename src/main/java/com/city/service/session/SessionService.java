@@ -7,6 +7,7 @@ import com.city.model.SessionMessageRow;
 import com.city.model.SessionRow;
 import com.city.util.JsonService;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.ZoneId;
@@ -17,29 +18,40 @@ import java.util.UUID;
 
 /**
  * 会话消息落库服务。
- * 负责 diet_sessions 创建和 diet_messages 追加；会话状态（slots/phase）由 SessionStateService 管理。
+ * 负责会话创建和消息追加；会话状态（slots/phase）由 SessionStateService 管理。
  */
 @Service
 public class SessionService {
 
-    /** MyBatis Mapper，操作 diet_sessions 和 diet_messages 表。 */
+    /** MyBatis Mapper，操作会话和消息表。 */
     private final SessionMapper sessionMapper;
 
     /** JSON 序列化工具。 */
     private final JsonService jsonService;
 
-    /** 注入 IntentAgent 的最近对话条数上限，来自配置 diet.session.max-history-turns。 */
+    /** 注入 IntentAgent 的最近对话条数上限。 */
     private final int maxHistoryTurns;
 
+    /** Agent 边界上传递的历史摘要字符预算。 */
+    private final int maxHistoryChars;
+
     /** 构造器注入依赖。 */
+    @Autowired
     public SessionService(
             SessionMapper sessionMapper,
             JsonService jsonService,
-            @Value("${diet.session.max-history-turns:10}") int maxHistoryTurns
+            @Value("${city.session.max-history-turns:10}") int maxHistoryTurns,
+            @Value("${city.session.max-history-chars:1200}") int maxHistoryChars
     ) {
         this.sessionMapper = sessionMapper;
         this.jsonService = jsonService;
         this.maxHistoryTurns = maxHistoryTurns;
+        this.maxHistoryChars = Math.max(120, maxHistoryChars);
+    }
+
+    /** 保留旧的纯单测构造入口。 */
+    public SessionService(SessionMapper sessionMapper, JsonService jsonService, int maxHistoryTurns) {
+        this(sessionMapper, jsonService, maxHistoryTurns, 1200);
     }
 
     /** 创建新会话并返回 sessionId（旧接口，Orchestrator 优先走 SessionStateService）。 */
@@ -50,7 +62,7 @@ public class SessionService {
         row.setPhase("START");                                               // 初始阶段
         row.setSlots("{}");                                                  // 空 slots JSON
         row.setLastRecommendedActivityIds(jsonService.toJsonArray(List.of()));      // 空推荐 ID 列表
-        sessionMapper.insert(row);                                           // INSERT diet_sessions
+        sessionMapper.insert(row);                                           // INSERT city_sessions
         return row.getId();                                                  // 返回 sessionId
     }
 
@@ -68,7 +80,7 @@ public class SessionService {
     }
 
     /**
-     * 追加一条对话消息到 diet_messages 表。
+     * 追加一条对话消息到 city_messages 表。
      * 由 Orchestrator 在每轮用户/助手消息产生时调用。
      */
     public void appendMessage(String sessionId, String role, String content, String intent, String traceId) {
@@ -98,10 +110,24 @@ public class SessionService {
         if (rows.size() > limit) {
             rows = new ArrayList<>(rows.subList(0, limit));
         }
-        Collections.reverse(rows); // SQL 倒序取最近消息，prompt 中按时间正序注入。
-        return rows.stream()
+        // 只在送入 Agent 的边界压缩，不改写数据库原始消息；从最新向前填充预算。
+        List<SessionMessageRow> budgeted = retainNewestWithinBudget(rows);
+        Collections.reverse(budgeted); // SQL 倒序取最近消息，prompt 中按时间正序注入。
+        return budgeted.stream()
                 .map(this::toConversationTurn)
                 .toList();
+    }
+
+    private List<SessionMessageRow> retainNewestWithinBudget(List<SessionMessageRow> newestFirst) {
+        List<SessionMessageRow> result = new ArrayList<>();
+        int used = 0;
+        for (SessionMessageRow row : newestFirst) {
+            int length = summarize(row == null ? null : row.getContent()).length();
+            if (!result.isEmpty() && used + length > maxHistoryChars) break;
+            result.add(row);
+            used += length;
+        }
+        return result;
     }
 
     /**

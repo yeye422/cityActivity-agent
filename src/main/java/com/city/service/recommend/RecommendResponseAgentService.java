@@ -43,7 +43,7 @@ public class RecommendResponseAgentService {
             AgentFactory agentFactory,
             LlmJsonService llmJsonService,
             AgentTraceService agentTraceService,
-            @Value("${diet.llm.response-model:qwen-turbo}") String modelName
+            @Value("${city.llm.response-model:qwen-turbo}") String modelName
     ) {
         this.agentFactory = agentFactory;
         this.llmJsonService = llmJsonService;

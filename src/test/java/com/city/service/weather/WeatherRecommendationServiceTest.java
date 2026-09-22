@@ -96,7 +96,7 @@ class WeatherRecommendationServiceTest {
 
     private SlotBundle citySlots(String city) {
         return new SlotBundle(
-                List.of(city), List.of(), List.of(), List.of(),
+                List.of(city), List.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), List.of(), List.of());
     }
 

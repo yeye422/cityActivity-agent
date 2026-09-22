@@ -6,11 +6,16 @@ import com.city.model.ActivitySearchRequest;
 import com.city.enums.SourceMode;
 import com.city.mapper.ActivitySessionMapper;
 import com.city.model.TimeConstraint;
+import com.city.model.agent.AgentResult;
+import com.city.model.agent.DiscoveryResult;
+import com.city.model.agent.EvidenceRef;
+import com.city.service.agent.EvidenceRefFactory;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Set;
+import java.util.Map;
 
 /**
  * 活动检索服务（Orchestrator 推荐流水线第一层）。
@@ -23,6 +28,7 @@ public class ActivitySearchService {
     /** 底层活动服务，封装 MyBatis JSON_OVERLAPS 检索。 */
     private final ActivityService activityService;
     private final ActivitySessionMapper activitySessionMapper;
+    private final EvidenceRefFactory evidenceRefFactory = new EvidenceRefFactory();
 
     /** 构造器注入 ActivityService。 */
     public ActivitySearchService(ActivityService activityService, ActivitySessionMapper activitySessionMapper) {
@@ -49,6 +55,28 @@ public class ActivitySearchService {
         List<ActivityItem> candidates = activityService.search(
                 request.sourceMode(), request.userId(), request.slots(), request.timeConstraint(), request.excludedSlots());
         return filterUnavailableSessions(candidates, request.timeConstraint());
+    }
+
+    /** 返回候选的同时生成可校验实体 ID 与证据引用，供 Supervisor 和 Trace 使用。 */
+    public DiscoveryResult discover(ActivitySearchRequest request) {
+        List<ActivityItem> candidates = search(request);
+        List<EvidenceRef> evidenceRefs = candidates.stream()
+                .filter(item -> item != null && item.id() != null)
+                .map(evidenceRefFactory::activity)
+                .toList();
+        Set<Long> verifiedIds = candidates.stream()
+                .filter(item -> item != null && item.id() != null)
+                .map(ActivityItem::id)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        AgentResult result = new AgentResult(
+                AgentResult.Status.COMPLETED,
+                "已验证活动候选 " + verifiedIds.size() + " 个",
+                verifiedIds,
+                Set.of(),
+                evidenceRefs,
+                List.of(),
+                Map.of("candidateCount", verifiedIds.size()));
+        return new DiscoveryResult(candidates, result);
     }
 
     /** 有场次的活动必须命中一个可报名场次；长期活动（无场次）继续由 validFrom/validTo 处理。 */

@@ -51,10 +51,10 @@ class SessionServiceHistoryTest {
         SessionService service = new SessionService(mapper, mock(JsonService.class), 10);
 
         SessionMessageRow latestAssistant = message(
-                3L, "assistant", "推荐结果", Intent.MEAL_RECOMMENDATION.name(), "trace_3", 3);
+                3L, "assistant", "推荐结果", Intent.ACTIVITY_RECOMMENDATION.name(), "trace_3", 3);
         SessionMessageRow previousUser = message(2L, "user", "西安看展", null, "trace_2", 2);
         SessionMessageRow olderAssistant = message(
-                1L, "assistant", "上一轮回复", Intent.MEAL_RECOMMENDATION.name(), "trace_1", 1);
+                1L, "assistant", "上一轮回复", Intent.ACTIVITY_RECOMMENDATION.name(), "trace_1", 1);
 
         when(mapper.listRecentMessages("sess_test", 1L, 4))
                 .thenReturn(List.of(latestAssistant, previousUser, olderAssistant));
@@ -65,6 +65,21 @@ class SessionServiceHistoryTest {
         assertEquals("上一轮回复", history.get(0).summary());
         assertEquals("西安看展", history.get(1).summary());
         assertEquals("推荐结果", history.get(2).summary());
+    }
+
+    @Test
+    void historyCompressionShouldRetainNewestMessagesWithinBoundaryBudget() {
+        SessionMapper mapper = mock(SessionMapper.class);
+        SessionService service = new SessionService(mapper, mock(JsonService.class), 10, 120);
+        SessionMessageRow latest = message(3L, "assistant", "最新回复", Intent.OTHER.name(), "trace_3", 3);
+        SessionMessageRow previous = message(2L, "user", "中".repeat(120), null, "trace_2", 2);
+        SessionMessageRow older = message(1L, "assistant", "更早回复", Intent.OTHER.name(), "trace_1", 1);
+        when(mapper.listRecentMessages("sess_test", 1L, 4)).thenReturn(List.of(latest, previous, older));
+
+        List<ConversationTurn> history = service.recentConversationTurns("sess_test", 1L, 3);
+
+        assertEquals(1, history.size());
+        assertEquals("最新回复", history.getFirst().summary());
     }
 
     private SessionMessageRow message(Long id,

@@ -53,7 +53,7 @@ public class IntentResult {
      */
     public static IntentResult fallbackRecommendation() {
         return new IntentResult(
-                Intent.MEAL_RECOMMENDATION,
+                Intent.ACTIVITY_RECOMMENDATION,
                 0.2,
                 List.of(),
                 TemporalMutation.keep(),

@@ -57,8 +57,8 @@ class ActivityDiversityServiceTest {
                                   LocalTime start,
                                   double score) {
         SlotBundle slots = new SlotBundle(
-                List.of("西安"), List.of(location), List.of(), List.of(),
-                List.of(), List.of(activityType), List.of(), List.of());
+                List.of("西安"), List.of(location), List.of(), List.of(), List.of(),
+                List.of(activityType), List.of(), List.of(), List.of());
         return new ActivityItem(
                 id, SourceMode.PUBLIC, null, name, slots,
                 null, null, start, start.plusHours(2), null, score);

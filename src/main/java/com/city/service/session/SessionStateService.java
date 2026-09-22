@@ -25,7 +25,7 @@ import java.util.UUID;
 /**
  * SessionState 的持久化边界。
  *
- * <p>Orchestrator 只操作结构化 SessionState，本服务负责在 SessionState 与 diet_sessions 数据库行之间转换。
+ * <p>Orchestrator 只操作结构化 SessionState，本服务负责在 SessionState 与 city_sessions 数据库行之间转换。
  * 其中九维槽位、排除槽位、时间条件、澄清状态、放宽推荐上下文等扩展状态统一编码在 slots JSON 中，
  * 而 phase、lastRecommendedActivityIds 等兼容已有表结构的字段继续使用独立列。</p>
  *
@@ -103,7 +103,7 @@ public class SessionStateService {
         }
     }
 
-    /** 首次创建会话时写入 diet_sessions。 */
+    /** 首次创建会话时写入 city_sessions。 */
     private void insert(SessionState state) {
         sessionMapper.insert(toRow(state));
     }

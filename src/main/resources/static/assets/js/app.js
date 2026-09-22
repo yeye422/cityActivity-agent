@@ -1,4 +1,4 @@
-﻿(function () {
+(function () {
     "use strict";
     const app = document.getElementById("app");
     const toast = document.getElementById("toast");
@@ -58,9 +58,9 @@
         duration: "duration"
     };
     const INTENTS = [
-        "MEAL_RECOMMENDATION",
+        "ACTIVITY_RECOMMENDATION",
         "CLARIFY_NEEDED",
-        "MEAL_ADJUST",
+        "ACTIVITY_ADJUST",
         "ACTIVITY_PLAN",
         "HEALTH_RISK",
         "OTHER"

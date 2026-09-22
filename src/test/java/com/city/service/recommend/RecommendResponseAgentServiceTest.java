@@ -105,6 +105,7 @@ class RecommendResponseAgentServiceTest {
                 List.of(),
                 List.of("展览"),
                 List.of("文艺"),
+                List.of(),
                 List.of("室内")
         );
     }

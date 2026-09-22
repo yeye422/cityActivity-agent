@@ -19,8 +19,8 @@ class IntentTaxonomyTest {
                 .collect(Collectors.toSet());
 
         assertEquals(Set.of(
-                "MEAL_RECOMMENDATION",
-                "MEAL_ADJUST",
+                "ACTIVITY_RECOMMENDATION",
+                "ACTIVITY_ADJUST",
                 "ACTIVITY_PLAN",
                 "OTHER"
         ), names);
@@ -33,7 +33,7 @@ class IntentTaxonomyTest {
         Intent intent = ReflectionTestUtils.invokeMethod(
                 service, "fallbackIntent", "暴雨天推荐几个爬山活动");
 
-        assertEquals(Intent.MEAL_RECOMMENDATION, intent);
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, intent);
     }
 
     @Test

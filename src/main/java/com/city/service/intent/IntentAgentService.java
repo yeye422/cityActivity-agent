@@ -57,7 +57,7 @@ public class IntentAgentService {
             LlmJsonService llmJsonService,
             SlotOptionService slotOptionService,
             AgentTraceService agentTraceService,
-            @Value("${diet.llm.main-model:qwen-max}") String modelName
+            @Value("${city.llm.main-model:qwen-max}") String modelName
     ) {
         this.agentFactory = agentFactory;
         this.llmJsonService = llmJsonService;
@@ -150,8 +150,8 @@ public class IntentAgentService {
 
                 ## 本轮输出约束
                 - 输出的是当前消息带来的语义 Patch，不是当前完整会话状态快照。
-                - intent 只能是 MEAL_RECOMMENDATION、MEAL_ADJUST、ACTIVITY_PLAN、OTHER。
-                - 信息不足不是独立 intent；主任务是找活动时仍输出 MEAL_RECOMMENDATION，后端决定是否追问。
+                - intent 只能是 ACTIVITY_RECOMMENDATION、ACTIVITY_ADJUST、ACTIVITY_PLAN、OTHER。
+                - 信息不足不是独立 intent；主任务是找活动时仍输出 ACTIVITY_RECOMMENDATION，后端决定是否追问。
                 - 安全风险不是独立 intent；带风险的业务请求仍按主业务 intent 输出，纯安全咨询输出 OTHER，后端 RiskGuard 统一处理。
                 - operations 是九维普通属性唯一的状态变更协议；历史已生效值不要重复写入 operations。
                 - 普通正向新增使用 ADD；明确“改成/换成/只要”使用 SET；明确排除使用 REMOVE；明确取消限制使用 CLEAR。
@@ -161,7 +161,7 @@ public class IntentAgentService {
                 - duration 只表示活动自身持续时间；用户自己的可用时间只写 temporal。
                 - 时间、日期、上午/下午/晚上等变化只能写 temporal，绝不能写 operations。
                 - 当前消息没有修改某个普通字段时，不为该字段生成 operation。
-                - 纯“换一批”必须是 MEAL_ADJUST + operations=[] + temporal KEEP/KEEP。
+                - 纯“换一批”必须是 ACTIVITY_ADJUST + operations=[] + temporal KEEP/KEEP。
                 - 最终只输出合法 JSON，顶层只能包含 intent、operations、temporal、confidence。
                 """.formatted(
                 now.toLocalDateTime(),
@@ -338,7 +338,7 @@ public class IntentAgentService {
                 "不要", "不想", "清空", "取消限制",
                 "预算不限", "不限制预算", "类型不限", "活动不限",
                 "便宜点", "近一点", "安静点")) {
-            return Intent.MEAL_ADJUST;
+            return Intent.ACTIVITY_ADJUST;
         }
 
         if (containsActivityPlanSignal(text)) return Intent.ACTIVITY_PLAN;
@@ -351,7 +351,7 @@ public class IntentAgentService {
                 "今天", "明天", "后天", "本周", "这周", "下周", "周末",
                 "周一", "周二", "周三", "周四", "周五", "周六", "周日", "周天",
                 "上午", "早上", "中午", "下午", "晚上", "今晚", "凌晨", "几点", "时间", "时段")) {
-            return Intent.MEAL_RECOMMENDATION;
+            return Intent.ACTIVITY_RECOMMENDATION;
         }
         return Intent.OTHER;
     }

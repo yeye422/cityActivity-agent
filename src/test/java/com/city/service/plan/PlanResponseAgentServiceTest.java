@@ -134,7 +134,7 @@ class PlanResponseAgentServiceTest {
                 service,
                 "parseOutput",
                 """
-                        {"mealPlans":[
+                        {"activityPlans":[
                           {"period":"周六 18:00-20:00","decision":"SELECT","activityId":21,"sessionId":901,"reason":"具体场次时间合适"}
                         ],"speechText":"周六晚上安排具体场次演出。"}
                         """,
@@ -162,7 +162,7 @@ class PlanResponseAgentServiceTest {
                 service,
                 "parseOutput",
                 """
-                        {"mealPlans":[
+                        {"activityPlans":[
                           {"period":"下午","decision":"SELECT","activityId":11,"reason":"下午这个更匹配"},
                           {"period":"晚上","decision":"SKIP","reason":"晚上先留空，整体节奏更轻松"}
                         ],"speechText":"下午安排一个活动，晚上先留空。"}
@@ -197,7 +197,7 @@ class PlanResponseAgentServiceTest {
                 service,
                 "parseOutput",
                 """
-                        {"mealPlans":[
+                        {"activityPlans":[
                           {"period":"下午","decision":"SELECT","activityId":11,"reason":"下午匹配"},
                           {"period":"晚上","decision":"SELECT","activityId":21,"reason":"晚上匹配"}
                         ],"speechText":"下午和晚上各安排一个。"}

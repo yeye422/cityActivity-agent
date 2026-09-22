@@ -40,7 +40,7 @@ public class IntentReviseService {
         IntentResult safeResult = result == null ? IntentResult.fallbackRecommendation() : result;
 
         //        用户说“换一批”
-        //→ IntentAgent 理想输出 MEAL_ADJUST
+        //→ IntentAgent 理想输出 ACTIVITY_ADJUST
         //→ IntentReviseService.isPureBatchRefresh(userInput)
         //→ Java 再次确认这是纯换批
         //→ 强制清空 slots / operations / temporal
@@ -48,8 +48,8 @@ public class IntentReviseService {
         // “换一批”是确定性的结果集操作，不允许模型顺带修改普通槽位或时间条件。
         if (isPureBatchRefresh(userInput)) {
             Intent targetIntent = hasLastRecommendations(state)
-                    ? Intent.MEAL_ADJUST
-                    : Intent.MEAL_RECOMMENDATION;
+                    ? Intent.ACTIVITY_ADJUST
+                    : Intent.ACTIVITY_RECOMMENDATION;
             return batchRefresh(targetIntent, safeResult);
         }
 
@@ -59,14 +59,14 @@ public class IntentReviseService {
                 && state.phase() == SessionPhase.CLARIFY
                 && state.pendingClarifyField() != null
                 && state.currentIntent() == Intent.ACTIVITY_PLAN
-                && (safeResult.intent() == Intent.MEAL_RECOMMENDATION
+                && (safeResult.intent() == Intent.ACTIVITY_RECOMMENDATION
                     || (safeResult.fallback() && safeResult.intent() == Intent.OTHER))) {
             return revised(Intent.ACTIVITY_PLAN, safeResult);
         }
 
         // 没有历史推荐结果时，ADJUST 不存在可调整对象，按首次推荐流程处理。
-        if (safeResult.intent() == Intent.MEAL_ADJUST && !hasLastRecommendations(state)) {
-            return revised(Intent.MEAL_RECOMMENDATION, safeResult);
+        if (safeResult.intent() == Intent.ACTIVITY_ADJUST && !hasLastRecommendations(state)) {
+            return revised(Intent.ACTIVITY_RECOMMENDATION, safeResult);
         }
 
         // 模型调用失败时，Java fallback 可能已经可靠抽取出 CLEAR/ADD/REMOVE 等普通槽位 Patch。
@@ -76,8 +76,8 @@ public class IntentReviseService {
                 && safeResult.operations() != null
                 && !safeResult.operations().isEmpty()) {
             Intent targetIntent = hasLastRecommendations(state)
-                    ? Intent.MEAL_ADJUST
-                    : Intent.MEAL_RECOMMENDATION;
+                    ? Intent.ACTIVITY_ADJUST
+                    : Intent.ACTIVITY_RECOMMENDATION;
             return revised(targetIntent, safeResult);
         }
 

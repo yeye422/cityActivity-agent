@@ -8,6 +8,10 @@ import com.city.model.ActivitySessionResponse;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
 import com.city.model.WeatherRecommendationContext;
+import com.city.model.agent.AgentResult;
+import com.city.model.agent.EvidenceRef;
+import com.city.model.agent.PlanningResult;
+import com.city.service.agent.EvidenceRefFactory;
 import com.city.service.activity.ActivityRankService;
 import com.city.service.activity.ActivitySearchService;
 import com.city.service.activity.ActivitySessionService;
@@ -49,6 +53,7 @@ public class ActivityPlanService {
     private final ActivitySearchService activitySearchService;
     private final ActivityRankService activityRankService;
     private final ActivitySessionService activitySessionService;
+    private final EvidenceRefFactory evidenceRefFactory = new EvidenceRefFactory();
 
     @Autowired
     public ActivityPlanService(ActivitySearchService activitySearchService,
@@ -138,50 +143,98 @@ public class ActivityPlanService {
         WeatherRecommendationContext safeWeather = weather == null
                 ? WeatherRecommendationContext.inactive()
                 : weather;
+        // 只有三个及以上窗口才并行，避免简单任务承担线程切换成本；有序流保证结果仍按窗口顺序返回。
+        List<PlannedActivity> discovered = (targets.size() >= 3
+                ? targets.parallelStream()
+                : targets.stream())
+                .map(activityTime -> discoverWindow(
+                        sourceMode, userId, baseSlots, safeExcluded,
+                        activityTime, timeConstraint, safeWeather))
+                .toList();
+
+        // 并行检索结束后由 Java 单线程统一选择 fallback，保持去重和确定性。
         List<PlannedActivity> planned = new ArrayList<>();
         Set<Long> fallbackUsedIds = new LinkedHashSet<>();
-
-        for (String activityTime : targets) {
-            SlotBundle querySlots = slotsForActivityTime(baseSlots, activityTime);
-            TimeConstraint targetTimeConstraint = timeConstraintForActivityTime(timeConstraint, activityTime);
-
-            List<ActivityItem> candidates = activitySearchService.search(
-                    new ActivitySearchRequest(
-                            sourceMode,
-                            userId,
-                            querySlots,
-                            List.of(),
-                            targetTimeConstraint,
-                            safeExcluded
-                    ));
-            List<ActivityItem> ranked = activityRankService.rank(
-                            new ActivityRankRequest(candidates, querySlots, targetTimeConstraint, List.of()),
-                            safeWeather)
-                    .ranked();
-            List<ActivityItem> topCandidates = ranked.stream()
-                    .filter(item -> item != null && item.id() != null)
-                    .limit(PLAN_CANDIDATE_LIMIT)
-                    .toList();
-
-            Map<Long, List<ActivitySessionResponse>> sessionsByActivityId = loadPlanningSessions(
-                    topCandidates, targetTimeConstraint);
-
-            ActivityItem fallback = topCandidates.stream()
+        for (PlannedActivity window : discovered) {
+            ActivityItem fallback = window.candidates().stream()
                     .filter(item -> !fallbackUsedIds.contains(item.id()))
                     .findFirst()
                     .orElse(null);
             if (fallback != null) fallbackUsedIds.add(fallback.id());
-
-            ActivitySessionResponse fallbackSession = firstSessionFor(fallback, sessionsByActivityId);
             planned.add(new PlannedActivity(
-                    activityTime,
-                    fallback,
-                    querySlots,
-                    topCandidates,
-                    sessionsByActivityId,
-                    fallbackSession));
+                    window.period(), fallback, window.querySlots(), window.candidates(),
+                    window.sessionsByActivityId(), firstSessionFor(fallback, window.sessionsByActivityId())));
         }
-        return planned;
+        return List.copyOf(planned);
+    }
+
+    private PlannedActivity discoverWindow(SourceMode sourceMode,
+                                           Long userId,
+                                           SlotBundle baseSlots,
+                                           SlotBundle excludedSlots,
+                                           String activityTime,
+                                           TimeConstraint timeConstraint,
+                                           WeatherRecommendationContext weather) {
+        SlotBundle querySlots = slotsForActivityTime(baseSlots, activityTime);
+        TimeConstraint targetTimeConstraint = timeConstraintForActivityTime(timeConstraint, activityTime);
+        List<ActivityItem> candidates = activitySearchService.search(new ActivitySearchRequest(
+                sourceMode, userId, querySlots, List.of(), targetTimeConstraint, excludedSlots));
+        List<ActivityItem> topCandidates = activityRankService.rank(
+                        new ActivityRankRequest(candidates, querySlots, targetTimeConstraint, List.of()), weather)
+                .ranked().stream()
+                .filter(item -> item != null && item.id() != null)
+                .limit(PLAN_CANDIDATE_LIMIT)
+                .toList();
+        Map<Long, List<ActivitySessionResponse>> sessionsByActivityId = loadPlanningSessions(
+                topCandidates, targetTimeConstraint);
+        return new PlannedActivity(
+                activityTime, null, querySlots, topCandidates, sessionsByActivityId, null);
+    }
+
+    /** 规划候选、场次、场地和天气证据作为一个结构化 Worker 结果返回。 */
+    public PlanningResult planWithEvidence(SourceMode sourceMode,
+                                           Long userId,
+                                           SlotBundle baseSlots,
+                                           SlotBundle excludedSlots,
+                                           List<String> activityTimes,
+                                           TimeConstraint timeConstraint,
+                                           WeatherRecommendationContext weather) {
+        List<PlannedActivity> plans = planActivities(
+                sourceMode, userId, baseSlots, excludedSlots, activityTimes, timeConstraint, weather);
+        Map<Long, ActivityItem> activities = new LinkedHashMap<>();
+        Map<Long, ActivitySessionResponse> sessions = new LinkedHashMap<>();
+        for (PlannedActivity plan : plans) {
+            for (ActivityItem item : plan.candidates()) {
+                if (item != null && item.id() != null) activities.putIfAbsent(item.id(), item);
+            }
+            plan.sessionsByActivityId().values().stream().flatMap(List::stream)
+                    .filter(session -> session != null && session.sessionId() != null)
+                    .forEach(session -> sessions.putIfAbsent(session.sessionId(), session));
+        }
+        List<EvidenceRef> evidence = new ArrayList<>();
+        activities.values().stream().map(evidenceRefFactory::activity).forEach(evidence::add);
+        sessions.values().stream().map(evidenceRefFactory::session).forEach(evidence::add);
+        sessions.values().stream()
+                .filter(session -> session.venueId() != null)
+                .collect(java.util.stream.Collectors.toMap(
+                        ActivitySessionResponse::venueId,
+                        session -> session,
+                        (left, right) -> left,
+                        LinkedHashMap::new))
+                .values().stream().map(evidenceRefFactory::venue).forEach(evidence::add);
+        if (weather != null && weather.status() != WeatherRecommendationContext.Status.NOT_REQUESTED) {
+            evidence.add(evidenceRefFactory.weather(weather, baseSlots, timeConstraint));
+        }
+        AgentResult result = new AgentResult(
+                AgentResult.Status.COMPLETED,
+                "已验证规划窗口 " + plans.size() + " 个",
+                Set.copyOf(activities.keySet()),
+                Set.copyOf(sessions.keySet()),
+                evidence,
+                List.of(),
+                Map.of("windowCount", plans.size(), "activityCount", activities.size(),
+                        "sessionCount", sessions.size()));
+        return new PlanningResult(plans, result);
     }
 
     /** 只有日期明确时，具体场次才具有可执行含义；没有日期时不向 Agent 虚构/泛化场次。 */

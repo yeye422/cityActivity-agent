@@ -52,7 +52,7 @@ public class AgentFactory {
             IntentAgentBuilder intentBuilder,
             RecommendResponseAgentBuilder recommendResponseBuilder,
             PlanResponseAgentBuilder planResponseBuilder,
-            @Value("${diet.prompt.version:v2}") String promptVersion
+            @Value("${city.prompt.version:v2}") String promptVersion
     ) {
         this.intentBuilder = intentBuilder;
         this.recommendResponseBuilder = recommendResponseBuilder;

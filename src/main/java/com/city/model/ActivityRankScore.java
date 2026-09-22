@@ -5,6 +5,8 @@ public record ActivityRankScore(
         Long activityId,
         Double timeScore,
         double weatherAdjustment,
+        double lexicalAdjustment,
+        double preferenceAdjustment,
         double finalScore,
         WeatherRecommendationContext.Status weatherStatus
 ) {

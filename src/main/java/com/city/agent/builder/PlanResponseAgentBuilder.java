@@ -15,7 +15,7 @@ public class PlanResponseAgentBuilder {
     private final PromptLoader promptLoader;
 
     public PlanResponseAgentBuilder(
-            @Qualifier("DietMainChatModel") Model planModel,
+            @Qualifier("CityMainChatModel") Model planModel,
             PromptLoader promptLoader
     ) {
         this.planModel = planModel;
@@ -24,9 +24,9 @@ public class PlanResponseAgentBuilder {
 
     public ReActAgent build() {
         return ReActAgent.builder()
-                .name("diet_plan_response_agent")
+                .name("city_plan_response_agent")
                 .model(planModel)
-                .sysPrompt(promptLoader.load("diet/prompts/plan-response.txt"))
+                .sysPrompt(promptLoader.load("city-prompts/plan-response.txt"))
                 .memory(new InMemoryMemory())
                 .build();
     }

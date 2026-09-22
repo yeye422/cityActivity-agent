@@ -49,7 +49,7 @@ public class PlanResponseAgentService {
             AgentFactory agentFactory,
             LlmJsonService llmJsonService,
             AgentTraceService agentTraceService,
-            @Value("${diet.llm.response-model:qwen-turbo}") String modelName
+            @Value("${city.llm.response-model:qwen-turbo}") String modelName
     ) {
         this.agentFactory = agentFactory;
         this.llmJsonService = llmJsonService;
@@ -144,8 +144,8 @@ public class PlanResponseAgentService {
                 天气排序说明：%s
                 Java 为细时间窗口生成的合法候选池：%s
 
-                输出一个合法 JSON 对象，顶层只能包含 mealPlans 和 speechText。
-                mealPlans 必须覆盖上面每一个 period，并明确 decision=SELECT 或 decision=SKIP。
+                输出一个合法 JSON 对象，顶层只能包含 activityPlans 和 speechText。
+                activityPlans 必须覆盖上面每一个 period，并明确 decision=SELECT 或 decision=SKIP。
 
                 SELECT：
                 - 必须输出 period、decision、activityId、reason。
@@ -206,7 +206,7 @@ public class PlanResponseAgentService {
 
         Map<String, AgentDecision> requestedByPeriod = new LinkedHashMap<>();
         boolean invalidStructure = false;
-        JsonNode plansNode = root.path("mealPlans");
+        JsonNode plansNode = root.path("activityPlans");
         if (!plansNode.isArray()) {
             invalidStructure = true;
         } else {

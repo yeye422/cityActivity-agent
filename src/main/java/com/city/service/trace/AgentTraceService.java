@@ -4,6 +4,10 @@ import com.city.exception.CityException;
 import com.city.mapper.AgentTraceMapper;
 import com.city.model.RequestTraceRow;
 import com.city.model.TraceLabelRequest;
+import com.city.model.AgentUiEvent;
+import com.city.model.AgentUiEventType;
+import com.city.service.event.AgentUiEventService;
+import com.city.service.harness.AgentExecutionHarness;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
@@ -11,9 +15,11 @@ import io.agentscope.core.message.MsgRole;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -52,19 +58,35 @@ public class AgentTraceService {
     private final String promptVersion;
     private final String ruleVersion;
     private final String gitCommit;
+    private final AgentExecutionHarness executionHarness = new AgentExecutionHarness();
+    private final AgentUiEventService agentUiEventService;
 
+    @Autowired
     public AgentTraceService(
             AgentTraceMapper agentTraceMapper,
             ObjectMapper objectMapper,
             BuildVersionService buildVersionService,
-            @Value("${diet.prompt.version:v2}") String promptVersion,
-            @Value("${diet.rule.version:v2}") String ruleVersion
+            @Value("${city.prompt.version:v2}") String promptVersion,
+            @Value("${city.rule.version:v2}") String ruleVersion,
+            AgentUiEventService agentUiEventService
     ) {
         this.agentTraceMapper = agentTraceMapper;
         this.objectMapper = objectMapper;
         this.promptVersion = promptVersion;
         this.ruleVersion = ruleVersion;
         this.gitCommit = buildVersionService.gitCommit();
+        this.agentUiEventService = agentUiEventService;
+    }
+
+    /** 保留不启动 Web 层的单元测试构造入口。 */
+    public AgentTraceService(
+            AgentTraceMapper agentTraceMapper,
+            ObjectMapper objectMapper,
+            BuildVersionService buildVersionService,
+            String promptVersion,
+            String ruleVersion
+    ) {
+        this(agentTraceMapper, objectMapper, buildVersionService, promptVersion, ruleVersion, null);
     }
 
     /**
@@ -72,7 +94,8 @@ public class AgentTraceService {
      * 调用方应使用 try-with-resources，确保成功和异常路径最终都会 flush 并清理 ThreadLocal。
      */
     public TraceScope openTrace(String traceId, String sessionId, Long userId) {
-        TraceScope scope = new TraceScope(traceId, sessionId, userId);
+        TraceScope scope = new TraceScope(
+                traceId, sessionId, userId, executionHarness.openRun(sessionId));
         currentScope.set(scope);
         return scope;
     }
@@ -102,15 +125,25 @@ public class AgentTraceService {
      */
     public Msg callAgent(String sessionId, String agentName, String modelName, ReActAgent agent, String inputText) {
         long startedAt = System.nanoTime();
+        AgentExecutionHarness.CallPermit permit;
+        try {
+            permit = executionHarness.beforeCall(agentName, inputText);
+        } catch (RuntimeException error) {
+            recordAgentCall(sessionId, agentName, modelName, inputText,
+                    null, elapsedMs(startedAt), error);
+            throw error;
+        }
         try {
             Msg response = agent.call(Msg.builder()
                     .role(MsgRole.USER)
                     .textContent(inputText)
                     .build()).block();
+            executionHarness.recordSuccess(permit);
             recordAgentCall(sessionId, agentName, modelName, inputText,
                     response, elapsedMs(startedAt), null);
             return response;
         } catch (RuntimeException error) {
+            executionHarness.recordFailure(permit);
             // 异常同样进入 Trace，然后保持原异常语义继续向上抛出。
             recordAgentCall(sessionId, agentName, modelName, inputText,
                     null, elapsedMs(startedAt), error);
@@ -234,8 +267,9 @@ public class AgentTraceService {
                 : trim(error.getClass().getSimpleName() + ": " + error.getMessage());
 
         // stepOrder 在一个 Scope 内单调递增，回放时按该字段即可还原真实执行顺序。
+        int sequence = scope.nextStep();
         scope.addEvent(new TraceEvent(
-                scope.nextStep(),
+                sequence,
                 eventType,
                 phase,
                 agentName,
@@ -252,6 +286,36 @@ public class AgentTraceService {
         if (errorMessage != null) {
             scope.markFailed(errorMessage);
         }
+        publishUiEvent(scope, sequence, eventType, phase, outputPayload, errorMessage);
+    }
+
+    private void publishUiEvent(TraceScope scope,
+                                int sequence,
+                                String eventType,
+                                String phase,
+                                Object outputPayload,
+                                String errorMessage) {
+        if (agentUiEventService == null) return;
+        AgentUiEventType uiType = toUiEventType(eventType, errorMessage);
+        Object payload = errorMessage == null ? outputPayload : Map.of("message", errorMessage);
+        agentUiEventService.publish(scope.userId(), scope.sessionId(), new AgentUiEvent(
+                uiType, scope.traceId(), scope.sessionId(), sequence, phase,
+                eventType, payload, Instant.now()));
+    }
+
+    private AgentUiEventType toUiEventType(String eventType, String errorMessage) {
+        if (errorMessage != null || (eventType != null && eventType.endsWith("FAILED"))) {
+            return AgentUiEventType.ERROR;
+        }
+        if ("REQUEST_RECEIVED".equals(eventType)) return AgentUiEventType.RUN_STARTED;
+        if ("REQUEST_FINISHED".equals(eventType)) return AgentUiEventType.RUN_FINISHED;
+        if ("RESPONSE_READY".equals(eventType) || "RESPONSE_AGENT_RESULT".equals(eventType)) {
+            return AgentUiEventType.MESSAGE_COMPLETE;
+        }
+        if ("WORKER_DISPATCHED".equals(eventType) || "AGENT_CALL".equals(eventType)) {
+            return AgentUiEventType.STEP_STARTED;
+        }
+        return AgentUiEventType.STEP_COMPLETED;
     }
 
     /**
@@ -381,11 +445,14 @@ public class AgentTraceService {
         private String status = "SUCCESS";
         private String errorMessage;
         private boolean closed;
+        private final AgentExecutionHarness.RunScope harnessScope;
 
-        private TraceScope(String traceId, String sessionId, Long userId) {
+        private TraceScope(String traceId, String sessionId, Long userId,
+                           AgentExecutionHarness.RunScope harnessScope) {
             this.traceId = traceId;
             this.sessionId = sessionId;
             this.userId = userId;
+            this.harnessScope = harnessScope;
         }
 
         private String traceId() {
@@ -446,6 +513,7 @@ public class AgentTraceService {
                 // 可观测链路是旁路能力：数据库 Trace 写入失败不能覆盖真实业务结果。
                 log.warn("Failed to persist request trace: traceId={}", traceId, error);
             } finally {
+                harnessScope.close();
                 // 线程池会复用线程；不 remove 会导致下一次请求继续写入旧 Scope。
                 currentScope.remove();
             }

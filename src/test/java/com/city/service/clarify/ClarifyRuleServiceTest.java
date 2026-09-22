@@ -23,7 +23,7 @@ class ClarifyRuleServiceTest {
                 List.of(), List.of(), List.of(), List.of(), List.of());
 
         List<ClarifyField> missing = service.missingRequiredFields(
-                Intent.MEAL_RECOMMENDATION, slots, TimeConstraint.empty());
+                Intent.ACTIVITY_RECOMMENDATION, slots, TimeConstraint.empty());
 
         assertTrue(missing.isEmpty());
     }
@@ -35,13 +35,13 @@ class ClarifyRuleServiceTest {
                 List.of(), List.of(), List.of(), List.of(), List.of());
 
         assertTrue(service.missingRequiredFields(
-                Intent.MEAL_RECOMMENDATION, slots, TimeConstraint.empty()).isEmpty());
+                Intent.ACTIVITY_RECOMMENDATION, slots, TimeConstraint.empty()).isEmpty());
     }
 
     @Test
     void recommendationWithoutCityShouldAskCity() {
         List<ClarifyField> missing = service.missingRequiredFields(
-                Intent.MEAL_RECOMMENDATION, SlotBundle.empty(), TimeConstraint.empty());
+                Intent.ACTIVITY_RECOMMENDATION, SlotBundle.empty(), TimeConstraint.empty());
 
         assertEquals(List.of(ClarifyField.CITY), missing);
         assertEquals("你想看哪个城市的活动？", service.questionFor(ClarifyField.CITY));

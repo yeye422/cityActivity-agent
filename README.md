@@ -31,7 +31,11 @@ activityType / style / duration / feature
 - 用户偏好匹配
 - 多时段活动规划
 - 具体场次约束规划
-- Agent 编排
+- Orchestrator + Worker 分层编排与能力边界
+- 单轮调用预算、重复调用检测和 Agent 熔断
+- 边界上下文压缩与跨会话偏好记忆
+- SQL 硬过滤、BM25 文本相关性、时间/天气/偏好重排与多样性控制
+- Trace、回归评估和按会话推送的 SSE 执行事件
 
 ## 数据库初始化
 
@@ -41,6 +45,7 @@ activityType / style / duration / feature
 mysql < database_init_final.sql
 mysql city_db < src/main/resources/db/evaluation_loop_migration.sql
 mysql city_db < src/main/resources/db/activity_venue_session_migration.sql
+mysql city_db < src/main/resources/db/agent_memory_migration.sql
 mysql city_db < src/main/resources/db/city_seed.sql
 # 可选：补充更多带具体场次的演示活动
 mysql city_db < src/main/resources/db/activity_catalog_seed.sql
@@ -48,6 +53,31 @@ mysql city_db < src/main/resources/db/activity_catalog_seed.sql
 
 `database_init_final.sql` 已直接使用九维槽位列和 `duration_minutes`。
 `activity_venue_session_migration.sql` 会创建 `venue` 和 `activity_session`；只有执行该迁移并存在目标日期的 OPEN 场次时，具体 `sessionId/startAt/endAt` 才会作为 PlanAgent 的硬规划依据。
+`agent_memory_migration.sql` 会创建带版本号和软删除标记的长期偏好表。偏好只作为排序软信号，本轮明确条件优先。
+需要回滚该能力时，先备份偏好数据，再执行 `src/main/resources/db/rollback/agent_memory_rollback.sql`。
+
+完整的分阶段改造清单见 `docs/architecture/cityflow-full-refactor-plan.md`，冻结基线见 `docs/baseline/p0-baseline-2026-09-22.md`。
+
+## Agent 执行与实时事件
+
+所有模型调用统一经过 Harness：限制单轮调用次数、阻断重复输入循环，并按 Agent 维护 CLOSED / OPEN / HALF_OPEN 熔断状态。失败会进入既有 Java Parser 或模板降级路径，Trace 同时记录故障位置。
+
+前端可先订阅会话事件，再发起聊天请求：
+
+```text
+GET  /api/v1/city/events/{sessionId}       # text/event-stream
+POST /api/v1/city/chat
+```
+
+事件协议固定为 `RUN_STARTED / STEP_STARTED / STEP_COMPLETED / MESSAGE_COMPLETE / ERROR / RUN_FINISHED` 六类，并按 `userId + sessionId` 隔离。
+
+长期偏好采用显式写入和删除，避免模型自行篡改用户画像：
+
+```text
+GET    /api/v1/city/preferences
+POST   /api/v1/city/preferences
+DELETE /api/v1/city/preferences/{id}?version={version}
+```
 
 已有旧数据库（仍使用 `mood / scene`，并把“室内/交通方便”等混在 `duration` 或 `location`）时，先执行：
 

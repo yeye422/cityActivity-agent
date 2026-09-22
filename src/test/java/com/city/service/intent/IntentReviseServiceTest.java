@@ -29,7 +29,7 @@ class IntentReviseServiceTest {
 
         ConstraintOperation cityAdd = new ConstraintOperation(
                 "city", ConstraintOperationType.ADD, List.of("西安"), "西安");
-        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, 0.95, List.of(cityAdd));
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_RECOMMENDATION, 0.95, List.of(cityAdd));
 
         IntentResult revised = service.revise(state, raw, "西安");
 
@@ -57,11 +57,11 @@ class IntentReviseServiceTest {
         SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
                 .withIntent(Intent.ACTIVITY_PLAN)
                 .withPhase(SessionPhase.CLARIFY);
-        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, 0.95, List.of());
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_RECOMMENDATION, 0.95, List.of());
 
         IntentResult revised = service.revise(state, raw, "西安");
 
-        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, revised.intent());
     }
 
     @Test
@@ -69,11 +69,11 @@ class IntentReviseServiceTest {
         SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
                 .withPhase(SessionPhase.CLARIFY)
                 .withPendingClarifyField(ClarifyField.CITY);
-        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, 0.95, List.of());
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_RECOMMENDATION, 0.95, List.of());
 
         IntentResult revised = service.revise(state, raw, "西安");
 
-        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, revised.intent());
     }
 
     @Test
@@ -87,7 +87,7 @@ class IntentReviseServiceTest {
 
         IntentResult revised = service.revise(state, raw, "预算不限");
 
-        assertEquals(Intent.MEAL_ADJUST, revised.intent());
+        assertEquals(Intent.ACTIVITY_ADJUST, revised.intent());
         assertEquals(List.of(clearBudget), revised.operations());
     }
 
@@ -101,7 +101,7 @@ class IntentReviseServiceTest {
         IntentResult revised = service.revise(
                 SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC), raw, "西安");
 
-        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, revised.intent());
         assertEquals(List.of(cityAdd), revised.operations());
     }
 
@@ -117,29 +117,29 @@ class IntentReviseServiceTest {
 
     @Test
     void shouldRespectSuccessfulModelRecommendationEvenWhenTextContainsPlanningWords() {
-        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, 0.95, List.of());
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_RECOMMENDATION, 0.95, List.of());
 
         IntentResult revised = service.revise(null, raw, "帮我安排周六一天");
 
-        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, revised.intent());
     }
 
     @Test
     void shouldNotOverrideRecommendationWithSafetyKeywordsWhenModelSucceeded() {
-        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, 0.95, List.of());
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_RECOMMENDATION, 0.95, List.of());
 
         IntentResult revised = service.revise(null, raw, "暴雨天推荐几个室内展览");
 
-        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, revised.intent());
     }
 
     @Test
     void shouldNotForceClarificationOnlyBecauseConfidenceIsLow() {
-        IntentResult raw = new IntentResult(Intent.MEAL_RECOMMENDATION, 0.2, List.of());
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_RECOMMENDATION, 0.2, List.of());
 
         IntentResult revised = service.revise(null, raw, "上海看展");
 
-        assertEquals(Intent.MEAL_RECOMMENDATION, revised.intent());
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, revised.intent());
         assertFalse(revised.fallback());
     }
 }

@@ -16,7 +16,7 @@ import com.city.model.RegressionEvaluationReport;
 import com.city.model.RegressionEvaluationRequest;
 import com.city.model.SlotBundle;
 import com.city.model.TraceLabelRequest;
-import com.city.service.orchestrator.CityOrchestratorService;
+import com.city.service.orchestrator.CityAgentSupervisor;
 import com.city.service.trace.AgentTraceService;
 import com.city.service.trace.BuildVersionService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -39,7 +39,7 @@ public class RegressionEvaluationService {
     private static final String EVAL_SET_RESOURCE = "evaluation/city-dialogue-eval-set.json";
 
     private final ObjectMapper objectMapper;
-    private final CityOrchestratorService orchestratorService;
+    private final CityAgentSupervisor supervisor;
     private final AgentTraceService traceService;
     private final EvaluationService evaluationService;
     private final EvaluationRunMapper evaluationRunMapper;
@@ -50,17 +50,17 @@ public class RegressionEvaluationService {
     private final String modelVersion;
 
     public RegressionEvaluationService(ObjectMapper objectMapper,
-                                       CityOrchestratorService orchestratorService,
+                                       CityAgentSupervisor supervisor,
                                        AgentTraceService traceService,
                                        EvaluationService evaluationService,
                                        EvaluationRunMapper evaluationRunMapper,
                                        EvaluationCaseMapper evaluationCaseMapper,
                                        BuildVersionService buildVersionService,
-                                       @Value("${diet.prompt.version:v1}") String promptVersion,
-                                       @Value("${diet.rule.version:v1}") String ruleVersion,
-                                       @Value("${diet.llm.main-model:qwen-max}") String modelVersion) {
+                                       @Value("${city.prompt.version:v1}") String promptVersion,
+                                       @Value("${city.rule.version:v1}") String ruleVersion,
+                                       @Value("${city.llm.main-model:qwen-max}") String modelVersion) {
         this.objectMapper = objectMapper;
-        this.orchestratorService = orchestratorService;
+        this.supervisor = supervisor;
         this.traceService = traceService;
         this.evaluationService = evaluationService;
         this.evaluationRunMapper = evaluationRunMapper;
@@ -104,7 +104,7 @@ public class RegressionEvaluationService {
                     String text = message.path("message").asText("").trim();
                     if (text.isBlank()) throw new CityException("评测用例缺少 message：" + testCase.path("id").asText());
                     SourceMode sourceMode = parseSourceMode(message.path("sourceMode").asText("PUBLIC"));
-                    finalResponse = orchestratorService.dietChat(ownerUserId,
+                    finalResponse = supervisor.chat(ownerUserId,
                             new ChatRequest(sessionId, text, sourceMode, null));
                     sessionId = finalResponse.sessionId();
                 }

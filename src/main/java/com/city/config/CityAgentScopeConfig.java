@@ -17,27 +17,27 @@ public class CityAgentScopeConfig {
     private String apiKey;
 
     /** 主模型保留给需要更强推理能力的任务。 */
-    @Value("${diet.llm.main-model:qwen-max}")
+    @Value("${city.llm.main-model:qwen-max}")
     private String mainModelName;
 
     /** 轻量模型用于意图识别和澄清追问。 */
-    @Value("${diet.llm.light-model:qwen-turbo}")
+    @Value("${city.llm.light-model:qwen-turbo}")
     private String lightModelName;
 
     /** 推荐理由与最终口语包装使用的轻量响应模型。 */
-    @Value("${diet.llm.response-model:qwen-turbo}")
+    @Value("${city.llm.response-model:qwen-turbo}")
     private String responseModelName;
 
-    @Bean("DietMainChatModel")
-    public Model DietMainChatModel() {
+    @Bean("CityMainChatModel")
+    public Model cityMainChatModel() {
         return DashScopeChatModel.builder()
                 .apiKey(apiKey)
                 .modelName(mainModelName)
                 .build();
     }
 
-    @Bean("DietLightChatModel")
-    public Model DietLightChatModel() {
+    @Bean("CityLightChatModel")
+    public Model cityLightChatModel() {
         return DashScopeChatModel.builder()
                 .apiKey(apiKey)
                 .modelName(lightModelName)
@@ -45,8 +45,8 @@ public class CityAgentScopeConfig {
     }
 
     /** RecommendResponseAgent / PlanResponseAgent 使用，降低推荐文案生成延迟。 */
-    @Bean("DietResponseChatModel")
-    public Model DietResponseChatModel() {
+    @Bean("CityResponseChatModel")
+    public Model cityResponseChatModel() {
         return DashScopeChatModel.builder()
                 .apiKey(apiKey)
                 .modelName(responseModelName)

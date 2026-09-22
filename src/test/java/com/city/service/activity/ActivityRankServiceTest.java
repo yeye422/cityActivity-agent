@@ -1,6 +1,7 @@
 package com.city.service.activity;
 
 import com.city.enums.SourceMode;
+import com.city.enums.PreferencePolarity;
 import com.city.model.ActivityItem;
 import com.city.model.ActivityRankRequest;
 import com.city.model.ActivityRankResult;
@@ -8,6 +9,8 @@ import com.city.model.ActivityRankScore;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
 import com.city.model.WeatherRecommendationContext;
+import com.city.model.PreferenceFact;
+import com.city.service.memory.PreferenceMemoryService;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
@@ -16,6 +19,8 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class ActivityRankServiceTest {
     private final ActivityRankService service = new ActivityRankService();
@@ -110,6 +115,51 @@ class ActivityRankServiceTest {
                 List.of(first, second), query, TimeConstraint.empty(), List.of(1L)));
 
         assertEquals(List.of(2L), result.ranked().stream().map(ActivityItem::id).toList());
+    }
+
+    @Test
+    void explicitQueryTextShouldContributeBm25Relevance() {
+        SlotBundle query = slots(List.of("西安"), List.of(), List.of(), List.of(), List.of());
+        ActivityItem exhibition = activity(1L, "丝路艺术展览", query,
+                LocalTime.of(15, 0), LocalTime.of(17, 0));
+        ActivityItem sport = activity(2L, "城市篮球体验", query,
+                LocalTime.of(15, 0), LocalTime.of(17, 0));
+
+        ActivityRankResult result = service.rank(new ActivityRankRequest(
+                List.of(sport, exhibition), query, TimeConstraint.empty(), List.of(), 1L, "想看艺术展览"));
+
+        assertEquals(List.of(1L, 2L), result.ranked().stream().map(ActivityItem::id).toList());
+        assertEquals(0.12, result.scores().getFirst().lexicalAdjustment(), 0.0001);
+    }
+
+    @Test
+    void longTermAvoidShouldBeSoftAndExplicitRequestShouldOverrideIt() {
+        PreferenceMemoryService memory = mock(PreferenceMemoryService.class);
+        PreferenceFact avoidOutdoor = new PreferenceFact();
+        avoidOutdoor.setSlotName("feature");
+        avoidOutdoor.setSlotValue("户外");
+        avoidOutdoor.setPolarity(PreferencePolarity.AVOID);
+        avoidOutdoor.setActive(true);
+        when(memory.findActive(9L)).thenReturn(List.of(avoidOutdoor));
+        ActivityRankService memoryAwareService = new ActivityRankService(memory);
+        SlotBundle neutral = slots(List.of("西安"), List.of(), List.of(), List.of(), List.of());
+        ActivityItem indoor = activity(1L, "室内展览",
+                slots(List.of("西安"), List.of(), List.of(), List.of(), List.of("室内")),
+                LocalTime.of(15, 0), LocalTime.of(17, 0));
+        ActivityItem outdoor = activity(2L, "户外市集",
+                slots(List.of("西安"), List.of(), List.of(), List.of(), List.of("户外")),
+                LocalTime.of(15, 0), LocalTime.of(17, 0));
+
+        ActivityRankResult memoryRanked = memoryAwareService.rank(new ActivityRankRequest(
+                List.of(outdoor, indoor), neutral, TimeConstraint.empty(), List.of(), 9L, null));
+        assertEquals(List.of(1L, 2L), memoryRanked.ranked().stream().map(ActivityItem::id).toList());
+        assertEquals(-0.18, memoryRanked.scores().get(1).preferenceAdjustment(), 0.0001);
+
+        SlotBundle explicitlyOutdoor = slots(
+                List.of("西安"), List.of(), List.of(), List.of(), List.of("户外"));
+        ActivityRankResult explicitRanked = memoryAwareService.rank(new ActivityRankRequest(
+                List.of(outdoor), explicitlyOutdoor, TimeConstraint.empty(), List.of(), 9L, null));
+        assertEquals(0.0, explicitRanked.scores().getFirst().preferenceAdjustment(), 0.0001);
     }
 
     private ActivityItem activity(Long id, String name, SlotBundle slots, LocalTime start, LocalTime end) {

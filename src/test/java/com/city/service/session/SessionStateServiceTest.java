@@ -40,7 +40,7 @@ class SessionStateServiceTest {
                   "city":["西安"],
                   "_meta":{
                     "sourceMode":"PUBLIC",
-                    "currentIntent":"MEAL_RECOMMENDATION",
+                    "currentIntent":"ACTIVITY_RECOMMENDATION",
                     "recommendationQueryKey":"old-key"
                   }
                 }

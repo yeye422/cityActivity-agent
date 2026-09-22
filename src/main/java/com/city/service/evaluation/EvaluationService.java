@@ -62,7 +62,7 @@ public class EvaluationService {
         boolean includeJudge = Boolean.TRUE.equals(request.includeLlmJudge());
         // limit 为空时使用默认上限，避免后台一次评估拉取过多 trace。
         int limit = request.limit() == null ? DEFAULT_LIMIT : request.limit();
-        // 从 diet_request_trace 按用户和时间范围读取待评估 trace。
+        // 从 city_request_trace 按用户和时间范围读取待评估 trace。
         List<RequestTraceRow> traces = agentTraceService.findByTimeRange(userId, request.startAt(), request.endAt(), false, limit);
         // 按 trace 涉及的 sessionId 一次性读取用户反馈，减少后续逐条查询。
         Map<String, List<FeedbackRow>> feedbackBySession = loadFeedback(userId, request.startAt(), request.endAt(), traces);
@@ -169,7 +169,7 @@ public class EvaluationService {
         metrics.put("safetyCompliance", snapshot.safetyCompliance() ? 1.0 : 0.0);
         // 幻觉控制检查最终卡片是否来自重排候选集合。
         metrics.put("hallucinationControl", snapshot.hallucinationFree() ? 1.0 : 0.0);
-        // 多轮一致性只在 MEAL_ADJUST 场景能计算，其他 trace 返回 null。
+        // 多轮一致性只在 ACTIVITY_ADJUST 场景能计算，其他 trace 返回 null。
         metrics.put("multiTurnConsistency", snapshot.multiTurnConsistency());
         metrics.put("operationAccuracy", operationAccuracy(row.getLabelNote(), snapshot.operations()));
         metrics.put("timeConstraintAccuracy", timeAccuracy(row.getLabelNote(), snapshot.timeRaw()));
@@ -352,8 +352,8 @@ public class EvaluationService {
                 } else if ("ADJUST_CONTEXT_RESOLVED".equals(eventType)) {
                     // 读取本轮应该排除的历史推荐 ID。
                     excludedIds = longList(output.path("excludeActivityIds"));
-                    // 调整链路强制视为 MEAL_ADJUST，便于后续多轮一致性计算。
-                    intent = "MEAL_ADJUST";
+                    // 调整链路强制视为 ACTIVITY_ADJUST，便于后续多轮一致性计算。
+                    intent = "ACTIVITY_ADJUST";
                 // ACTIVITY_RANKED 是 Java 重排后的候选集合。
                 } else if ("ACTIVITY_RANKED".equals(eventType)) {
                     // 收集 ranked[].id，后续检查最终响应是否编造候选外餐食。
@@ -380,8 +380,8 @@ public class EvaluationService {
         boolean safetyCompliance = FORBIDDEN_PHRASES.stream().noneMatch(finalText::contains);
         // 非调整链路不计算多轮一致性，保持 null 避免影响平均分。
         Double multiTurnConsistency = null;
-        // 只有 MEAL_ADJUST 才判断是否复用了上一轮上下文并排除旧推荐。
-        if ("MEAL_ADJUST".equals(intent)) {
+        // 只有 ACTIVITY_ADJUST 才判断是否复用了上一轮上下文并排除旧推荐。
+        if ("ACTIVITY_ADJUST".equals(intent)) {
             // 有排除列表且最终推荐没有命中排除项，则多轮一致性为 1，否则为 0。
             multiTurnConsistency = excludedIds.isEmpty() ? 0.0 : responseIds.stream().noneMatch(excludedIds::contains) ? 1.0 : 0.0;
         }

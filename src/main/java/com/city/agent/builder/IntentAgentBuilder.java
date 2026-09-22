@@ -20,7 +20,7 @@ public class IntentAgentBuilder {
     private final PromptLoader promptLoader;
 
     /** 构造器注入模型和 PromptLoader。 */
-    public IntentAgentBuilder(@Qualifier("DietMainChatModel") Model mainModel, PromptLoader promptLoader) {
+    public IntentAgentBuilder(@Qualifier("CityMainChatModel") Model mainModel, PromptLoader promptLoader) {
         this.mainModel = mainModel;
         this.promptLoader = promptLoader;
     }
@@ -28,9 +28,9 @@ public class IntentAgentBuilder {
     /** 构建一个新的 ReActAgent 实例，实例内部记忆只作为临时容器使用。 */
     public ReActAgent build() {
         return ReActAgent.builder()
-                .name("diet_intent_agent")
+                .name("city_intent_agent")
                 .model(mainModel)
-                .sysPrompt(promptLoader.load("diet/prompts/intent.txt"))
+                .sysPrompt(promptLoader.load("city-prompts/intent.txt"))
                 .memory(new InMemoryMemory())
                 .build();
     }

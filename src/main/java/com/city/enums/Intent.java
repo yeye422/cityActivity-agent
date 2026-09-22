@@ -8,10 +8,10 @@ package com.city.enums;
  */
 public enum Intent {
     /** 用户正在请求一个或多个活动推荐，例如“周六想看展览”。 */
-    MEAL_RECOMMENDATION,
+    ACTIVITY_RECOMMENDATION,
 
     /** 用户基于已有推荐修改条件或要求换一批。 */
-    MEAL_ADJUST,
+    ACTIVITY_ADJUST,
 
     /** 用户要求半天或一天的多时段活动规划。 */
     ACTIVITY_PLAN,

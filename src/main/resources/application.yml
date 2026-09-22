@@ -27,7 +27,7 @@ qweather:
   api-key: ${QWEATHER_API_KEY:}
 
 
-diet:
+city:
   prompt:
     version: v11
   rule:
@@ -38,6 +38,7 @@ diet:
     response-model: qwen-turbo
   session:
     max-history-turns: 10
+    max-history-chars: 1200
 logging:
   level:
     com.city: INFO

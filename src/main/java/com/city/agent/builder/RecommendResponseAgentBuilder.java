@@ -15,7 +15,7 @@ public class RecommendResponseAgentBuilder {
     private final PromptLoader promptLoader;
 
     public RecommendResponseAgentBuilder(
-            @Qualifier("DietResponseChatModel") Model responseModel,
+            @Qualifier("CityResponseChatModel") Model responseModel,
             PromptLoader promptLoader
     ) {
         this.responseModel = responseModel;
@@ -24,9 +24,9 @@ public class RecommendResponseAgentBuilder {
 
     public ReActAgent build() {
         return ReActAgent.builder()
-                .name("diet_recommend_response_agent")
+                .name("city_recommend_response_agent")
                 .model(responseModel)
-                .sysPrompt(promptLoader.load("diet/prompts/recommend-response.txt"))
+                .sysPrompt(promptLoader.load("city-prompts/recommend-response.txt"))
                 .memory(new InMemoryMemory())
                 .build();
     }
