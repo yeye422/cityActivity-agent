@@ -41,6 +41,7 @@ import com.city.service.intent.IntentAgentService;
 import com.city.service.intent.IntentReviseService;
 import com.city.service.plan.ActivityPlanService;
 import com.city.service.plan.PlanResponseAgentService;
+import com.city.service.plan.PlanningDecisionFacade;
 import com.city.service.recommend.RecommendResponseAgentService;
 import com.city.service.recommend.RecommendationDecisionFacade;
 import com.city.service.risk.RiskGuardService;
@@ -61,6 +62,7 @@ import com.city.service.workflow.PlanningWorkflow;
 import com.city.service.workflow.RecommendWorkflow;
 import com.city.service.workflow.WorkflowRouter;
 import com.city.service.workflow.WorkflowType;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -93,6 +95,8 @@ public class CityAgentSupervisor {
     private final RiskGuardService riskGuardService;
     private final AgentTraceService agentTraceService;
     private final RecommendationDecisionFacade recommendationDecisionFacade;
+    /** 迁移期可选注入；非 Spring 单测可保持为空并继续验证 legacy planning。 */
+    private PlanningDecisionFacade planningDecisionFacade;
     private final ToolContractRegistry toolContractRegistry = new ToolContractRegistry();
     private final WorkflowRouter workflowRouter = new WorkflowRouter();
     private final WorkerDispatcher workerDispatcher;
@@ -149,6 +153,11 @@ public class CityAgentSupervisor {
         this.recommendWorkflow = new RecommendWorkflow(slotMutationService, clarifyRuleService);
         this.adjustWorkflow = new AdjustWorkflow(slotMutationService, clarifyRuleService);
         this.planningWorkflow = new PlanningWorkflow(slotMutationService, clarifyRuleService, planningWorker);
+    }
+
+    @Autowired
+    void setPlanningDecisionFacade(PlanningDecisionFacade planningDecisionFacade) {
+        this.planningDecisionFacade = planningDecisionFacade;
     }
 
     public ChatResponse chat(Long userId, ChatRequest request) {
@@ -494,6 +503,34 @@ public class CityAgentSupervisor {
                 weather
         );
 
+        if (planningDecisionFacade != null) {
+            var reactResult = planningDecisionFacade.tryPlan(
+                    userInput,
+                    traceId,
+                    state,
+                    planActivityTimes,
+                    weather,
+                    List.of()
+            );
+            if (reactResult.isPresent()) {
+                agentTraceService.recordEvent(
+                        "PLANNING_REACT_MAINLINE_USED",
+                        "PLAN",
+                        traceMap("sourceMode", state.sourceMode(), "planActivityTimes", planActivityTimes),
+                        reactResult.get().recommend()
+                );
+                return completeReactPlan(
+                        sessionId,
+                        userInput,
+                        traceId,
+                        state,
+                        weather,
+                        publicFallbackUsed,
+                        reactResult.get()
+                );
+            }
+        }
+
         PlanningResult planning = dispatchWorker(
                 sessionId,
                 AgentTaskType.MULTI_PERIOD_PLANNING,
@@ -586,6 +623,75 @@ public class CityAgentSupervisor {
         sessionService.appendMessage(sessionId, "assistant", response.speechText(), Intent.ACTIVITY_PLAN.name(), traceId);
         ChatResponse chatResponse = withConversationContext(ChatResponse.answer(
                 sessionId, traceId, response.speechText(), response.displayBlocks(), response.nextAction()), savedState);
+        agentTraceService.recordEvent("RESPONSE_READY", "RESPONSE", savedState, chatResponse);
+        return chatResponse;
+    }
+
+    private ChatResponse completeReactPlan(
+            String sessionId,
+            String userInput,
+            String traceId,
+            SessionState state,
+            WeatherRecommendationContext weather,
+            boolean publicFallbackUsed,
+            RecommendResponseAgentService.Result merged
+    ) {
+        RecommendResult recommend = merged.recommend();
+        agentTraceService.recordEvent(
+                "PLAN_RESULT_BUILT",
+                "PLAN",
+                traceMap("strategy", Intent.ACTIVITY_PLAN.name(), "decisionSource", "REACT_AGENT"),
+                recommend
+        );
+
+        ResponseResult response = merged.response();
+        if (weather.active()) {
+            response = new ResponseResult(
+                    weather.summary() + "\n" + response.speechText(),
+                    response.displayBlocks(),
+                    response.nextAction()
+            );
+        }
+        if (publicFallbackUsed) {
+            response = prependPublicFallbackNotice(response);
+            agentTraceService.recordEvent(
+                    "PUBLIC_FALLBACK_NOTICE_APPLIED",
+                    "RESPONSE",
+                    Map.of("sourceMode", SourceMode.PUBLIC),
+                    response
+            );
+        }
+        agentTraceService.recordEvent("PLAN_RESPONSE_AGENT_RESULT", "RESPONSE", recommend, response);
+        response = applyOutputRiskGuard(userInput, Intent.ACTIVITY_PLAN, response);
+
+        List<Long> lastIds = recommend.recommendations().stream()
+                .map(option -> option.itemId())
+                .toList();
+        String queryKey = recommendationQueryKey(state);
+        SessionState savedState = queryKey.equals(state.recommendationQueryKey())
+                ? state.appendLastRecommendations(lastIds)
+                : state.withLastRecommendations(lastIds);
+        savedState = savedState.withRecommendationQueryKey(queryKey)
+                .withPendingClarifyField(null)
+                .withPendingRelaxationContext(null);
+        sessionStateService.save(savedState);
+        sessionService.appendMessage(
+                sessionId,
+                "assistant",
+                response.speechText(),
+                Intent.ACTIVITY_PLAN.name(),
+                traceId
+        );
+        ChatResponse chatResponse = withConversationContext(
+                ChatResponse.answer(
+                        sessionId,
+                        traceId,
+                        response.speechText(),
+                        response.displayBlocks(),
+                        response.nextAction()
+                ),
+                savedState
+        );
         agentTraceService.recordEvent("RESPONSE_READY", "RESPONSE", savedState, chatResponse);
         return chatResponse;
     }
