@@ -4,7 +4,9 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RegressionGateTest {
     @Test
@@ -21,5 +23,35 @@ class RegressionGateTest {
                 Map.of(), Map.of("multiTurnConsistency", 0.0));
         assertTrue(result.passed());
         assertEquals(-1.0, result.scoreDelta());
+    }
+
+    @Test
+    void reactSuccessDropFailsGate() {
+        RegressionGate.Result result = RegressionGate.evaluate(82.0, 82.0,
+                Map.of("recommendationReactSuccessRate", 0.98),
+                Map.of("recommendationReactSuccessRate", 0.90));
+
+        assertFalse(result.passed());
+        assertEquals(-0.08, result.metricDeltas().get("recommendationReactSuccessRate"));
+    }
+
+    @Test
+    void reactFallbackIncreaseFailsGate() {
+        RegressionGate.Result result = RegressionGate.evaluate(82.0, 82.0,
+                Map.of("reactFallbackRate", 0.01),
+                Map.of("reactFallbackRate", 0.05));
+
+        assertFalse(result.passed());
+        assertEquals(0.04, result.metricDeltas().get("reactFallbackRate"));
+    }
+
+    @Test
+    void toolCallIncreaseIsObservedButDoesNotFailGate() {
+        RegressionGate.Result result = RegressionGate.evaluate(82.0, 82.0,
+                Map.of("reactToolCallCount", 2.0),
+                Map.of("reactToolCallCount", 4.0));
+
+        assertTrue(result.passed());
+        assertEquals(2.0, result.metricDeltas().get("reactToolCallCount"));
     }
 }
