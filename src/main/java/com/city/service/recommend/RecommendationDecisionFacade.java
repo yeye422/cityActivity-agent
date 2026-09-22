@@ -16,7 +16,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
-/** RecommendationAgent 主链入口；迁移阶段仍保留 feature flag/fallback 兼容。 */
+/** RecommendationAgent 的业务入口。 */
 @Service
 public class RecommendationDecisionFacade {
 
@@ -24,26 +24,53 @@ public class RecommendationDecisionFacade {
     private final RecommendationWorker recommendationWorker;
     private final RecommendationResponseGeneratorService responseGenerator;
     private final AgentTraceService traceService;
-    private final boolean enabled;
+    private final boolean legacyFeatureEnabled;
 
     public RecommendationDecisionFacade(
             SemanticContextBuilder semanticContextBuilder,
             RecommendationWorker recommendationWorker,
             RecommendationResponseGeneratorService responseGenerator,
             AgentTraceService traceService,
-            @Value("${city.agent.recommendation-react.enabled:false}") boolean enabled
+            @Value("${city.agent.recommendation-react.enabled:false}") boolean legacyFeatureEnabled
     ) {
         this.semanticContextBuilder = Objects.requireNonNull(semanticContextBuilder, "semanticContextBuilder");
         this.recommendationWorker = Objects.requireNonNull(recommendationWorker, "recommendationWorker");
         this.responseGenerator = Objects.requireNonNull(responseGenerator, "responseGenerator");
         this.traceService = Objects.requireNonNull(traceService, "traceService");
-        this.enabled = enabled;
+        this.legacyFeatureEnabled = legacyFeatureEnabled;
     }
 
-    /**
-     * 过渡兼容：Supervisor 仍使用旧 Result 类型；新 ResponseGenerator 已完全独立。
-     * 最终薄 Supervisor 切换后会移除此适配并直接返回 DecisionResponseResult。
-     */
+    /** 最终主链 API：始终执行 RecommendationAgent，异常由上层降级策略处理。 */
+    public DecisionResponseResult recommend(
+            String userInput,
+            String traceId,
+            SessionState state,
+            List<Long> excludeActivityIds,
+            WeatherRecommendationContext weather
+    ) {
+        Objects.requireNonNull(state, "state");
+        List<Long> safeExcludeIds = excludeActivityIds == null ? List.of() : List.copyOf(excludeActivityIds);
+        SessionState decisionState = state.withLastRecommendations(safeExcludeIds);
+        SemanticContext semanticContext = semanticContextBuilder.build(decisionState);
+        VerifiedRequestContext verifiedContext = VerifiedRequestContext.from(
+                decisionState, traceId, semanticContext, weather);
+
+        traceService.recordEvent("RECOMMENDATION_REACT_ROUTE_SELECTED", "RECOMMEND", state, semanticContext);
+        try {
+            RecommendationExecutionResult execution = recommendationWorker.execute(userInput, verifiedContext);
+            DecisionResponseResult generated = responseGenerator.generate(
+                    state.sessionId(), userInput, state.sourceMode(), state.slots(), execution, weather);
+            traceService.recordEvent(
+                    "RECOMMENDATION_REACT_COMPLETED", "RECOMMEND", execution.decision(), generated.recommend());
+            return generated;
+        } catch (RuntimeException error) {
+            traceService.recordError("RECOMMENDATION_REACT_FAILED", "RECOMMEND", semanticContext, error);
+            throw error;
+        }
+    }
+
+    /** 仅供旧 Supervisor 迁移期兼容；最终替换后删除。 */
+    @Deprecated
     public Optional<RecommendResponseAgentService.Result> tryRecommend(
             String userInput,
             String traceId,
@@ -51,32 +78,12 @@ public class RecommendationDecisionFacade {
             List<Long> excludeActivityIds,
             WeatherRecommendationContext weather
     ) {
-        if (!enabled || state == null) {
-            return Optional.empty();
-        }
-
-        List<Long> safeExcludeIds = excludeActivityIds == null ? List.of() : List.copyOf(excludeActivityIds);
-        SessionState decisionState = state.withLastRecommendations(safeExcludeIds);
-        SemanticContext semanticContext = semanticContextBuilder.build(decisionState);
-        VerifiedRequestContext verifiedContext = VerifiedRequestContext.from(
-                decisionState,
-                traceId,
-                semanticContext,
-                weather
-        );
-
-        traceService.recordEvent("RECOMMENDATION_REACT_ROUTE_SELECTED", "RECOMMEND", state, semanticContext);
-
+        if (!legacyFeatureEnabled || state == null) return Optional.empty();
         try {
-            RecommendationExecutionResult execution = recommendationWorker.execute(userInput, verifiedContext);
-            DecisionResponseResult generated = responseGenerator.generate(
-                    state.sessionId(), userInput, state.sourceMode(), state.slots(), execution, weather);
-            traceService.recordEvent(
-                    "RECOMMENDATION_REACT_COMPLETED", "RECOMMEND", execution.decision(), generated.recommend());
-            return Optional.of(new RecommendResponseAgentService.Result(
-                    generated.recommend(), generated.response()));
+            DecisionResponseResult result = recommend(userInput, traceId, state, excludeActivityIds, weather);
+            return Optional.of(new RecommendResponseAgentService.Result(result.recommend(), result.response()));
         } catch (RuntimeException error) {
-            traceService.recordError("RECOMMENDATION_REACT_FALLBACK", "RECOMMEND", semanticContext, error);
+            traceService.recordError("RECOMMENDATION_REACT_FALLBACK", "RECOMMEND", state, error);
             return Optional.empty();
         }
     }
