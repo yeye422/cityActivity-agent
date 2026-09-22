@@ -35,9 +35,7 @@ class PlanningWorkerTest {
         ActivitySessionResponse session = session(101L, 1L, 14, 15, "80");
         ActivityPlanService.PlannedActivity planned = new ActivityPlanService.PlannedActivity(
                 "14:00-16:00", null, SlotBundle.empty(), List.of(item), Map.of(1L, List.of(session)), null);
-        PlanningResult planning = new PlanningResult(
-                List.of(planned),
-                new AgentResult(AgentResult.Status.COMPLETED, "ok", Set.of(), Set.of(), List.of(), List.of(), Map.of()));
+        PlanningResult planning = planning(List.of(planned));
         when(planService.planWithEvidence(any(), any(), any(), any(), any(), any(), any())).thenReturn(planning);
 
         PlanningExecutionResult result = worker.planAndSolve(
@@ -68,9 +66,7 @@ class PlanningWorkerTest {
         ActivityPlanService.PlannedActivity evening = new ActivityPlanService.PlannedActivity(
                 "18:00-20:00", null, SlotBundle.empty(), List.of(second),
                 Map.of(3L, List.of(secondSession)), null);
-        PlanningResult planning = new PlanningResult(
-                List.of(afternoon, evening),
-                new AgentResult(AgentResult.Status.COMPLETED, "ok", Set.of(), Set.of(), List.of(), List.of(), Map.of()));
+        PlanningResult planning = planning(List.of(afternoon, evening));
         PlanCandidate approved = new PlanCandidate(
                 List.of(new PlanCandidate.Item("14:00-16:00", first, firstSession)),
                 new BigDecimal("20"));
@@ -86,6 +82,29 @@ class PlanningWorkerTest {
     }
 
     @Test
+    void livePlanEntryShouldExposeOnlySolverApprovedCandidate() {
+        ActivityPlanService planService = mock(ActivityPlanService.class);
+        PlanningWorker worker = new PlanningWorker(planService);
+        ActivityItem cheaper = activity(1L, "候选1");
+        ActivityItem expensive = activity(2L, "候选2");
+        ActivitySessionResponse cheaperSession = session(101L, 1L, 14, 15, "20");
+        ActivitySessionResponse expensiveSession = session(201L, 2L, 14, 15, "30");
+        ActivityPlanService.PlannedActivity window = new ActivityPlanService.PlannedActivity(
+                "14:00-16:00", null, SlotBundle.empty(), List.of(cheaper, expensive),
+                Map.of(1L, List.of(cheaperSession), 2L, List.of(expensiveSession)), null);
+        when(planService.planWithEvidence(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(planning(List.of(window)));
+
+        PlanningResult liveResult = worker.plan(
+                SourceMode.PUBLIC, 1L, SlotBundle.empty(), SlotBundle.empty(),
+                List.of("14:00-16:00"), null, WeatherRecommendationContext.inactive());
+
+        assertEquals(1, liveResult.plans().size());
+        assertEquals(List.of(1L), liveResult.plans().getFirst().candidates().stream().map(ActivityItem::id).toList());
+        assertEquals(101L, liveResult.plans().getFirst().selectedSession().sessionId());
+    }
+
+    @Test
     void shouldOnlyCreateHardBudgetForUnambiguousValue() {
         PlanningWorker worker = new PlanningWorker(mock(ActivityPlanService.class));
 
@@ -98,6 +117,12 @@ class PlanningWorkerTest {
         assertNull(worker.explicitMaxBudget(new SlotBundle(
                 List.of(), List.of(), List.of(), List.of(), List.of("100元内", "200元内"),
                 List.of(), List.of(), List.of(), List.of())));
+    }
+
+    private PlanningResult planning(List<ActivityPlanService.PlannedActivity> plans) {
+        return new PlanningResult(
+                plans,
+                new AgentResult(AgentResult.Status.COMPLETED, "ok", Set.of(), Set.of(), List.of(), List.of(), Map.of()));
     }
 
     private ActivityItem activity(Long id, String name) {
