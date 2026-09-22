@@ -10,11 +10,14 @@ import com.city.model.WeatherRecommendationContext;
 import com.city.model.agent.AgentResult;
 import com.city.model.agent.EvidenceRef;
 import com.city.model.agent.PlanningResult;
+import com.city.model.retrieval.RetrievalRequest;
+import com.city.model.retrieval.RetrievalResult;
 import com.city.service.agent.EvidenceRefFactory;
+import com.city.service.activity.ActivityDiversityService;
 import com.city.service.activity.ActivityRankService;
 import com.city.service.activity.ActivitySearchService;
 import com.city.service.activity.ActivitySessionService;
-import com.city.service.worker.RetrievalWorker;
+import com.city.service.retrieval.RetrievalPipeline;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -30,14 +33,14 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 多时段规划服务：把用户可用时间拆成细粒度候选发现窗口，
- * 再按窗口组织 TopK 候选和具体场次证据。
- * 候选检索与排序统一委托 RetrievalWorker，Java PlanningSolver 负责最终硬约束求解。
+ * 多时段规划候选发现服务。
+ *
+ * <p>窗口内候选统一通过 RetrievalPipeline 完成硬过滤、排序和多样性控制；
+ * 本服务只补充具体 OPEN 场次和规划证据，最终组合合法性仍由 PlanningSolver 判定。</p>
  */
 @Service
 public class ActivityPlanService {
 
-    /** 细粒度候选发现窗口；窗口不是活动耗时。 */
     private static final List<PlanWindow> PLAN_WINDOWS = List.of(
             new PlanWindow("08:00-10:00", LocalTime.of(8, 0), LocalTime.of(10, 0)),
             new PlanWindow("10:00-12:00", LocalTime.of(10, 0), LocalTime.of(12, 0)),
@@ -50,30 +53,29 @@ public class ActivityPlanService {
 
     private static final int PLAN_CANDIDATE_LIMIT = 3;
 
-    private final RetrievalWorker retrievalWorker;
+    private final RetrievalPipeline retrievalPipeline;
     private final ActivitySessionService activitySessionService;
     private final EvidenceRefFactory evidenceRefFactory = new EvidenceRefFactory();
 
     @Autowired
-    public ActivityPlanService(RetrievalWorker retrievalWorker,
+    public ActivityPlanService(RetrievalPipeline retrievalPipeline,
                                ActivitySessionService activitySessionService) {
-        this.retrievalWorker = retrievalWorker;
+        this.retrievalPipeline = retrievalPipeline;
         this.activitySessionService = activitySessionService;
     }
 
-    /**
-     * 保留测试和旧调用方的兼容构造方式；生产运行时由 Spring 注入统一 RetrievalWorker。
-     */
+    /** 兼容已有纯单测；生产运行时直接注入统一 RetrievalPipeline。 */
     public ActivityPlanService(ActivitySearchService activitySearchService,
                                ActivityRankService activityRankService,
                                ActivitySessionService activitySessionService) {
-        this(new RetrievalWorker(activitySearchService, activityRankService), activitySessionService);
+        this(new RetrievalPipeline(
+                        activitySearchService,
+                        activityRankService,
+                        new ActivityDiversityService()),
+                activitySessionService);
     }
 
-    /**
-     * 例如 12:00~23:00 会拆成 12-14、14-16、16-18、18-20、20-23，
-     * 给 Solver 更大的合法组合空间。
-     */
+    /** 旧调用兼容；最终窗口解析已迁到 TimeWindowResolver。 */
     public List<String> resolveActivityTimes(SlotBundle slots, TimeConstraint timeConstraint) {
         return defaultActivityTimes(timeConstraint);
     }
@@ -115,26 +117,13 @@ public class ActivityPlanService {
         return windows.stream().map(window -> safePrefix + window.label()).toList();
     }
 
-    /** 复制完整九维共享槽位；规划窗口通过 TimeConstraint 单独处理。 */
     public SlotBundle slotsForActivityTime(SlotBundle base, String activityTime) {
         SlotBundle safe = base == null ? SlotBundle.empty() : base;
         return new SlotBundle(
-                safe.city(),
-                safe.location(),
-                safe.experienceGoal(),
-                safe.companion(),
-                safe.budget(),
-                safe.activityType(),
-                safe.style(),
-                safe.duration(),
-                safe.feature()
-        );
+                safe.city(), safe.location(), safe.experienceGoal(), safe.companion(), safe.budget(),
+                safe.activityType(), safe.style(), safe.duration(), safe.feature());
     }
 
-    /**
-     * 按细窗口通过 RetrievalWorker 独立检索/排序并保留 Top3 候选。
-     * 有明确日期时，同时加载候选在该窗口内的具体 OPEN 场次，交给 PlanningSolver 参与组合。
-     */
     public List<PlannedActivity> planActivities(SourceMode sourceMode,
                                                  Long userId,
                                                  SlotBundle baseSlots,
@@ -149,7 +138,6 @@ public class ActivityPlanService {
         WeatherRecommendationContext safeWeather = weather == null
                 ? WeatherRecommendationContext.inactive()
                 : weather;
-        // 只有三个及以上窗口才并行，避免简单任务承担线程切换成本；有序流保证结果仍按窗口顺序返回。
         List<PlannedActivity> discovered = (targets.size() >= 3
                 ? targets.parallelStream()
                 : targets.stream())
@@ -158,7 +146,6 @@ public class ActivityPlanService {
                         activityTime, timeConstraint, safeWeather))
                 .toList();
 
-        // 并行检索结束后由 Java 单线程统一选择 fallback，保持去重和确定性。
         List<PlannedActivity> planned = new ArrayList<>();
         Set<Long> fallbackUsedIds = new LinkedHashSet<>();
         for (PlannedActivity window : discovered) {
@@ -185,15 +172,18 @@ public class ActivityPlanService {
         TimeConstraint targetTimeConstraint = timeConstraintForActivityTime(timeConstraint, activityTime);
         ActivitySearchRequest request = new ActivitySearchRequest(
                 sourceMode, userId, querySlots, List.of(), targetTimeConstraint, excludedSlots);
-        List<ActivityItem> topCandidates = retrievalWorker.retrieveRanked(
-                request, weather, PLAN_CANDIDATE_LIMIT);
+        RetrievalResult retrieval = retrievalPipeline.retrieve(new RetrievalRequest(
+                request,
+                "",
+                weather,
+                PLAN_CANDIDATE_LIMIT));
+        List<ActivityItem> topCandidates = retrieval.finalCandidates();
         Map<Long, List<ActivitySessionResponse>> sessionsByActivityId = loadPlanningSessions(
                 topCandidates, targetTimeConstraint);
         return new PlannedActivity(
                 activityTime, null, querySlots, topCandidates, sessionsByActivityId, null);
     }
 
-    /** 规划候选、场次、场地和天气证据作为一个结构化 Worker 结果返回。 */
     public PlanningResult planWithEvidence(SourceMode sourceMode,
                                            Long userId,
                                            SlotBundle baseSlots,
@@ -239,7 +229,6 @@ public class ActivityPlanService {
         return new PlanningResult(plans, result);
     }
 
-    /** 只有日期明确时，具体场次才具有可执行含义；没有日期时不向 Agent 虚构/泛化场次。 */
     private Map<Long, List<ActivitySessionResponse>> loadPlanningSessions(
             List<ActivityItem> candidates,
             TimeConstraint targetTimeConstraint) {
@@ -332,12 +321,8 @@ public class ActivityPlanService {
         return start;
     }
 
-    private record PlanWindow(String label, LocalTime start, LocalTime end) {}
+    private record PlanWindow(String label, LocalTime start, LocalTime end) { }
 
-    /**
-     * 单窗口规划结果：
-     * candidates 是合法 TopK；sessionsByActivityId 是具体可参加场次；selectedSession 是 Java fallback/最终选择使用的场次。
-     */
     public record PlannedActivity(
             String period,
             ActivityItem activity,
