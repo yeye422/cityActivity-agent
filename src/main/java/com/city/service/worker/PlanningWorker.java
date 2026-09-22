@@ -1,6 +1,7 @@
 package com.city.service.worker;
 
 import com.city.enums.SourceMode;
+import com.city.model.PlanCandidate;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
 import com.city.model.WeatherRecommendationContext;
@@ -10,7 +11,9 @@ import com.city.service.plan.ActivityPlanService;
 import com.city.service.plan.PlanningSolver;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -64,6 +67,45 @@ public final class PlanningWorker {
                 planning,
                 planningSolver.solve(planning.plans(), explicitMaxBudget(slots))
         );
+    }
+
+    /**
+     * 过渡期响应边界：只把 Solver 排名第一的合法 PlanCandidate 暴露给旧 PlanResponseAgent。
+     * 每个原始窗口仍保留；Solver 选择的窗口只暴露一个 activity/session，未选择窗口暴露为空候选，
+     * 因此响应模型不能再跨窗口重新拼接未通过硬约束校验的活动。
+     */
+    public List<ActivityPlanService.PlannedActivity> responsePlans(PlanningExecutionResult execution) {
+        if (execution == null || execution.planning() == null
+                || execution.planCandidates() == null || execution.planCandidates().isEmpty()) {
+            return List.of();
+        }
+
+        PlanCandidate selected = execution.planCandidates().getFirst();
+        List<ActivityPlanService.PlannedActivity> result = new ArrayList<>();
+        for (ActivityPlanService.PlannedActivity source : execution.planning().plans()) {
+            if (source == null) continue;
+            PlanCandidate.Item item = selected.items().stream()
+                    .filter(candidate -> source.period().equals(candidate.period()))
+                    .findFirst()
+                    .orElse(null);
+            if (item == null) {
+                result.add(new ActivityPlanService.PlannedActivity(
+                        source.period(), null, source.querySlots(), List.of(), Map.of(), null));
+                continue;
+            }
+
+            Map<Long, List<com.city.model.ActivitySessionResponse>> sessions = item.session() == null
+                    ? Map.of()
+                    : Map.of(item.activity().id(), List.of(item.session()));
+            result.add(new ActivityPlanService.PlannedActivity(
+                    source.period(),
+                    item.activity(),
+                    source.querySlots(),
+                    List.of(item.activity()),
+                    sessions,
+                    item.session()));
+        }
+        return List.copyOf(result);
     }
 
     /**
