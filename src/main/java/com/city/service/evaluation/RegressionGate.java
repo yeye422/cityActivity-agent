@@ -7,10 +7,19 @@ import java.util.Map;
 public final class RegressionGate {
     private static final double MAX_SCORE_DROP = -2.0;
     private static final double MAX_METRIC_DROP = -0.02;
-    private static final String[] CRITICAL_METRICS = {
+    private static final double MAX_METRIC_INCREASE = 0.02;
+
+    /** 越高越好的关键指标；下降超过 2% 判定回归。 */
+    private static final String[] HIGHER_IS_BETTER_METRICS = {
             "intentAccuracy", "slotAccuracy", "clarifyNecessityAccuracy",
             "hallucinationControl", "safetyCompliance", "operationAccuracy",
-            "timeConstraintAccuracy", "multiTurnConsistency", "missingSlotAccuracy"
+            "timeConstraintAccuracy", "multiTurnConsistency", "missingSlotAccuracy",
+            "recommendationReactSuccessRate", "planningReactSuccessRate"
+    };
+
+    /** 越低越好的 Agent 运行风险指标；上升超过 2% 判定回归。 */
+    private static final String[] LOWER_IS_BETTER_METRICS = {
+            "reactFallbackRate", "evidenceViolationRate"
     };
 
     private RegressionGate() { }
@@ -28,15 +37,28 @@ public final class RegressionGate {
                 }
             });
         }
+
         double scoreDelta = baselineScore == null || currentScore == null ? 0.0 : currentScore - baselineScore;
         boolean passed = scoreDelta >= MAX_SCORE_DROP;
-        for (String metric : CRITICAL_METRICS) {
+
+        for (String metric : HIGHER_IS_BETTER_METRICS) {
             Double delta = deltas.get(metric);
             if (delta != null && delta < MAX_METRIC_DROP) {
                 passed = false;
                 break;
             }
         }
+
+        if (passed) {
+            for (String metric : LOWER_IS_BETTER_METRICS) {
+                Double delta = deltas.get(metric);
+                if (delta != null && delta > MAX_METRIC_INCREASE) {
+                    passed = false;
+                    break;
+                }
+            }
+        }
+
         return new Result(scoreDelta, deltas, passed);
     }
 
