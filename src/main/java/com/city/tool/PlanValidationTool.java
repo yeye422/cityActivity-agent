@@ -32,6 +32,7 @@ public class PlanValidationTool {
             PlanningToolContext planningContext
     ) {
         Objects.requireNonNull(planningContext, "planningContext");
+        planningContext.evidenceRegistry().beginValidation();
         return validationService.validate(
                 proposal,
                 planningContext.evidenceRegistry(),
