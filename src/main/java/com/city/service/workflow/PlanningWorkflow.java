@@ -10,6 +10,7 @@ import com.city.model.SlotMutation;
 import com.city.model.context.SemanticContext;
 import com.city.service.clarify.ClarifyRuleService;
 import com.city.service.context.SemanticContextBuilder;
+import com.city.service.plan.TimeWindowResolver;
 import com.city.service.slot.SlotMutationService;
 import com.city.service.worker.PlanningWorker;
 
@@ -23,14 +24,25 @@ import java.util.Objects;
 public final class PlanningWorkflow {
     private final SlotMutationService slotMutationService;
     private final ClarifyRuleService clarifyRuleService;
-    private final PlanningWorker planningWorker;
+    private final TimeWindowResolver timeWindowResolver;
 
     public PlanningWorkflow(SlotMutationService slotMutationService,
                             ClarifyRuleService clarifyRuleService,
-                            PlanningWorker planningWorker) {
+                            TimeWindowResolver timeWindowResolver) {
         this.slotMutationService = Objects.requireNonNull(slotMutationService, "slotMutationService");
         this.clarifyRuleService = Objects.requireNonNull(clarifyRuleService, "clarifyRuleService");
-        this.planningWorker = Objects.requireNonNull(planningWorker, "planningWorker");
+        this.timeWindowResolver = Objects.requireNonNull(timeWindowResolver, "timeWindowResolver");
+    }
+
+    /**
+     * 迁移兼容构造器。旧 Supervisor 尚未替换前仍传入 PlanningWorker，
+     * 但 Workflow 已不再读取或依赖它的行为。
+     */
+    @Deprecated
+    public PlanningWorkflow(SlotMutationService slotMutationService,
+                            ClarifyRuleService clarifyRuleService,
+                            PlanningWorker ignoredPlanningWorker) {
+        this(slotMutationService, clarifyRuleService, new TimeWindowResolver());
     }
 
     public Preparation prepare(SessionState state, IntentResult intent) {
@@ -54,7 +66,7 @@ public final class PlanningWorkflow {
         workingState = workingState.withSlots(planSlots)
                 .withPendingClarifyField(null)
                 .withPhase(SessionPhase.PLAN);
-        List<String> windows = planningWorker.resolveWindows(planSlots, workingState.timeConstraint());
+        List<String> windows = timeWindowResolver.resolve(planSlots, workingState.timeConstraint());
         return new Preparation(workingState, mutation, null, windows);
     }
 
