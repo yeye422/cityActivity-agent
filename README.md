@@ -46,6 +46,7 @@ mysql < database_init_final.sql
 mysql city_db < src/main/resources/db/evaluation_loop_migration.sql
 mysql city_db < src/main/resources/db/activity_venue_session_migration.sql
 mysql city_db < src/main/resources/db/agent_memory_migration.sql
+mysql city_db < src/main/resources/db/agent_ui_event_migration.sql
 mysql city_db < src/main/resources/db/city_seed.sql
 # 可选：补充更多带具体场次的演示活动
 mysql city_db < src/main/resources/db/activity_catalog_seed.sql
@@ -54,13 +55,14 @@ mysql city_db < src/main/resources/db/activity_catalog_seed.sql
 `database_init_final.sql` 已直接使用九维槽位列和 `duration_minutes`。
 `activity_venue_session_migration.sql` 会创建 `venue` 和 `activity_session`；只有执行该迁移并存在目标日期的 OPEN 场次时，具体 `sessionId/startAt/endAt` 才会作为 PlanAgent 的硬规划依据。
 `agent_memory_migration.sql` 会创建带版本号和软删除标记的长期偏好表。偏好只作为排序软信号，本轮明确条件优先。
-需要回滚该能力时，先备份偏好数据，再执行 `src/main/resources/db/rollback/agent_memory_rollback.sql`。
+`agent_ui_event_migration.sql` 会创建可恢复 SSE 事件日志；未执行该迁移时聊天主链仍可运行，但 SSE 重连只能使用当前进程内的热缓存，应用重启后无法补发旧事件。
+需要回滚长期记忆能力时，先备份偏好数据，再执行 `src/main/resources/db/rollback/agent_memory_rollback.sql`。
 
-完整的分阶段改造清单见 `docs/architecture/cityflow-full-refactor-plan.md`，冻结基线见 `docs/baseline/p0-baseline-2026-09-22.md`。
+完整的 AgentScope ReAct 改造计划见 `docs/architecture/cityflow-agentscope-refactor-plan.md`，旧版完整重构计划见 `docs/architecture/cityflow-full-refactor-plan.md`，冻结基线见 `docs/baseline/p0-baseline-2026-09-22.md`。
 
 ## Agent 执行与实时事件
 
-所有模型调用统一经过 Harness：限制单轮调用次数、阻断重复输入循环，并按 Agent 维护 CLOSED / OPEN / HALF_OPEN 熔断状态。失败会进入既有 Java Parser 或模板降级路径，Trace 同时记录故障位置。
+AgentScope ReAct Agent 负责 Reason -> Tool -> Observe 循环；CityFlow Guard 负责 Tool 白名单、调用预算、重复调用和事实校验。旧链模型调用仍保留 Harness 熔断与降级能力。
 
 前端可先订阅会话事件，再发起聊天请求：
 
@@ -69,7 +71,15 @@ GET  /api/v1/city/events/{sessionId}       # text/event-stream
 POST /api/v1/city/chat
 ```
 
-事件协议固定为 `RUN_STARTED / STEP_STARTED / STEP_COMPLETED / MESSAGE_COMPLETE / ERROR / RUN_FINISHED` 六类，并按 `userId + sessionId` 隔离。
+事件协议固定为 `RUN_STARTED / STEP_STARTED / STEP_COMPLETED / MESSAGE_COMPLETE / ERROR / RUN_FINISHED` 六类，并按 `userId + sessionId` 隔离。每个 SSE 事件 ID 使用 `traceId:eventSeq`。
+
+发生刷新或网络断线后，客户端重新订阅时应携带标准 SSE 请求头：
+
+```text
+Last-Event-ID: trace_xxx:12
+```
+
+服务端优先从 `agent_ui_event` 持久化日志补发该游标之后的事件，再继续推送 live event；数据库日志暂不可用时退化到当前进程最近 256 条事件的热缓存。事件重放只读取日志，不会重新执行 LLM、Retrieval Tool 或 PlanningSolver，SSE 断开也不会取消正在执行的 Run。
 
 长期偏好采用显式写入和删除，避免模型自行篡改用户画像：
 
@@ -84,6 +94,7 @@ DELETE /api/v1/city/preferences/{id}?version={version}
 ```bash
 mysql city_db < src/main/resources/db/activity_slot_model_v3.sql
 mysql city_db < src/main/resources/db/activity_venue_session_migration.sql
+mysql city_db < src/main/resources/db/agent_ui_event_migration.sql
 ```
 
 `activity_slot_model_v3.sql` 会完成：
@@ -108,7 +119,15 @@ POST /api/v1/city/evaluations/regression
 Body: {"includeLlmJudge":false,"limit":35}
 ```
 
-该接口读取 `src/main/resources/evaluation/city-dialogue-eval-set.json`（当前 35 条，包含 `messages[]` 多轮用例），自动执行用例、标注本次 Trace、生成意图/槽位/澄清/缺失槽位/操作/时间/多轮一致性等评估报告，并将评估运行保存到 `evaluation_run`。Baseline 取同一评测集版本下最近一次通过的运行，避免失败运行污染后续基线；回归门禁会检查总分以及关键指标（含操作、时间、多轮一致性）是否回退。
+默认配置下推荐/规划 ReAct 灰度开关关闭。需要专门验证新 ReAct 主链时，可使用：
+
+```bash
+SPRING_PROFILES_ACTIVE=react-eval mvn spring-boot:run
+```
+
+`application-react-eval.yml` 会同时开启 RecommendationAgent 和 PlanningAgent，其余数据库、模型和外部服务配置仍继承默认配置。固定回归会继续写入现有 Evaluation/Regression Gate，并额外统计 ReAct success/fallback、Tool Call、Re-Retrieval、Plan Validation/Repair 和 Evidence Violation 等运行指标。
+
+固定回归接口读取 `src/main/resources/evaluation/city-dialogue-eval-set.json`（当前 35 条，包含 `messages[]` 多轮用例），自动执行用例、标注本次 Trace、生成意图/槽位/澄清/缺失槽位/操作/时间/多轮一致性等评估报告，并将评估运行保存到 `evaluation_run`。Baseline 取同一评测集版本和指纹下已提升的基线运行；回归门禁会检查总分以及关键指标是否回退。
 
 线上高价值失败样本可在人工标注后通过 `POST /api/v1/city/evaluations/cases/promote` 晋级为数据库评测用例：请求体传入 `traceId` 和完整 `caseDefinition`（至少包含 `id`、`message` 或 `messages` 及 expected 标签）。下一次回归会自动合并固定 JSON 评测集与 `evaluation_case` 表中的晋级样本。
 
@@ -126,17 +145,9 @@ Body: {"includeLlmJudge":false,"limit":35}
 20:00-23:00
 ```
 
-这些窗口只是候选召回锚点，不是活动时长。PlanAgent 会同时看到：
+这些窗口只是候选召回锚点，不是活动时长。PlanningAgent 会同时使用真实场次、活动预计耗时和服务器硬约束，并通过 Java PlanningSolver 做最终确定性校验。
 
-```text
-具体场次 startAt/endAt（如果有）
-明确 durationMinutes（如果有）
-duration 标签推导的预计耗时（无明确分钟数时）
-活动级 validStartTime/validEndTime 可安排窗口
-九维槽位与 matchScore
-```
-
-优先级是：具体场次 > 明确耗时 > 标签估算 > 类型软估算。Java 最后验证 activityId、sessionId、重复活动和确定性时间冲突。
+优先级是：具体场次 > 明确耗时 > 标签估算 > 类型软估算。Java 最后验证 activityId、sessionId、重复活动、预算、交通证据和确定性时间冲突。
 
 ## 本地运行
 
@@ -150,6 +161,12 @@ mvn spring-boot:run
 
 ```text
 src/main/resources/application.yml
+```
+
+ReAct 专项评测配置：
+
+```text
+src/main/resources/application-react-eval.yml
 ```
 
 ## 项目结构
