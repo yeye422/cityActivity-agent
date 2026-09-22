@@ -22,6 +22,7 @@ public class FeedbackService {
         }
         feedbackMapper.insert(
                 userId,
+                request.traceId(),
                 request.sessionId(),
                 request.itemId(),
                 request.action(),

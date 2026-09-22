@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.city.mapper.EvaluationCaseMapper">
+ <insert id="insert" parameterType="com.city.model.EvaluationCaseRow">INSERT INTO evaluation_case (user_id,case_id,eval_set_version,case_json,source_trace_id,created_by,created_at) VALUES (#{userId},#{caseId},#{evalSetVersion},#{caseJson},#{sourceTraceId},#{createdBy},NOW())</insert>
+ <select id="findBySetVersion" resultType="com.city.model.EvaluationCaseRow">SELECT id,user_id,case_id,eval_set_version,case_json,source_trace_id,created_by,created_at FROM evaluation_case WHERE user_id=#{userId} AND eval_set_version=#{version} ORDER BY id ASC</select>
+</mapper>

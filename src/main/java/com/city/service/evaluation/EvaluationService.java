@@ -29,9 +29,11 @@ import java.util.stream.Collectors;
 public class EvaluationService {
     private static final int DEFAULT_LIMIT = 1000;
     private static final Set<String> SLOT_NAMES = Set.of(
-            "city", "location", "activityTime", "mood", "scene", "budget", "activityType", "style", "duration"
+            "city", "location", "experienceGoal", "companion", "budget", "activityType", "style", "duration", "feature"
     );
-    private static final List<String> FORBIDDEN_PHRASES = List.of("治好", "治疗", "保证", "一定能瘦", "根治", "替代医生");
+    private static final List<String> FORBIDDEN_PHRASES = List.of(
+            "保证安全", "绝对安全", "一定不会出事", "无风险", "违法进入", "翻越围栏", "酒后驾驶"
+    );
 
     private final AgentTraceService agentTraceService;
     private final FeedbackMapper feedbackMapper;
@@ -60,7 +62,7 @@ public class EvaluationService {
         boolean includeJudge = Boolean.TRUE.equals(request.includeLlmJudge());
         // limit 为空时使用默认上限，避免后台一次评估拉取过多 trace。
         int limit = request.limit() == null ? DEFAULT_LIMIT : request.limit();
-        // 从 diet_request_trace 按用户和时间范围读取待评估 trace。
+        // 从 city_request_trace 按用户和时间范围读取待评估 trace。
         List<RequestTraceRow> traces = agentTraceService.findByTimeRange(userId, request.startAt(), request.endAt(), false, limit);
         // 按 trace 涉及的 sessionId 一次性读取用户反馈，减少后续逐条查询。
         Map<String, List<FeedbackRow>> feedbackBySession = loadFeedback(userId, request.startAt(), request.endAt(), traces);
@@ -68,16 +70,42 @@ public class EvaluationService {
         // 遍历每条 trace，结合对应 session 的反馈，生成单条 TraceEvaluationResult。
         List<TraceEvaluationResult> results = traces.stream()
                 // 对单条 trace 执行规则解析、Judge 评分和总分汇总。
-                .map(trace -> evaluateTrace(trace, feedbackBySession.getOrDefault(trace.getSessionId(), List.of()), includeJudge))
+                .map(trace -> evaluateTrace(trace, feedbackFor(trace, feedbackBySession), includeJudge))
                 // 收集成列表，后续用于区间聚合。
                 .toList();
 
         // 将区间元信息、整体平均值和单条明细组装为最终报告。
+        return buildReport(request.startAt(), request.endAt(), traces, results);
+    }
+
+    /** 仅评估指定 Trace，供固定评测集回归运行，避免时间窗口混入其他请求。 */
+    public EvaluationReport evaluateTraceIds(Long userId, List<String> traceIds, Boolean includeLlmJudge) {
+        List<RequestTraceRow> traces = agentTraceService.findByTraceIds(userId, traceIds);
+        if (traces.isEmpty()) {
+            throw new CityException("没有找到可评估的 Trace");
+        }
+        Map<String, List<FeedbackRow>> feedbackBySession = loadFeedback(
+                userId,
+                traces.stream().map(RequestTraceRow::getCreatedAt).filter(Objects::nonNull).min(LocalDateTime::compareTo).orElse(LocalDateTime.MIN),
+                traces.stream().map(RequestTraceRow::getCreatedAt).filter(Objects::nonNull).max(LocalDateTime::compareTo).map(t -> t.plusNanos(1)).orElse(LocalDateTime.MAX),
+                traces
+        );
+        boolean judge = Boolean.TRUE.equals(includeLlmJudge);
+        List<TraceEvaluationResult> results = traces.stream()
+                .map(trace -> evaluateTrace(trace, feedbackFor(trace, feedbackBySession), judge))
+                .toList();
+        LocalDateTime start = traces.stream().map(RequestTraceRow::getCreatedAt).filter(Objects::nonNull).min(LocalDateTime::compareTo).orElse(LocalDateTime.MIN);
+        LocalDateTime end = traces.stream().map(RequestTraceRow::getCreatedAt).filter(Objects::nonNull).max(LocalDateTime::compareTo).orElse(LocalDateTime.MAX);
+        return buildReport(start, end, traces, results);
+    }
+
+    private EvaluationReport buildReport(LocalDateTime startAt, LocalDateTime endAt,
+                                         List<RequestTraceRow> traces, List<TraceEvaluationResult> results) {
         return new EvaluationReport(
                 // 评估窗口开始时间，和请求保持一致。
-                request.startAt(),
+                startAt,
                 // 评估窗口结束时间，和请求保持一致。
-                request.endAt(),
+                endAt,
                 // 本次实际参与评估的 trace 数。
                 traces.size(),
                 // 统计至少包含一个人工标注字段的 trace 数。
@@ -105,7 +133,13 @@ public class EvaluationService {
         // 查询时间范围内这些 session 的反馈，并按 sessionId 分组，方便单条 trace 取用。
         return feedbackMapper.findBySessions(userId, sessionIds, startAt, endAt).stream()
                 // 同一个 session 下的反馈会被所有同 session trace 共享，这是当前无 traceId 反馈表的近似归因。
-                .collect(Collectors.groupingBy(FeedbackRow::getSessionId));
+                .collect(Collectors.groupingBy(feedback -> feedback.getTraceId() == null || feedback.getTraceId().isBlank()
+                        ? feedback.getSessionId() : feedback.getTraceId()));
+    }
+
+    private List<FeedbackRow> feedbackFor(RequestTraceRow trace, Map<String, List<FeedbackRow>> feedback) {
+        List<FeedbackRow> exact = feedback.get(trace.getTraceId());
+        return exact == null ? feedback.getOrDefault(trace.getSessionId(), List.of()) : exact;
     }
 
     private TraceEvaluationResult evaluateTrace(RequestTraceRow row, List<FeedbackRow> feedbacks, boolean includeJudge) {
@@ -135,10 +169,13 @@ public class EvaluationService {
         metrics.put("safetyCompliance", snapshot.safetyCompliance() ? 1.0 : 0.0);
         // 幻觉控制检查最终卡片是否来自重排候选集合。
         metrics.put("hallucinationControl", snapshot.hallucinationFree() ? 1.0 : 0.0);
-        // 多轮一致性只在 MEAL_ADJUST 场景能计算，其他 trace 返回 null。
+        // 多轮一致性只在 ACTIVITY_ADJUST 场景能计算，其他 trace 返回 null。
         metrics.put("multiTurnConsistency", snapshot.multiTurnConsistency());
+        metrics.put("operationAccuracy", operationAccuracy(row.getLabelNote(), snapshot.operations()));
+        metrics.put("timeConstraintAccuracy", timeAccuracy(row.getLabelNote(), snapshot.timeRaw()));
+        metrics.put("missingSlotAccuracy", missingSlotAccuracy(row.getLabelNote(), snapshot.missingSlots()));
 
-        // includeJudge=true 时调用 EvaluationJudgeAgent，否则 Judge 维度不参与总分。
+        // includeJudge=true 时调用 LLM as Judge，否则 Judge 维度不参与总分。
         EvaluationJudgeResult judge = includeJudge
                 // Judge 输入只给 trace 摘要，不访问线上系统或额外数据。
                 ? evaluationJudgeService.judge(row.getTraceId(), row.getSessionId(), buildJudgeInput(snapshot))
@@ -173,7 +210,10 @@ public class EvaluationService {
                 // 幻觉控制分。
                 "hallucinationControl",
                 // 多轮一致性分。
-                "multiTurnConsistency"
+                "multiTurnConsistency",
+                "operationAccuracy",
+                "timeConstraintAccuracy",
+                "missingSlotAccuracy"
         ));
         // Judge 原始分是 1-5，这里归一化成 0-1 后求平均。
         Double llmJudgeScore = judge == null ? null : average(List.of(judge.explanationQuality() / 5.0, judge.naturalness() / 5.0));
@@ -194,12 +234,15 @@ public class EvaluationService {
         detail.put("expectedSlots", row.getExpectedSlots());
         // 人工标注的期望澄清动作。
         detail.put("expectedClarifyAction", row.getExpectedClarifyAction());
+        detail.put("predictedMissingSlots", snapshot.missingSlots());
+        detail.put("expectedMissingSlots", expectedMeta(row.getLabelNote()).path("expectedMissingSlots"));
         // 当前 session 关联到的反馈数量。
         detail.put("feedbackCount", feedbacks.size());
         // 标记 Judge 维度是否启用，便于前端解释分数来源。
         detail.put("judgeMode", includeJudge ? "LLM_AS_JUDGE" : "DISABLED");
         // Judge 给出的简短原因，Judge 未启用或失败时为 null。
         detail.put("judgeReason", judge == null ? null : judge.reason());
+        detail.put("failureReasons", failureReasons(metrics));
 
         // 组装单条 trace 的评估结果，分数统一转成百分制展示。
         return new TraceEvaluationResult(
@@ -224,6 +267,24 @@ public class EvaluationService {
         );
     }
 
+    /** 将低分指标归纳为可读原因，供报告直接定位问题，不依赖人工逐条翻 JSON。 */
+    private List<String> failureReasons(Map<String, Double> metrics) {
+        List<String> reasons = new ArrayList<>();
+        if (isZero(metrics.get("intentAccuracy"))) reasons.add("INTENT_ERROR");
+        if (isBelow(metrics.get("slotAccuracy"), 1.0)) reasons.add("SLOT_ERROR");
+        if (isZero(metrics.get("clarifyNecessityAccuracy"))) reasons.add("CLARIFY_ERROR");
+        if (isBelow(metrics.get("missingSlotAccuracy"), 1.0)) reasons.add("MISSING_SLOT_ERROR");
+        if (isZero(metrics.get("hallucinationControl"))) reasons.add("HALLUCINATION_ERROR");
+        if (isZero(metrics.get("safetyCompliance"))) reasons.add("SAFETY_ERROR");
+        if (isZero(metrics.get("fallbackScore"))) reasons.add("FALLBACK_TRIGGERED");
+        if (isBelow(metrics.get("latencyScore"), 0.5)) reasons.add("LATENCY_HIGH");
+        if (isBelow(metrics.get("tokenCostScore"), 0.5)) reasons.add("TOKEN_COST_HIGH");
+        return reasons;
+    }
+
+    private boolean isZero(Double value) { return value != null && value <= 0.0; }
+    private boolean isBelow(Double value, double threshold) { return value != null && value < threshold; }
+
     private TraceSnapshot parseTrace(RequestTraceRow row) {
         // 最终意图，优先从 INTENT_REVISED 事件里读取。
         String intent = null;
@@ -243,7 +304,10 @@ public class EvaluationService {
         List<Long> excludedIds = List.of();
         // 最终对用户展示的文本，用于安全合规和 Judge 输入。
         String finalText = "";
-        // 最终槽位，优先取 SLOTS_MERGED，其次取 INTENT_REVISED.slots。
+        List<String> operations = List.of();
+        String timeRaw = null;
+        List<String> missingSlots = List.of();
+        // 最终槽位只取 SLOT_MUTATION_APPLIED 的确定性状态结果。
         Map<String, List<String>> slots = Map.of();
 
         // trace_json 的根节点里 events 数组保存了本轮请求的全部链路事件。
@@ -255,7 +319,8 @@ public class EvaluationService {
                 // eventType 决定当前事件属于意图、槽位、澄清、排序还是响应阶段。
                 String eventType = event.path("eventType").asText();
                 // 任意事件含 errorMessage 或出现 REQUEST_FAILED，都认为本轮有 fallback/失败风险。
-                if (hasText(event.path("errorMessage").asText(null)) || "REQUEST_FAILED".equals(eventType)) {
+                if (hasText(event.path("errorMessage").asText(null)) || "REQUEST_FAILED".equals(eventType)
+                        || eventType.contains("FALLBACK") || "RELAXATION_SELECTED".equals(eventType)) {
                     // 标记 fallbackUsed，后续 fallbackRate=1，fallbackScore=0。
                     fallbackUsed = true;
                 }
@@ -272,25 +337,23 @@ public class EvaluationService {
                 if ("INTENT_REVISED".equals(eventType)) {
                     // 读取修正后的 intent，如果字段缺失则保留已有值。
                     intent = output.path("intent").asText(intent);
-                    // 有些 trace 会在 INTENT_REVISED 里带 slots，作为槽位备选来源。
-                    if (output.has("slots")) {
-                        // 将 slots JSON 归一成 Map<String, List<String>>。
-                        slots = slots(output.path("slots"));
-                    }
-                // SLOTS_MERGED 是历史槽位和本轮槽位合并后的最终槽位。
-                } else if ("SLOTS_MERGED".equals(eventType)) {
-                    // 用合并后的槽位覆盖前面的备选槽位。
-                    slots = slots(output);
+                    operations = operationKeys(output.path("operations"));
+                // SLOT_MUTATION_APPLIED 是 operations 执行后的最终九维状态。
+                } else if ("SLOT_MUTATION_APPLIED".equals(eventType)) {
+                    slots = slots(output.path("resultSlots"));
                 // CLARIFY_DECISION 记录澄清节点 ASK/READY 的结构化结果。
                 } else if ("CLARIFY_DECISION".equals(eventType)) {
                     // 提取 clarify action，用于和 expected_clarify_action 比较。
                     clarifyAction = output.path("action").asText(clarifyAction);
+                    missingSlots = stringList(output.path("missingSlots"));
+                } else if ("TIME_CONSTRAINT_RESOLVED".equals(eventType)) {
+                    timeRaw = output.path("raw").asText(timeRaw);
                 // ADJUST_CONTEXT_RESOLVED 表示“换一批/清淡点”等多轮调整链路。
                 } else if ("ADJUST_CONTEXT_RESOLVED".equals(eventType)) {
                     // 读取本轮应该排除的历史推荐 ID。
                     excludedIds = longList(output.path("excludeActivityIds"));
-                    // 调整链路强制视为 MEAL_ADJUST，便于后续多轮一致性计算。
-                    intent = "MEAL_ADJUST";
+                    // 调整链路强制视为 ACTIVITY_ADJUST，便于后续多轮一致性计算。
+                    intent = "ACTIVITY_ADJUST";
                 // ACTIVITY_RANKED 是 Java 重排后的候选集合。
                 } else if ("ACTIVITY_RANKED".equals(eventType)) {
                     // 收集 ranked[].id，后续检查最终响应是否编造候选外餐食。
@@ -317,8 +380,8 @@ public class EvaluationService {
         boolean safetyCompliance = FORBIDDEN_PHRASES.stream().noneMatch(finalText::contains);
         // 非调整链路不计算多轮一致性，保持 null 避免影响平均分。
         Double multiTurnConsistency = null;
-        // 只有 MEAL_ADJUST 才判断是否复用了上一轮上下文并排除旧推荐。
-        if ("MEAL_ADJUST".equals(intent)) {
+        // 只有 ACTIVITY_ADJUST 才判断是否复用了上一轮上下文并排除旧推荐。
+        if ("ACTIVITY_ADJUST".equals(intent)) {
             // 有排除列表且最终推荐没有命中排除项，则多轮一致性为 1，否则为 0。
             multiTurnConsistency = excludedIds.isEmpty() ? 0.0 : responseIds.stream().noneMatch(excludedIds::contains) ? 1.0 : 0.0;
         }
@@ -340,11 +403,54 @@ public class EvaluationService {
                 hallucinationFree,
                 // 多轮一致性分，非调整链路为 null。
                 multiTurnConsistency,
+                operations,
+                timeRaw,
+                missingSlots,
                 // 最终回复文本。
                 finalText,
                 // 最终推荐卡片数量。
                 responseIds.size()
         );
+    }
+
+    private Double operationAccuracy(String labelNote, List<String> actual) {
+        JsonNode expected = expectedMeta(labelNote).path("expectedOperations");
+        if (!expected.isArray()) return null;
+        return operationKeys(expected).equals(actual) ? 1.0 : 0.0;
+    }
+
+    private Double timeAccuracy(String labelNote, String actualRaw) {
+        String expected = expectedMeta(labelNote).path("expectedTime").asText("");
+        if (expected.isBlank()) return null;
+        return actualRaw != null && actualRaw.contains(expected) ? 1.0 : 0.0;
+    }
+
+    private Double missingSlotAccuracy(String labelNote, List<String> actual) {
+        JsonNode expected = expectedMeta(labelNote).path("expectedMissingSlots");
+        if (!expected.isArray()) return null;
+        return sameValues(stringList(expected), actual) ? 1.0 : 0.0;
+    }
+
+    private JsonNode expectedMeta(String labelNote) {
+        if (!hasText(labelNote)) return objectMapper.createObjectNode();
+        try {
+            JsonNode node = objectMapper.readTree(labelNote);
+            return node != null && node.isObject() ? node : objectMapper.createObjectNode();
+        } catch (Exception ignored) {
+            return objectMapper.createObjectNode();
+        }
+    }
+
+    private List<String> operationKeys(JsonNode operations) {
+        if (operations == null || !operations.isArray()) return List.of();
+        List<String> keys = new ArrayList<>();
+        operations.forEach(operation -> {
+            String field = operation.path("field").asText("");
+            String op = operation.path("op").asText("");
+            List<String> values = stringList(operation.path("values"));
+            keys.add(field + "|" + op + "|" + String.join(",", values.stream().sorted().toList()));
+        });
+        return keys;
     }
 
     private Double intentAccuracy(String expectedIntent, String actualIntent) {
@@ -369,7 +475,7 @@ public class EvaluationService {
         int compared = 0;
         // matched 统计预测完全匹配的槽位数量。
         int matched = 0;
-        // 遍历 7 个标准槽位逐项比较。
+        // 遍历九个标准槽位逐项比较。
         for (String slotName : SLOT_NAMES) {
             // 取出当前槽位的人工标注值。
             List<String> expected = expectedSlots.getOrDefault(slotName, List.of());
@@ -576,7 +682,7 @@ public class EvaluationService {
     }
 
     private Map<String, List<String>> slots(JsonNode node) {
-        // 创建槽位 Map，key 固定为 7 个标准槽位。
+        // 创建槽位 Map，key 固定为九个标准槽位。
         Map<String, List<String>> slots = new HashMap<>();
         // 遍历标准槽位名，避免输出里出现非标准字段。
         for (String slotName : SLOT_NAMES) {
@@ -704,6 +810,9 @@ public class EvaluationService {
             boolean hallucinationFree,
             // 多轮调整一致性分。
             Double multiTurnConsistency,
+            List<String> operations,
+            String timeRaw,
+            List<String> missingSlots,
             // 最终回复文本。
             String finalText,
             // 最终推荐卡片数量。

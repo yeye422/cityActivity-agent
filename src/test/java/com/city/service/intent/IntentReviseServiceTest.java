@@ -1,0 +1,145 @@
+package com.city.service.intent;
+
+import com.city.enums.ClarifyField;
+import com.city.enums.ConstraintOperationType;
+import com.city.enums.Intent;
+import com.city.enums.SessionPhase;
+import com.city.enums.SourceMode;
+import com.city.model.ConstraintOperation;
+import com.city.model.IntentResult;
+import com.city.model.SessionState;
+import com.city.model.TemporalMutation;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+
+class IntentReviseServiceTest {
+
+    private final IntentReviseService service = new IntentReviseService();
+
+    @Test
+    void shouldKeepActivityPlanIntentWhenUserIsAnsweringPersistedPlanClarification() {
+        SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
+                .withIntent(Intent.ACTIVITY_PLAN)
+                .withPhase(SessionPhase.CLARIFY)
+                .withPendingClarifyField(ClarifyField.CITY);
+
+        ConstraintOperation cityAdd = new ConstraintOperation(
+                "city", ConstraintOperationType.ADD, List.of("西安"), "西安");
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_RECOMMENDATION, 0.95, List.of(cityAdd));
+
+        IntentResult revised = service.revise(state, raw, "西安");
+
+        assertEquals(Intent.ACTIVITY_PLAN, revised.intent());
+        assertEquals(List.of(cityAdd), revised.operations());
+    }
+
+    @Test
+    void shouldKeepActivityPlanWhenIntentFallbackOccursDuringClarification() {
+        SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
+                .withIntent(Intent.ACTIVITY_PLAN)
+                .withPhase(SessionPhase.CLARIFY)
+                .withPendingClarifyField(ClarifyField.DATE);
+        IntentResult raw = new IntentResult(
+                Intent.OTHER, 0.2, List.of(), TemporalMutation.keep(), true);
+
+        IntentResult revised = service.revise(state, raw, "周六");
+
+        assertEquals(Intent.ACTIVITY_PLAN, revised.intent());
+        assertEquals(true, revised.fallback());
+    }
+
+    @Test
+    void shouldNotKeepPlanIntentWhenClarifyPhaseHasNoPendingField() {
+        SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
+                .withIntent(Intent.ACTIVITY_PLAN)
+                .withPhase(SessionPhase.CLARIFY);
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_RECOMMENDATION, 0.95, List.of());
+
+        IntentResult revised = service.revise(state, raw, "西安");
+
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, revised.intent());
+    }
+
+    @Test
+    void shouldNotConvertNormalRecommendationIntoPlanWithoutPlanContext() {
+        SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
+                .withPhase(SessionPhase.CLARIFY)
+                .withPendingClarifyField(ClarifyField.CITY);
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_RECOMMENDATION, 0.95, List.of());
+
+        IntentResult revised = service.revise(state, raw, "西安");
+
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, revised.intent());
+    }
+
+    @Test
+    void fallbackOtherWithStructuredMutationShouldContinueAsAdjustWhenHistoryExists() {
+        SessionState state = SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC)
+                .withLastRecommendations(List.of(1L, 2L));
+        ConstraintOperation clearBudget = new ConstraintOperation(
+                "budget", ConstraintOperationType.CLEAR, List.of(), "预算不限");
+        IntentResult raw = new IntentResult(
+                Intent.OTHER, 0.2, List.of(clearBudget), TemporalMutation.keep(), true);
+
+        IntentResult revised = service.revise(state, raw, "预算不限");
+
+        assertEquals(Intent.ACTIVITY_ADJUST, revised.intent());
+        assertEquals(List.of(clearBudget), revised.operations());
+    }
+
+    @Test
+    void fallbackOtherWithStructuredMutationShouldBecomeRecommendationWithoutHistory() {
+        ConstraintOperation cityAdd = new ConstraintOperation(
+                "city", ConstraintOperationType.ADD, List.of("西安"), "西安");
+        IntentResult raw = new IntentResult(
+                Intent.OTHER, 0.2, List.of(cityAdd), TemporalMutation.keep(), true);
+
+        IntentResult revised = service.revise(
+                SessionState.fresh("sess_test", 1L, SourceMode.PUBLIC), raw, "西安");
+
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, revised.intent());
+        assertEquals(List.of(cityAdd), revised.operations());
+    }
+
+    @Test
+    void shouldRespectSuccessfulModelPlanEvenWhenTextLooksLikeSingleActivity() {
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_PLAN, 0.95, List.of());
+
+        IntentResult revised = service.revise(null, raw, "想找个半天的展览");
+
+        assertEquals(Intent.ACTIVITY_PLAN, revised.intent());
+        assertFalse(revised.fallback());
+    }
+
+    @Test
+    void shouldRespectSuccessfulModelRecommendationEvenWhenTextContainsPlanningWords() {
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_RECOMMENDATION, 0.95, List.of());
+
+        IntentResult revised = service.revise(null, raw, "帮我安排周六一天");
+
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, revised.intent());
+    }
+
+    @Test
+    void shouldNotOverrideRecommendationWithSafetyKeywordsWhenModelSucceeded() {
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_RECOMMENDATION, 0.95, List.of());
+
+        IntentResult revised = service.revise(null, raw, "暴雨天推荐几个室内展览");
+
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, revised.intent());
+    }
+
+    @Test
+    void shouldNotForceClarificationOnlyBecauseConfidenceIsLow() {
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_RECOMMENDATION, 0.2, List.of());
+
+        IntentResult revised = service.revise(null, raw, "上海看展");
+
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, revised.intent());
+        assertFalse(revised.fallback());
+    }
+}

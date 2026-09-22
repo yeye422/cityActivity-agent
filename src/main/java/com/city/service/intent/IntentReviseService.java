@@ -1,88 +1,152 @@
 package com.city.service.intent;
 
 import com.city.enums.Intent;
+import com.city.enums.SessionPhase;
 import com.city.model.IntentResult;
 import com.city.model.SessionState;
-import com.city.model.SlotBundle;
+import com.city.model.TemporalMutation;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+
 /**
- * 意图后处理服务。
- * LLM 意图识别可能误判，Orchestrator 在路由前用历史 SessionState 做二次矫正。
+ * IntentAgent 结果的确定性后处理层。
+ *
+ * <p>边界非常重要：这里不重新理解自然语言，也不使用关键词覆盖模型的普通语义判断；
+ * 只根据系统已经确定的会话事实或 fallback 已经抽取出的结构化 Patch，修正不可能成立的路由。</p>
+ *
+ * <p>主链路因此保持为：LLM 负责业务意图理解 → 本服务做状态一致性修正 → Orchestrator 按最终 Intent 路由。
+ * 澄清和安全风险都由后端独立处理，不属于 IntentRevise 的职责。</p>
  */
 @Service
 public class IntentReviseService {
 
-    /** 低于该阈值时，推荐意图降级为澄清，避免低确定性结果直接进入推荐。 */
-    private static final double LOW_CONFIDENCE_THRESHOLD = 0.4;
+    /** 纯“换一批”属于确定性结果集操作，修正后的置信度至少提升到该值。 */
+    private static final double BATCH_REFRESH_CONFIDENCE = 0.95;
 
     /**
-     * 根据会话状态矫正 IntentAgent 输出。
-     * 由 Orchestrator#handleTurn 在 INTENT_RECOGNIZED 之后调用。
+     * 根据持久化会话状态修正 IntentAgent 输出。
+     *
+     * <p>当前处理四类确定性场景：纯换批、Plan 澄清续答、无历史结果的 ADJUST 降级为首次推荐，
+     * 以及模型失败后已经抽取到普通槽位 Patch 却误落 OTHER 的 fallback 路由修正。</p>
+     *
+     * @param state 当前持久化会话状态
+     * @param result IntentAgent 的结构化输出
+     * @param userInput 本轮用户原文，仅用于识别严格限定的“纯换一批”表达
+     * @return 可直接交给 Orchestrator 路由的最终意图结果
      */
     public IntentResult revise(SessionState state, IntentResult result, String userInput) {
-        // result 为 null 时构造 CLARIFY_NEEDED + 空槽位，防止 NPE
-        IntentResult safeResult = result == null ? IntentResult.clarify(SlotBundle.empty()) : result;
+        // 正常情况下 IntentAgent 已经提供 fallback；异常 null 再保守落到推荐业务，由后端必要字段规则决定是否追问。
+        IntentResult safeResult = result == null ? IntentResult.fallbackRecommendation() : result;
 
-        // 规则一：活动安全风险优先前置拦截，即使 LLM 置信度较低也走保守风险链路
-        if (safeResult.intent() == Intent.HEALTH_RISK || containsSafetyRiskKeyword(userInput)) {
-            return new IntentResult(Intent.HEALTH_RISK, safeSlots(safeResult), safeResult.confidence());
+        //        用户说“换一批”
+        //→ IntentAgent 理想输出 ACTIVITY_ADJUST
+        //→ IntentReviseService.isPureBatchRefresh(userInput)
+        //→ Java 再次确认这是纯换批
+        //→ 强制清空 slots / operations / temporal
+        //→ 只保留“刷新结果集”
+        // “换一批”是确定性的结果集操作，不允许模型顺带修改普通槽位或时间条件。
+        if (isPureBatchRefresh(userInput)) {
+            Intent targetIntent = hasLastRecommendations(state)
+                    ? Intent.ACTIVITY_ADJUST
+                    : Intent.ACTIVITY_RECOMMENDATION;
+            return batchRefresh(targetIntent, safeResult);
         }
 
-        // 规则二：没有历史推荐时，调整意图没有可排除对象，降级为推荐主链路并由澄清规则继续判断
-        if (safeResult.intent() == Intent.MEAL_ADJUST && !hasLastRecommendations(state)) {
-            return new IntentResult(Intent.MEAL_RECOMMENDATION, safeSlots(safeResult), safeResult.confidence());
+        // 正在回答持久化的 Plan 必要字段时，短回答沿用原 Plan 意图。
+        // 模型正常识别成推荐，或模型失败后保守落到 OTHER，都不能让已确定的 Plan 澄清上下文丢失。
+        if (state != null
+                && state.phase() == SessionPhase.CLARIFY
+                && state.pendingClarifyField() != null
+                && state.currentIntent() == Intent.ACTIVITY_PLAN
+                && (safeResult.intent() == Intent.ACTIVITY_RECOMMENDATION
+                    || (safeResult.fallback() && safeResult.intent() == Intent.OTHER))) {
+            return revised(Intent.ACTIVITY_PLAN, safeResult);
         }
 
-        // 规则三：含半日或一日安排关键词时强制进入活动规划分支
-        if (containsActivityPlanKeyword(userInput)
-                && safeResult.intent() != Intent.MEAL_ADJUST
-                && safeResult.intent() != Intent.ACTIVITY_PLAN) {
-            return new IntentResult(Intent.ACTIVITY_PLAN, safeSlots(safeResult), safeResult.confidence());
+        // 没有历史推荐结果时，ADJUST 不存在可调整对象，按首次推荐流程处理。
+        if (safeResult.intent() == Intent.ACTIVITY_ADJUST && !hasLastRecommendations(state)) {
+            return revised(Intent.ACTIVITY_RECOMMENDATION, safeResult);
         }
 
-        // 规则四：推荐意图低置信度时先进入澄清链路；健康风险已在上方优先处理，不在这里降级
-        if (safeResult.intent() == Intent.MEAL_RECOMMENDATION && safeResult.confidence() < LOW_CONFIDENCE_THRESHOLD) {
-            return new IntentResult(Intent.CLARIFY_NEEDED, safeSlots(safeResult), safeResult.confidence());
+        // 模型调用失败时，Java fallback 可能已经可靠抽取出 CLEAR/ADD/REMOVE 等普通槽位 Patch。
+        // 此时若 fallbackIntent 只能落到 OTHER，不能丢弃已经确定的业务修改：有历史推荐按 ADJUST，没有则按首次推荐。
+        if (safeResult.fallback()
+                && safeResult.intent() == Intent.OTHER
+                && safeResult.operations() != null
+                && !safeResult.operations().isEmpty()) {
+            Intent targetIntent = hasLastRecommendations(state)
+                    ? Intent.ACTIVITY_ADJUST
+                    : Intent.ACTIVITY_RECOMMENDATION;
+            return revised(targetIntent, safeResult);
         }
 
-        // 无矫正规则命中，原样返回 LLM 结果
+        // 其他情况下尊重模型判断，不再做关键词意图覆盖或低 confidence 强制改路由。
         return safeResult;
     }
 
-    /** 判断会话是否已有可用于“换一批”的上轮推荐结果。 */
+    /** 是否存在可供“调整/换一批”继续操作的上一轮推荐结果。 */
     private boolean hasLastRecommendations(SessionState state) {
-        return state != null && state.lastRecommendedActivityIds() != null && !state.lastRecommendedActivityIds().isEmpty();
+        return state != null
+                && state.lastRecommendedActivityIds() != null
+                && !state.lastRecommendedActivityIds().isEmpty();
     }
 
-    /** slots 为空时使用空槽位，避免后续合并逻辑出现 NPE。 */
-    private SlotBundle safeSlots(IntentResult result) {
-        return result.slots() == null ? SlotBundle.empty() : result.slots();
+    /**
+     * 仅识别“纯结果刷新”表达。
+     * “换一批室内的”“再来几个便宜点的”包含新约束，不在这里归一化，必须交给 IntentAgent 解析。
+     */
+    private boolean isPureBatchRefresh(String userInput) {
+        if (userInput == null || userInput.isBlank()) return false;
+        String text = userInput
+                .replaceAll("\\s+", "")
+                .replaceAll("[，。！？,.!?~～]", "");
+        return List.of(
+                "换一批",
+                "换一批吧",
+                "再换一批",
+                "再换一批吧",
+                "换几个",
+                "换几个吧",
+                "换几个看看",
+                "再来几个",
+                "再来几个吧",
+                "再推荐几个",
+                "再推荐几个吧",
+                "还有别的吗",
+                "还有别的么",
+                "还有其他的吗",
+                "还有其他的么",
+                "换点别的",
+                "换点别的吧"
+        ).contains(text);
     }
 
-    /** 活动安全关键词命中时，Java 规则直接前置拦截。 */
-    private boolean containsSafetyRiskKeyword(String userInput) {
-        if (userInput == null || userInput.isBlank()) {
-            return false;
-        }
-        return containsAny(userInput, "深夜独自", "凌晨一个人", "偏远", "无人区", "危险活动", "极端天气", "暴雨", "台风");
+    /**
+     * 纯换批必须清空模型产生的 operations / temporal 变更，只保留“刷新结果集”这一件事。
+     * 否则模型偶然抽出的约束 Patch 会污染上一轮条件，导致“换一批”实际变成“修改条件后重搜”。
+     */
+    private IntentResult batchRefresh(Intent intent, IntentResult result) {
+        return new IntentResult(
+                intent,
+                Math.max(result.confidence(), BATCH_REFRESH_CONFIDENCE),
+                List.of(),
+                TemporalMutation.keep(),
+                result.fallback()
+        );
     }
 
-    /** 半日或一日活动安排关键词命中时，矫正为 ACTIVITY_PLAN。 */
-    private boolean containsActivityPlanKeyword(String userInput) {
-        if (userInput == null || userInput.isBlank()) {
-            return false;
-        }
-        return containsAny(userInput, "半天", "一天", "一日", "活动规划", "行程", "安排一下", "周末安排");
-    }
-
-    /** 判断 text 是否包含 keywords 中任一子串。 */
-    private boolean containsAny(String text, String... keywords) {
-        for (String keyword : keywords) {
-            if (text.contains(keyword)) {
-                return true;
-            }
-        }
-        return false;
+    /**
+     * 只替换 Intent，本轮已经识别出的 operations / temporal 保持不变。
+     * 用于“语义基本正确，但受会话状态约束需要切换路由”的场景。
+     */
+    private IntentResult revised(Intent intent, IntentResult result) {
+        return new IntentResult(
+                intent,
+                result.confidence(),
+                result.operations() == null ? List.of() : result.operations(),
+                result.temporal() == null ? TemporalMutation.keep() : result.temporal(),
+                result.fallback()
+        );
     }
 }

@@ -7,7 +7,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
 /**
- * diet 专用 Prompt 加载器。
+ * CityFlow 专用 Prompt 加载器。
  * 使用 classpath 读取资源，保证本地运行和打包成 JAR 后都能正常加载。
  */
 @Component

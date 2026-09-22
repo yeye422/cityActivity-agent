@@ -12,16 +12,16 @@ public class EvaluationJudgeAgentBuilder {
     private final Model lightModel;
     private final PromptLoader promptLoader;
 
-    public EvaluationJudgeAgentBuilder(@Qualifier("DietLightChatModel") Model lightModel, PromptLoader promptLoader) {
+    public EvaluationJudgeAgentBuilder(@Qualifier("CityLightChatModel") Model lightModel, PromptLoader promptLoader) {
         this.lightModel = lightModel;
         this.promptLoader = promptLoader;
     }
 
     public ReActAgent build() {
         return ReActAgent.builder()
-                .name("diet_evaluation_judge_agent")
+                .name("city_evaluation_judge_agent")
                 .model(lightModel)
-                .sysPrompt(promptLoader.load("diet/prompts/evaluation-judge.txt"))
+                .sysPrompt(promptLoader.load("city-prompts/evaluation-judge.txt"))
                 .memory(new InMemoryMemory())
                 .build();
     }

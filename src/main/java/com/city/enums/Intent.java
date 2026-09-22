@@ -1,25 +1,21 @@
 package com.city.enums;
 
 /**
- * 城市活动助手的一轮用户输入意图。
- * 这个枚举是 Orchestrator 状态机的分支依据。
+ * 城市活动助手的一轮用户业务意图。
+ *
+ * <p>Intent 只描述需要进入哪个业务分支；澄清是 Orchestrator 根据执行前置条件产生的状态机动作，
+ * 安全风险则由 RiskGuardService 统一处理，都不再作为 Intent 枚举值。</p>
  */
 public enum Intent {
-    /** 用户正在请求活动推荐，例如”周六想看展览”。 */
-    MEAL_RECOMMENDATION,
+    /** 用户正在请求一个或多个活动推荐，例如“周六想看展览”。 */
+    ACTIVITY_RECOMMENDATION,
 
-    /** 用户有活动意向，但当前信息不足，需要先追问关键槽位。 */
-    CLARIFY_NEEDED,
-
-    /** 用户基于上一轮推荐要求换一批、降低预算或改成室内。 */
-    MEAL_ADJUST,
+    /** 用户基于已有推荐修改条件或要求换一批。 */
+    ACTIVITY_ADJUST,
 
     /** 用户要求半天或一天的多时段活动规划。 */
     ACTIVITY_PLAN,
 
-    /** 用户问题涉及深夜独行、偏远地点、极端天气等安全风险。 */
-    HEALTH_RISK,
-
-    /** 用户输入与城市活动无关内容。 */
+    /** 用户输入不属于推荐、调整或行程规划业务。 */
     OTHER
 }

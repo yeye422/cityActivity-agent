@@ -2,95 +2,288 @@ package com.city.service.activity;
 
 import com.city.model.ActivityItem;
 import com.city.model.ActivityRankRequest;
+import com.city.model.ActivityRankResult;
+import com.city.model.ActivityRankScore;
+import com.city.model.PreferenceFact;
 import com.city.model.SlotBundle;
+import com.city.model.TimeConstraint;
+import com.city.model.WeatherRecommendationContext;
+import com.city.enums.PreferencePolarity;
+import com.city.service.memory.PreferenceMemoryService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+
+import java.time.LocalTime;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
  * 活动重排服务（Orchestrator 推荐流水线第二层）。
- * 消费 slots、excludeActivityIds，对检索候选二次打分排序。
+ * Search 已负责九维正负约束等硬条件过滤；这里不再重复计算槽位匹配分，
+ * 只处理历史推荐 ID 排除、时间窗口适配和天气上下文调整。
  */
 @Service
 public class ActivityRankService {
+    private static final Logger log = LoggerFactory.getLogger(ActivityRankService.class);
+    private static final int MAX_RANKED_CANDIDATES = 10;
+    private static final double BM25_K1 = 1.2;
+    private static final double BM25_B = 0.75;
+    private final PreferenceMemoryService preferenceMemoryService;
 
-    /**
-     * 在search检索时,只要用户输入的槽位信息有匹配有交集就会返回
-     * 但是rank排序,是比较用户输入的槽位信息是否更大程度的得到满足
-     * 执行重排并返回最多 10 个候选。
-     * 由 Orchestrator#completeRecommendation 在 ACTIVITY_SEARCHED 之后调用。
-     */
-    public List<ActivityItem> rank(ActivityRankRequest request) {
-        // 将 excludeActivityIds 转为 HashSet，便于 O(1) 查找
-        Set<Long> excludeIds = new HashSet<>(request.excludeActivityIds() == null ? List.of() : request.excludeActivityIds());
-        return request.candidates().stream()
-                .filter(item -> item != null && !excludeIds.contains(item.id()))  // 过滤 null 和需排除的 ID
-                .map(item -> withRankScore(item, request.slots())) // 计算排序分数
-                .sorted(Comparator.comparingDouble((ActivityItem item) -> item.matchScore()).reversed()) // 按分数降序
-                .limit(10)   // 最多返回 10 条
+    /** 仅供无 Spring 的纯排序单测使用。 */
+    public ActivityRankService() {
+        this.preferenceMemoryService = null;
+    }
+
+    @Autowired
+    public ActivityRankService(PreferenceMemoryService preferenceMemoryService) {
+        this.preferenceMemoryService = preferenceMemoryService;
+    }
+
+    public ActivityRankResult rank(ActivityRankRequest request) {
+        return rank(request, WeatherRecommendationContext.inactive());
+    }
+
+    /** 天气只影响排序，不会把活动从结果集中剔除。 */
+    public ActivityRankResult rank(ActivityRankRequest request, WeatherRecommendationContext weather) {
+        if (request == null || request.candidates() == null || request.candidates().isEmpty()) {
+            return new ActivityRankResult(List.of(), List.of());
+        }
+        Set<Long> excludeIds = new HashSet<>(
+                request.excludeActivityIds() == null ? List.of() : request.excludeActivityIds());
+        Map<Long, Double> lexicalScores = bm25Scores(request.candidates(), request.queryText());
+        List<PreferenceFact> preferences = loadPreferences(request.userId());
+
+        List<ScoredActivity> scored = request.candidates().stream()
+                .filter(item -> item != null && !excludeIds.contains(item.id()))
+                .map(item -> score(item, request.slots(), request.timeConstraint(), weather,
+                        lexicalScores.getOrDefault(item.id(), 0.0), preferences))
+                .sorted(Comparator
+                        .comparingDouble(ScoredActivity::sortScore).reversed()
+                        .thenComparing(item -> item.activity().id(), Comparator.nullsLast(Long::compareTo)))
+                .limit(MAX_RANKED_CANDIDATES)
                 .toList();
+
+        return new ActivityRankResult(
+                scored.stream().map(ScoredActivity::activity).toList(),
+                scored.stream().map(ScoredActivity::score).toList());
     }
 
-    /**
-     * 计算重排后的归一化分数并返回新 ActivityItem（matchScore 替换为 finalScore）。
-     */
-    private ActivityItem withRankScore(ActivityItem item, SlotBundle query) {
-        double slotScore = slotScore(item.slots(), query);           // 槽位命中分 [0,1]
-        return new ActivityItem(item.id(), item.sourceType(), item.ownerUserId(), item.name(), item.slots(), slotScore);
+    private ScoredActivity score(ActivityItem item,
+                                 SlotBundle explicitSlots,
+                                 TimeConstraint timeConstraint,
+                                 WeatherRecommendationContext weather,
+                                 double lexicalScore,
+                                 List<PreferenceFact> preferences) {
+        Double timeScore = timeScore(item, timeConstraint);
+        // Search 已保证候选满足九维硬约束；没有具体时段时所有候选使用相同中性基准分。
+        double baseScore = timeScore == null ? 1.0 : clamp(timeScore);
+        double weatherAdjusted = weatherScore(baseScore, item.slots(), weather);
+        double weatherAdjustment = weatherAdjusted - baseScore;
+        double lexicalAdjustment = lexicalScore * 0.12;
+        double preferenceAdjustment = preferenceAdjustment(item.slots(), explicitSlots, preferences);
+        double sortScore = weatherAdjusted + lexicalAdjustment + preferenceAdjustment;
+        double finalScore = clamp(sortScore);
+
+        ActivityItem rankedItem = new ActivityItem(
+                item.id(), item.sourceType(), item.ownerUserId(), item.name(), item.slots(),
+                item.validFrom(), item.validTo(), item.validStartTime(), item.validEndTime(),
+                item.durationMinutes(), finalScore);
+        WeatherRecommendationContext.Status weatherStatus = weather == null || weather.status() == null
+                ? WeatherRecommendationContext.Status.NOT_REQUESTED
+                : weather.status();
+        ActivityRankScore breakdown = new ActivityRankScore(
+                item.id(), timeScore, weatherAdjustment, lexicalAdjustment,
+                preferenceAdjustment, finalScore, weatherStatus);
+        return new ScoredActivity(rankedItem, breakdown, sortScore);
     }
 
-    /** 计算活动 slots 与查询 slots 的 9 维平均重叠比例。 */
-    private double slotScore(SlotBundle item, SlotBundle query) {
-        SlotBundle safeQuery = query == null ? SlotBundle.empty() : query;
-        double total = 0.0;
-        int dimensions = 0;
-        ScorePart[] parts = {
-                scorePart(item.city(), safeQuery.city()),
-                scorePart(item.location(), safeQuery.location()),
-                scorePart(item.activityTime(), safeQuery.activityTime()),
-                scorePart(item.mood(), safeQuery.mood()),
-                scorePart(item.scene(), safeQuery.scene()),
-                scorePart(item.budget(), safeQuery.budget()),
-                scorePart(item.activityType(), safeQuery.activityType()),
-                scorePart(item.style(), safeQuery.style()),
-                scorePart(item.duration(), safeQuery.duration())
+    private List<PreferenceFact> loadPreferences(Long userId) {
+        if (userId == null || preferenceMemoryService == null) return List.of();
+        try {
+            return preferenceMemoryService.findActive(userId);
+        } catch (RuntimeException error) {
+            // 偏好是软信号；迁移未执行或存储短暂不可用时不阻断核心推荐。
+            log.warn("Failed to load preference memory for userId={}", userId, error);
+            return List.of();
+        }
+    }
+
+    private double preferenceAdjustment(SlotBundle candidate,
+                                        SlotBundle explicitSlots,
+                                        List<PreferenceFact> preferences) {
+        if (candidate == null || preferences == null || preferences.isEmpty()) return 0.0;
+        double adjustment = 0.0;
+        for (PreferenceFact fact : preferences) {
+            if (fact == null || !Boolean.TRUE.equals(fact.getActive())) continue;
+            List<String> candidateValues = slotValues(candidate, fact.getSlotName());
+            if (!candidateValues.contains(fact.getSlotValue())) continue;
+            // 本轮显式选择覆盖长期黑名单，避免历史记忆改变用户当前意图。
+            boolean explicitlyRequested = slotValues(explicitSlots, fact.getSlotName())
+                    .contains(fact.getSlotValue());
+            if (fact.getPolarity() == PreferencePolarity.AVOID && explicitlyRequested) continue;
+            adjustment += fact.getPolarity() == PreferencePolarity.AVOID ? -0.18 : 0.08;
+        }
+        return Math.max(-0.36, Math.min(0.16, adjustment));
+    }
+
+    private List<String> slotValues(SlotBundle slots, String slotName) {
+        if (slots == null || slotName == null) return List.of();
+        return switch (slotName) {
+            case "city" -> slots.city();
+            case "location" -> slots.location();
+            case "experienceGoal" -> slots.experienceGoal();
+            case "companion" -> slots.companion();
+            case "budget" -> slots.budget();
+            case "activityType" -> slots.activityType();
+            case "style" -> slots.style();
+            case "duration" -> slots.duration();
+            case "feature" -> slots.feature();
+            default -> List.of();
         };
-        for (ScorePart part : parts) {
-            if (part.active()) {
-                total += part.score();
-                dimensions++;
+    }
+
+    /** 在数据库硬过滤后的候选集上计算轻量 BM25，补足活动名称与原始表达的文本相关性。 */
+    private Map<Long, Double> bm25Scores(List<ActivityItem> candidates, String queryText) {
+        List<String> queryTokens = tokens(queryText);
+        if (queryTokens.isEmpty() || candidates == null || candidates.isEmpty()) return Map.of();
+
+        Map<Long, List<String>> documents = new LinkedHashMap<>();
+        Map<String, Integer> documentFrequency = new HashMap<>();
+        double totalLength = 0;
+        for (ActivityItem item : candidates) {
+            if (item == null || item.id() == null) continue;
+            List<String> document = tokens(activityText(item));
+            documents.put(item.id(), document);
+            totalLength += document.size();
+            new HashSet<>(document).forEach(token -> documentFrequency.merge(token, 1, Integer::sum));
+        }
+        if (documents.isEmpty()) return Map.of();
+        double averageLength = Math.max(1.0, totalLength / documents.size());
+        Map<Long, Double> raw = new HashMap<>();
+        double max = 0.0;
+        for (Map.Entry<Long, List<String>> entry : documents.entrySet()) {
+            Map<String, Integer> termFrequency = new HashMap<>();
+            entry.getValue().forEach(token -> termFrequency.merge(token, 1, Integer::sum));
+            double score = 0.0;
+            for (String token : new HashSet<>(queryTokens)) {
+                int frequency = termFrequency.getOrDefault(token, 0);
+                if (frequency == 0) continue;
+                int df = documentFrequency.getOrDefault(token, 0);
+                double idf = Math.log(1.0 + (documents.size() - df + 0.5) / (df + 0.5));
+                double denominator = frequency + BM25_K1 *
+                        (1.0 - BM25_B + BM25_B * entry.getValue().size() / averageLength);
+                score += idf * frequency * (BM25_K1 + 1.0) / denominator;
+            }
+            raw.put(entry.getKey(), score);
+            max = Math.max(max, score);
+        }
+        if (max <= 0) return raw;
+        double scale = max;
+        raw.replaceAll((ignored, value) -> value / scale);
+        return raw;
+    }
+
+    private String activityText(ActivityItem item) {
+        List<String> values = new ArrayList<>();
+        values.add(item.name());
+        SlotBundle slots = item.slots();
+        if (slots != null) {
+            values.addAll(slots.city());
+            values.addAll(slots.location());
+            values.addAll(slots.experienceGoal());
+            values.addAll(slots.companion());
+            values.addAll(slots.budget());
+            values.addAll(slots.activityType());
+            values.addAll(slots.style());
+            values.addAll(slots.duration());
+            values.addAll(slots.feature());
+        }
+        return String.join(" ", values.stream().filter(value -> value != null).toList());
+    }
+
+    private List<String> tokens(String text) {
+        if (text == null || text.isBlank()) return List.of();
+        String normalized = text.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]+", " ").trim();
+        if (normalized.isEmpty()) return List.of();
+        List<String> result = new ArrayList<>();
+        for (String part : normalized.split("\\s+")) {
+            result.add(part);
+            if (part.codePointCount(0, part.length()) > 1) {
+                int[] points = part.codePoints().toArray();
+                for (int index = 0; index < points.length - 1; index++) {
+                    result.add(new String(points, index, 2));
+                }
             }
         }
-        return dimensions == 0 ? 0 : clamp(total / dimensions);
+        return result;
     }
 
-    private ScorePart scorePart(List<String> itemValues, List<String> queryValues) {
-        return new ScorePart(queryValues != null && !queryValues.isEmpty(), overlap(itemValues, queryValues));
+    /**
+     * 用户指定时段时，计算活动有效/可参加时间窗口与用户时间窗的覆盖程度。
+     * validStartTime~validEndTime 表示可安排时间或具体场次窗口，不等同于活动实际耗时；
+     * 实际/预计耗时由 durationMinutes 单独提供给 Plan 层。
+     */
+    private Double timeScore(ActivityItem item, TimeConstraint timeConstraint) {
+        if (timeConstraint == null || !timeConstraint.hasTime()) return null;
+        if (item.validStartTime() == null || item.validEndTime() == null) return 0.0;
+        return overlapRatio(
+                item.validStartTime(), item.validEndTime(),
+                timeConstraint.startTime(), timeConstraint.endTime());
     }
 
-    /** 计算 queryValues 中有多少标签出现在 itemValues 中，返回命中比例。 */
-    private double overlap(List<String> itemValues, List<String> queryValues) {
-        if (queryValues == null || queryValues.isEmpty()) {
-            return 0; // 查询侧该维度为空时不计分
+    private double overlapRatio(LocalTime activityStart, LocalTime activityEnd,
+                                LocalTime queryStart, LocalTime queryEnd) {
+        if (activityStart == null || activityEnd == null || queryStart == null || queryEnd == null) return 0.0;
+        int activityStartMinute = minuteOfDay(activityStart);
+        int activityEndMinute = minuteOfDay(activityEnd);
+        if (activityEndMinute <= activityStartMinute) activityEndMinute += 24 * 60;
+        int windowDuration = activityEndMinute - activityStartMinute;
+        if (windowDuration <= 0) return 0.0;
+
+        int queryStartMinute = minuteOfDay(queryStart);
+        int queryEndMinute = minuteOfDay(queryEnd);
+        if (queryEndMinute <= queryStartMinute) queryEndMinute += 24 * 60;
+
+        int bestOverlap = 0;
+        for (int shift : new int[]{-24 * 60, 0, 24 * 60}) {
+            int shiftedStart = activityStartMinute + shift;
+            int shiftedEnd = activityEndMinute + shift;
+            int overlap = Math.max(0,
+                    Math.min(shiftedEnd, queryEndMinute) - Math.max(shiftedStart, queryStartMinute));
+            bestOverlap = Math.max(bestOverlap, overlap);
         }
-        Set<String> itemSet = Set.copyOf(itemValues == null ? List.of() : itemValues);
-        long hits = queryValues.stream().filter(itemSet::contains).count();
-        // hits * 1.0 / queryValues.size()  即  命中的用户标签数 / 用户查询标签总数
-        // 例如 鸡胸肉的health_Goal有[清淡，高蛋白] 猪肘的health_Goal有[高蛋白]，用户的输入的health_Goal是[清淡，高蛋白]
-        // 那这里 queryValues就是[清淡，高蛋白]
-        // 鸡胸肉的 hits = 2   猪肘的 hits = 1
-        // 于是最终得分，鸡胸肉的 score = 2 / 2 = 1,  猪肘的 score = 1 / 2 = 0.5 分
-        // 排序的规则就是看 谁更能满足用户的需求
-        return hits * 1.0 / queryValues.size();
+        return clamp(bestOverlap * 1.0 / windowDuration);
     }
 
-    /** 将分数约束在 [0, 1] 区间。 */
+    private int minuteOfDay(LocalTime time) {
+        return time.getHour() * 60 + time.getMinute();
+    }
+
+    private double weatherScore(double baseScore, SlotBundle item, WeatherRecommendationContext weather) {
+        if (weather == null || !weather.active() || item == null) return baseScore;
+        Set<String> features = Set.copyOf(item.feature() == null ? List.of() : item.feature());
+        if (features.contains("室内")) {
+            return clamp(baseScore * 0.88 + 0.12);
+        }
+        if (features.contains("户外") || features.contains("室外")) {
+            return clamp(baseScore * 0.82);
+        }
+        return baseScore;
+    }
+
     private double clamp(double score) {
         return Math.max(0, Math.min(1, score));
     }
 
-    private record ScorePart(boolean active, double score) {
-    }
+    private record ScoredActivity(ActivityItem activity, ActivityRankScore score, double sortScore) {}
 }
