@@ -6,6 +6,8 @@ import com.city.model.agent.RecommendationDecision;
 import com.city.model.agent.RecommendationExecutionResult;
 import com.city.model.context.VerifiedRequestContext;
 import com.city.service.evidence.CandidateEvidenceRegistry;
+import com.city.service.evidence.DecisionEvidenceValidator;
+import com.city.service.evidence.RunEvidenceStore;
 import com.city.service.recommend.RecommendationDecisionValidator;
 import com.city.service.trace.AgentTraceService;
 import io.agentscope.core.ReActAgent;
@@ -19,8 +21,8 @@ import java.util.Objects;
 /**
  * RecommendationAgent 的执行边界。
  *
- * <p>当前阶段作为新链路旁路能力存在，不写 SessionState，也不替换旧 RecommendResponseAgent。
- * Agent 可以通过 search_activities 自主检索并在候选池不足时调整软检索意图再检索一次。</p>
+ * <p>不写 SessionState。Agent 可以通过 search_activities 自主检索，并在候选池不足时
+ * 调整软检索意图再检索一次；最终实体必须通过当前 Run 的 Evidence 门禁。</p>
  */
 @Component
 public final class RecommendationWorker {
@@ -28,6 +30,7 @@ public final class RecommendationWorker {
 
     private final RecommendationAgentBuilder agentBuilder;
     private final RecommendationDecisionValidator decisionValidator;
+    private final DecisionEvidenceValidator evidenceValidator = new DecisionEvidenceValidator();
     private final AgentTraceService traceService;
 
     public RecommendationWorker(RecommendationAgentBuilder agentBuilder,
@@ -41,7 +44,11 @@ public final class RecommendationWorker {
     public RecommendationExecutionResult execute(String userInput,
                                                  VerifiedRequestContext verifiedContext) {
         Objects.requireNonNull(verifiedContext, "verifiedContext");
-        CandidateEvidenceRegistry evidenceRegistry = new CandidateEvidenceRegistry(MAX_RETRIEVAL_CALLS);
+        RunEvidenceStore evidenceStore = new RunEvidenceStore(verifiedContext.traceId());
+        CandidateEvidenceRegistry evidenceRegistry = new CandidateEvidenceRegistry(
+                MAX_RETRIEVAL_CALLS,
+                evidenceStore
+        );
         ReActAgent agent = agentBuilder.build(verifiedContext, evidenceRegistry);
         String prompt = buildUserPrompt(userInput, verifiedContext);
 
@@ -64,10 +71,10 @@ public final class RecommendationWorker {
             }
             RecommendationDecision decision = response.getStructuredData(RecommendationDecision.class);
             RecommendationDecision validated = decisionValidator.validate(decision, evidenceRegistry);
-            List<ActivityItem> selected = evidenceRegistry.resolveSelected(validated.selectedActivityIds());
-            if (selected.size() != validated.selectedActivityIds().size()) {
-                throw new IllegalStateException("RecommendationAgent 选中候选无法完整还原为已验证实体");
-            }
+            List<ActivityItem> selected = evidenceValidator.validateRecommendation(
+                    validated.selectedActivityIds(),
+                    evidenceStore
+            );
             RecommendationExecutionResult result = new RecommendationExecutionResult(
                     validated,
                     selected,
@@ -77,7 +84,10 @@ public final class RecommendationWorker {
             traceService.recordEvent(
                     "RECOMMENDATION_DECIDED",
                     "AGENT",
-                    evidenceRegistry.rounds(),
+                    java.util.Map.of(
+                            "rounds", evidenceRegistry.rounds(),
+                            "evidence", evidenceStore.snapshot()
+                    ),
                     result
             );
             return result;
@@ -85,7 +95,10 @@ public final class RecommendationWorker {
             traceService.recordError(
                     "RECOMMENDATION_AGENT_FAILED",
                     "AGENT",
-                    evidenceRegistry.rounds(),
+                    java.util.Map.of(
+                            "rounds", evidenceRegistry.rounds(),
+                            "evidence", evidenceStore.snapshot()
+                    ),
                     error
             );
             throw error;
