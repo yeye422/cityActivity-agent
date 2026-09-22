@@ -2,6 +2,7 @@ package com.city.service.plan;
 
 import com.city.enums.SourceMode;
 import com.city.model.ActivityItem;
+import com.city.model.DecisionResponseResult;
 import com.city.model.PlanCandidate;
 import com.city.model.RecommendResult;
 import com.city.model.SlotBundle;
@@ -10,7 +11,6 @@ import com.city.model.agent.PlanProposal;
 import com.city.model.agent.PlanValidationResult;
 import com.city.model.agent.PlanningAgentExecutionResult;
 import com.city.model.agent.PlanningDecision;
-import com.city.service.recommend.RecommendResponseAgentService;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -45,7 +45,7 @@ class PlanningResponseGeneratorServiceTest {
                 PlanValidationResult.valid(accepted)
         );
 
-        RecommendResponseAgentService.Result result = service.generate(
+        DecisionResponseResult result = service.generate(
                 "s1",
                 "帮我安排下午",
                 SourceMode.PUBLIC,
