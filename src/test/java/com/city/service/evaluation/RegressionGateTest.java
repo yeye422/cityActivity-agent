@@ -36,6 +36,16 @@ class RegressionGateTest {
     }
 
     @Test
+    void reactRouteCoverageDropFailsGate() {
+        RegressionGate.Result result = RegressionGate.evaluate(82.0, 82.0,
+                Map.of("reactRouteCoverage", 0.9),
+                Map.of("reactRouteCoverage", 0.7));
+
+        assertFalse(result.passed());
+        assertEquals(-0.2, result.metricDeltas().get("reactRouteCoverage"));
+    }
+
+    @Test
     void reactFallbackIncreaseFailsGate() {
         RegressionGate.Result result = RegressionGate.evaluate(82.0, 82.0,
                 Map.of("reactFallbackRate", 0.01),
