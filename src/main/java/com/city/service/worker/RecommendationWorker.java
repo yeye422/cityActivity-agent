@@ -1,7 +1,9 @@
 package com.city.service.worker;
 
 import com.city.agent.builder.RecommendationAgentBuilder;
+import com.city.model.ActivityItem;
 import com.city.model.agent.RecommendationDecision;
+import com.city.model.agent.RecommendationExecutionResult;
 import com.city.model.context.VerifiedRequestContext;
 import com.city.service.evidence.CandidateEvidenceRegistry;
 import com.city.service.recommend.RecommendationDecisionValidator;
@@ -11,6 +13,7 @@ import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -35,8 +38,8 @@ public final class RecommendationWorker {
         this.traceService = Objects.requireNonNull(traceService, "traceService");
     }
 
-    public RecommendationDecision execute(String userInput,
-                                          VerifiedRequestContext verifiedContext) {
+    public RecommendationExecutionResult execute(String userInput,
+                                                 VerifiedRequestContext verifiedContext) {
         Objects.requireNonNull(verifiedContext, "verifiedContext");
         CandidateEvidenceRegistry evidenceRegistry = new CandidateEvidenceRegistry(MAX_RETRIEVAL_CALLS);
         ReActAgent agent = agentBuilder.build(verifiedContext, evidenceRegistry);
@@ -61,13 +64,23 @@ public final class RecommendationWorker {
             }
             RecommendationDecision decision = response.getStructuredData(RecommendationDecision.class);
             RecommendationDecision validated = decisionValidator.validate(decision, evidenceRegistry);
+            List<ActivityItem> selected = evidenceRegistry.resolveSelected(validated.selectedActivityIds());
+            if (selected.size() != validated.selectedActivityIds().size()) {
+                throw new IllegalStateException("RecommendationAgent 选中候选无法完整还原为已验证实体");
+            }
+            RecommendationExecutionResult result = new RecommendationExecutionResult(
+                    validated,
+                    selected,
+                    evidenceRegistry.retrievalCalls(),
+                    evidenceRegistry.rounds()
+            );
             traceService.recordEvent(
                     "RECOMMENDATION_DECIDED",
                     "AGENT",
                     evidenceRegistry.rounds(),
-                    validated
+                    result
             );
-            return validated;
+            return result;
         } catch (RuntimeException error) {
             traceService.recordError(
                     "RECOMMENDATION_AGENT_FAILED",
