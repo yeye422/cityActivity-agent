@@ -14,6 +14,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -37,6 +38,44 @@ class PreferenceMemoryServiceTest {
 
         assertEquals(7L, result.getId());
         verify(mapper).upsert(1L, "style", "安静", PreferencePolarity.PREFER, "EXPLICIT");
+    }
+
+    @Test
+    void explicitRememberShouldNotTrustCallerProvidedSource() {
+        when(slotOptionService.findAllOptions()).thenReturn(Map.of("style", List.of("安静")));
+        when(mapper.findByNaturalKey(1L, "style", "安静", PreferencePolarity.PREFER))
+                .thenReturn(new PreferenceFact());
+
+        service.remember(1L,
+                new PreferenceFactRequest("style", "安静", PreferencePolarity.PREFER, "AGENT_INFERRED"));
+
+        verify(mapper).upsert(1L, "style", "安静", PreferencePolarity.PREFER, MemoryPolicy.EXPLICIT);
+    }
+
+    @Test
+    void confirmedAgentPreferenceShouldAllowStableSlot() {
+        when(slotOptionService.findAllOptions()).thenReturn(Map.of("style", List.of("安静")));
+        when(mapper.findByNaturalKey(1L, "style", "安静", PreferencePolarity.PREFER))
+                .thenReturn(new PreferenceFact());
+
+        service.rememberConfirmedAgentPreference(1L,
+                new PreferenceFactRequest("style", "安静", PreferencePolarity.PREFER, null));
+
+        verify(mapper).upsert(1L, "style", "安静", PreferencePolarity.PREFER, MemoryPolicy.AGENT_CONFIRMED);
+    }
+
+    @Test
+    void confirmedAgentPreferenceShouldRejectBudgetBeforePersistence() {
+        assertThrows(CityException.class, () -> service.rememberConfirmedAgentPreference(1L,
+                new PreferenceFactRequest("budget", "200以内", PreferencePolarity.PREFER, null)));
+
+        verify(mapper, never()).upsert(
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString()
+        );
     }
 
     @Test
