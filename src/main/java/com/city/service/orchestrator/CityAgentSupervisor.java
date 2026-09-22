@@ -51,11 +51,15 @@ import com.city.service.time.TimeResolutionService;
 import com.city.service.trace.AgentTraceService;
 import com.city.service.weather.WeatherRecommendationService;
 import com.city.service.worker.ContextWorker;
-import com.city.service.worker.DiscoveryWorker;
 import com.city.service.worker.PlanningWorker;
 import com.city.service.worker.ResponseWorker;
+import com.city.service.worker.RetrievalWorker;
+import com.city.service.worker.WorkerDispatcher;
+import com.city.service.workflow.WorkflowRouter;
+import com.city.service.workflow.WorkflowType;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -63,7 +67,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** 城市活动多 Agent 编排服务。 */
@@ -86,8 +89,10 @@ public class CityAgentSupervisor {
     private final RiskGuardService riskGuardService;
     private final AgentTraceService agentTraceService;
     private final ToolContractRegistry toolContractRegistry = new ToolContractRegistry();
+    private final WorkflowRouter workflowRouter = new WorkflowRouter();
+    private final WorkerDispatcher workerDispatcher;
     private final ContextWorker contextWorker;
-    private final DiscoveryWorker discoveryWorker;
+    private final RetrievalWorker retrievalWorker;
     private final PlanningWorker planningWorker;
     private final ResponseWorker responseWorker;
     private final Map<String, Object> sessionLocks = new ConcurrentHashMap<>();
@@ -126,8 +131,9 @@ public class CityAgentSupervisor {
         this.timeResolutionService = timeResolutionService;
         this.riskGuardService = riskGuardService;
         this.agentTraceService = agentTraceService;
+        this.workerDispatcher = new WorkerDispatcher(toolContractRegistry, agentTraceService);
         this.contextWorker = new ContextWorker(intentAgentService, intentReviseService);
-        this.discoveryWorker = new DiscoveryWorker(activitySearchService);
+        this.retrievalWorker = new RetrievalWorker(activitySearchService);
         this.planningWorker = new PlanningWorker(activityPlanService);
         this.responseWorker = new ResponseWorker(recommendResponseAgentService, planResponseAgentService);
     }
@@ -227,15 +233,20 @@ public class CityAgentSupervisor {
             publicFallbackUsed = true;
         }
 
-        recordWorkerDispatch(sessionId, AgentTaskType.CONTEXT_UNDERSTANDING, true,
-                traceMap("slots", state.slots(), "timeConstraint", state.timeConstraint()),
-                Set.of(ToolCapability.CONTEXT_PARSE));
-        ContextWorker.Result contextResult = contextWorker.understand(
+        SessionState contextState = state;
+        ContextWorker.Result contextResult = dispatchWorker(
                 sessionId,
-                userId,
-                request.message(),
-                state,
-                sessionService.recentConversationTurns(sessionId, userId, 3)
+                AgentTaskType.CONTEXT_UNDERSTANDING,
+                true,
+                traceMap("slots", contextState.slots(), "timeConstraint", contextState.timeConstraint()),
+                Set.of(ToolCapability.CONTEXT_PARSE),
+                () -> contextWorker.understand(
+                        sessionId,
+                        userId,
+                        request.message(),
+                        contextState,
+                        sessionService.recentConversationTurns(sessionId, userId, 3)
+                )
         );
         IntentResult rawIntent = contextResult.raw();
         agentTraceService.recordEvent("INTENT_RECOGNIZED", "INTENT", request.message(), rawIntent);
@@ -280,14 +291,15 @@ public class CityAgentSupervisor {
             }
         }
 
-        agentTraceService.recordEvent("ROUTE_SELECTED", "ROUTE", intent, Map.of("route", intent.intent()));
+        WorkflowType workflowType = workflowRouter.route(intent.intent());
+        agentTraceService.recordEvent("ROUTE_SELECTED", "ROUTE", intent,
+                traceMap("intent", intent.intent(), "workflow", workflowType));
 
-        return switch (intent.intent()) {
-            case ACTIVITY_RECOMMENDATION ->
-                    handleRecommendation(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
-            case ACTIVITY_ADJUST -> handleAdjust(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
-            case ACTIVITY_PLAN -> handlePlan(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
-            case OTHER -> handleChitchat(sessionId, traceId, state);
+        return switch (workflowType) {
+            case RECOMMEND -> handleRecommendation(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
+            case ADJUST -> handleAdjust(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
+            case PLAN -> handlePlan(sessionId, userId, request.message(), traceId, state, intent, publicFallbackUsed);
+            case CHITCHAT -> handleChitchat(sessionId, traceId, state);
         };
     }
 
@@ -502,19 +514,24 @@ public class CityAgentSupervisor {
                 weather
         );
 
-        recordWorkerDispatch(sessionId, AgentTaskType.MULTI_PERIOD_PLANNING, true,
+        PlanningResult planning = dispatchWorker(
+                sessionId,
+                AgentTaskType.MULTI_PERIOD_PLANNING,
+                true,
                 traceMap("slots", state.slots(), "timeConstraint", state.timeConstraint(),
                         "planActivityTimes", planActivityTimes),
                 Set.of(ToolCapability.ACTIVITY_SEARCH, ToolCapability.ACTIVITY_SESSION_READ,
-                        ToolCapability.VENUE_READ, ToolCapability.WEATHER_READ, ToolCapability.MAP_READ));
-        PlanningResult planning = planningWorker.plan(
-                state.sourceMode(),
-                userId,
-                state.slots(),
-                state.excludedSlots(),
-                planActivityTimes,
-                state.timeConstraint(),
-                weather
+                        ToolCapability.VENUE_READ, ToolCapability.WEATHER_READ,
+                        ToolCapability.MAP_READ, ToolCapability.PREFERENCE_READ),
+                () -> planningWorker.plan(
+                        state.sourceMode(),
+                        userId,
+                        state.slots(),
+                        state.excludedSlots(),
+                        planActivityTimes,
+                        state.timeConstraint(),
+                        weather
+                )
         );
         List<ActivityPlanService.PlannedActivity> plannedActivities = planning.plans();
 
@@ -547,8 +564,16 @@ public class CityAgentSupervisor {
             return completeTextOnly(sessionId, traceId, state, Intent.ACTIVITY_PLAN, empty);
         }
 
-        RecommendResponseAgentService.Result merged = responseWorker.plan(
-                sessionId, userInput, state.sourceMode(), state.slots(), plannedActivities, weather);
+        RecommendResponseAgentService.Result merged = dispatchWorker(
+                sessionId,
+                AgentTaskType.RESPONSE_GENERATION,
+                true,
+                traceMap("planPeriods", plannedActivities.stream().map(ActivityPlanService.PlannedActivity::period).toList(),
+                        "sourceMode", state.sourceMode()),
+                Set.of(ToolCapability.RESPONSE_GENERATE),
+                () -> responseWorker.plan(
+                        sessionId, userInput, state.sourceMode(), state.slots(), plannedActivities, weather)
+        );
         RecommendResult recommend = merged.recommend();
         agentTraceService.recordEvent(
                 "PLAN_RESULT_BUILT", "PLAN",
@@ -664,20 +689,24 @@ public class CityAgentSupervisor {
 
         ActivitySearchRequest searchRequest = new ActivitySearchRequest(
                 state.sourceMode(), userId, state.slots(), excludeActivityIds, state.timeConstraint(), state.excludedSlots());
-        recordWorkerDispatch(sessionId, AgentTaskType.ACTIVITY_DISCOVERY, true,
-                traceMap("sourceMode", state.sourceMode(), "slots", state.slots(),
-                        "excludedSlots", state.excludedSlots(), "timeConstraint", state.timeConstraint()),
-                Set.of(ToolCapability.ACTIVITY_SEARCH, ToolCapability.ACTIVITY_SESSION_READ,
-                        ToolCapability.VENUE_READ, ToolCapability.WEATHER_READ,
-                        ToolCapability.MAP_READ, ToolCapability.PREFERENCE_READ));
         DiscoveryResult prefetchedPublic = null;
         DiscoveryResult discovery;
         if (selectedRelaxation == null && state.sourceMode() == SourceMode.PERSONAL) {
             ActivitySearchRequest publicPrefetchRequest = new ActivitySearchRequest(
                     SourceMode.PUBLIC, userId, state.slots(), excludeActivityIds,
                     state.timeConstraint(), state.excludedSlots());
-            DiscoveryWorker.SourceResults sourceResults = discoveryWorker.discoverPersonalAndPublic(
-                    searchRequest, publicPrefetchRequest);
+            RetrievalWorker.SourceResults sourceResults = dispatchWorker(
+                    sessionId,
+                    AgentTaskType.ACTIVITY_DISCOVERY,
+                    true,
+                    traceMap("sources", List.of(SourceMode.PERSONAL, SourceMode.PUBLIC),
+                            "slots", state.slots(), "excludedSlots", state.excludedSlots(),
+                            "timeConstraint", state.timeConstraint()),
+                    Set.of(ToolCapability.ACTIVITY_SEARCH, ToolCapability.ACTIVITY_SESSION_READ,
+                            ToolCapability.VENUE_READ, ToolCapability.WEATHER_READ,
+                            ToolCapability.MAP_READ, ToolCapability.PREFERENCE_READ),
+                    () -> retrievalWorker.retrievePersonalAndPublic(searchRequest, publicPrefetchRequest)
+            );
             discovery = sourceResults.personal();
             prefetchedPublic = sourceResults.publicResult();
             agentTraceService.recordEvent("DISCOVERY_PARALLELIZED", "SEARCH",
@@ -686,7 +715,16 @@ public class CityAgentSupervisor {
                             "publicCount", prefetchedPublic.candidates().size()));
         } else {
             discovery = selectedRelaxation == null
-                    ? discoveryWorker.discover(searchRequest)
+                    ? dispatchWorker(
+                            sessionId,
+                            AgentTaskType.ACTIVITY_DISCOVERY,
+                            true,
+                            traceMap("sourceMode", state.sourceMode(), "slots", state.slots(),
+                                    "excludedSlots", state.excludedSlots(), "timeConstraint", state.timeConstraint()),
+                            Set.of(ToolCapability.ACTIVITY_SEARCH, ToolCapability.ACTIVITY_SESSION_READ,
+                                    ToolCapability.VENUE_READ, ToolCapability.WEATHER_READ,
+                                    ToolCapability.MAP_READ, ToolCapability.PREFERENCE_READ),
+                            () -> retrievalWorker.retrieve(searchRequest))
                     : new DiscoveryResult(selectedRelaxation.ranked(), discoveryResult(selectedRelaxation.ranked()));
         }
         List<ActivityItem> candidates = discovery.candidates();
@@ -716,7 +754,16 @@ public class CityAgentSupervisor {
                         SourceMode.PUBLIC, userId, state.slots(), excludeActivityIds,
                         state.timeConstraint(), state.excludedSlots());
                 DiscoveryResult publicDiscovery = prefetchedPublic == null
-                        ? discoveryWorker.discover(publicSearchRequest)
+                        ? dispatchWorker(
+                                sessionId,
+                                AgentTaskType.ACTIVITY_DISCOVERY,
+                                true,
+                                traceMap("sourceMode", SourceMode.PUBLIC, "slots", state.slots(),
+                                        "excludedSlots", state.excludedSlots(), "timeConstraint", state.timeConstraint()),
+                                Set.of(ToolCapability.ACTIVITY_SEARCH, ToolCapability.ACTIVITY_SESSION_READ,
+                                        ToolCapability.VENUE_READ, ToolCapability.WEATHER_READ,
+                                        ToolCapability.MAP_READ, ToolCapability.PREFERENCE_READ),
+                                () -> retrievalWorker.retrieve(publicSearchRequest))
                         : prefetchedPublic;
                 List<ActivityItem> publicCandidates = publicDiscovery.candidates();
                 agentTraceService.recordEvent("ACTIVITY_SEARCHED_PUBLIC_FALLBACK", "SEARCH", publicSearchRequest,
@@ -767,12 +814,18 @@ public class CityAgentSupervisor {
             }
         }
 
-        recordWorkerDispatch(sessionId, AgentTaskType.RESPONSE_GENERATION, true,
-                traceMap("candidateActivityIds", ranked.stream().map(ActivityItem::id).toList(),
-                        "sourceMode", state.sourceMode()),
-                Set.of(ToolCapability.RESPONSE_GENERATE));
-        RecommendResponseAgentService.Result merged = responseWorker.recommend(
-                sessionId, userInput, state.sourceMode(), state.slots(), ranked, weather);
+        List<ActivityItem> responseCandidates = ranked;
+        SessionState responseState = state;
+        RecommendResponseAgentService.Result merged = dispatchWorker(
+                sessionId,
+                AgentTaskType.RESPONSE_GENERATION,
+                true,
+                traceMap("candidateActivityIds", responseCandidates.stream().map(ActivityItem::id).toList(),
+                        "sourceMode", responseState.sourceMode()),
+                Set.of(ToolCapability.RESPONSE_GENERATE),
+                () -> responseWorker.recommend(
+                        sessionId, userInput, responseState.sourceMode(), responseState.slots(), responseCandidates, weather)
+        );
         RecommendResult recommend = merged.recommend();
         String strategy = state.currentIntent() == null ? Intent.ACTIVITY_RECOMMENDATION.name() : state.currentIntent().name();
         agentTraceService.recordEvent("RECOMMEND_RESULT_BUILT", "RECOMMEND", Map.of("strategy", strategy, "ranked", ranked), recommend);
@@ -918,11 +971,12 @@ public class CityAgentSupervisor {
         return (System.nanoTime() - startedAt) / 1_000_000;
     }
 
-    private void recordWorkerDispatch(String sessionId,
-                                      AgentTaskType type,
-                                      boolean readOnly,
-                                      Map<String, Object> context,
-                                      Set<ToolCapability> capabilities) {
+    private <T> T dispatchWorker(String sessionId,
+                                 AgentTaskType type,
+                                 boolean readOnly,
+                                 Map<String, Object> context,
+                                 Set<ToolCapability> capabilities,
+                                 WorkerDispatcher.WorkerCall<T> call) {
         AgentTask task = new AgentTask(
                 "task_" + UUID.randomUUID().toString().replace("-", ""),
                 sessionId,
@@ -933,8 +987,7 @@ public class CityAgentSupervisor {
                 List.of(),
                 Instant.now().plusSeconds(60)
         );
-        toolContractRegistry.validate(task);
-        agentTraceService.recordEvent("WORKER_DISPATCHED", "AGENT", null, task);
+        return workerDispatcher.dispatch(task, call);
     }
 
     private com.city.model.agent.AgentResult discoveryResult(List<ActivityItem> candidates) {
