@@ -41,7 +41,7 @@ class PlanningWorkerTest {
                 "14:00-16:00", null, SlotBundle.empty(), List.of(item), Map.of(1L, List.of(session)), null);
         PlanningResult planning = new PlanningResult(
                 List.of(planned),
-                new AgentResult(AgentResult.Status.COMPLETED, "ok", Set.of(1L), Set.of(101L), List.of(), List.of(), Map.of()));
+                new AgentResult(AgentResult.Status.COMPLETED, "ok", Set.of(), Set.of(), List.of(), List.of(), Map.of()));
         when(planService.planWithEvidence(any(), any(), any(), any(), any(), any(), any())).thenReturn(planning);
 
         PlanningExecutionResult result = worker.planAndSolve(
