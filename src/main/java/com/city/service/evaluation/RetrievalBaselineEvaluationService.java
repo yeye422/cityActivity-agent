@@ -34,7 +34,7 @@ public class RetrievalBaselineEvaluationService {
     private final RetrievalPipeline retrievalPipeline;
 
     public RetrievalBaselineEvaluationService(ObjectMapper objectMapper,
-                                              RetrievalPipeline retrievalPipeline) {
+                                               RetrievalPipeline retrievalPipeline) {
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.retrievalPipeline = Objects.requireNonNull(retrievalPipeline, "retrievalPipeline");
     }
@@ -83,6 +83,7 @@ public class RetrievalBaselineEvaluationService {
 
         return new Report(
                 caseSet.version(),
+                caseSet.evalSetHash(),
                 "CURRENT_PIPELINE",
                 k,
                 StableRetrievalQualityEvaluator.summarize(metricResults),
@@ -98,8 +99,10 @@ public class RetrievalBaselineEvaluationService {
             JsonNode casesNode = root.path("cases");
             if (!casesNode.isArray()) throw new CityException("Retrieval 评测集 cases 必须为数组");
 
+            List<JsonNode> fingerprintCases = new ArrayList<>();
             List<LoadedCase> cases = new ArrayList<>();
             for (JsonNode node : casesNode) {
+                fingerprintCases.add(node.deepCopy());
                 String caseId = node.path("id").asText("").trim();
                 String query = node.path("query").asText("").trim();
                 if (caseId.isBlank() || query.isBlank()) {
@@ -114,7 +117,11 @@ public class RetrievalBaselineEvaluationService {
                         node.path("expectedNoResult").asBoolean(false)
                 ));
             }
-            return new CaseSet(version, List.copyOf(cases));
+            return new CaseSet(
+                    version,
+                    EvaluationSetFingerprint.sha256(objectMapper, fingerprintCases),
+                    List.copyOf(cases)
+            );
         } catch (CityException error) {
             throw error;
         } catch (Exception error) {
@@ -166,7 +173,7 @@ public class RetrievalBaselineEvaluationService {
         }
     }
 
-    record CaseSet(String version, List<LoadedCase> cases) { }
+    record CaseSet(String version, String evalSetHash, List<LoadedCase> cases) { }
 
     record LoadedCase(
             String caseId,
@@ -190,6 +197,7 @@ public class RetrievalBaselineEvaluationService {
 
     public record Report(
             String evalSetVersion,
+            String evalSetHash,
             String strategy,
             int k,
             StableRetrievalQualityEvaluator.Summary summary,
