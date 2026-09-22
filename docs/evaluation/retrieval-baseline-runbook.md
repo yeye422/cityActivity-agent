@@ -114,6 +114,12 @@ gitCommit
 
 用于定位本次运行对应的代码版本。CI 的 pull request merge ref 与本地分支 commit 可能不同，因此正式基线应记录真实运行环境返回的该字段，而不是手工猜测提交号。
 
+一个可复现的 Retrieval baseline 至少由以下四元组标识：
+
+```text
+(evalSetHash, gitCommit, strategy, k)
+```
+
 `summary` 包含：
 
 ```text
