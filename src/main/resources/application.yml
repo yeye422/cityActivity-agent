@@ -37,7 +37,8 @@ city:
     light-model: qwen-turbo
     response-model: qwen-turbo
   agent:
-    # AgentScope ReAct 新链路灰度开关。接入 Supervisor 前默认关闭；异常时 Facade 返回 empty 由旧链回退。
+    # AgentScope ReAct 灰度开关。推荐链已接入 Supervisor，默认仍关闭；异常自动回退旧链。
+    # 规划链保持旁路，待交通证据 Tool 完整接入后再切 Supervisor。
     recommendation-react:
       enabled: ${CITY_RECOMMENDATION_REACT_ENABLED:false}
     planning-react:
