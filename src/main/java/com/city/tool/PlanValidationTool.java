@@ -58,13 +58,16 @@ public class PlanValidationTool {
                 proposal,
                 planningContext.evidenceRegistry(),
                 planningContext.maxBudget(),
-                planningContext.travelTimeEvidence()
+                planningContext.allTravelTimeEvidence()
         );
         if (traceService != null) {
             traceService.recordEvent(
                     result.valid() ? "PLAN_VALIDATION_PASSED" : "PLAN_VALIDATION_FAILED",
                     "TOOL",
-                    Map.of("validationCall", validationCall),
+                    Map.of(
+                            "validationCall", validationCall,
+                            "travelEvidenceCount", planningContext.allTravelTimeEvidence().size()
+                    ),
                     result
             );
         }
