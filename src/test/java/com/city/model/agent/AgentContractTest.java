@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class AgentContractTest {
@@ -26,6 +27,31 @@ class AgentContractTest {
 
         assertEquals("西安", task.contextSnapshot().get("city"));
         assertEquals(1, task.allowedCapabilities().size());
+        assertNull(task.traceId());
+        assertEquals(ExecutionBudget.inheritDefaults(), task.executionBudget());
+    }
+
+    @Test
+    void taskShouldCarryRuntimeLineageAndBudget() {
+        ExecutionBudget budget = new ExecutionBudget(2, 5, 8000L, 1500L);
+        AgentTask task = new AgentTask(
+                "task-runtime", "session-1", AgentTaskType.ACTIVITY_DISCOVERY, true,
+                java.util.Map.of(), java.util.Set.of(ToolCapability.ACTIVITY_SEARCH), java.util.List.of(),
+                Instant.now().plusSeconds(30),
+                " trace-1 ", "run-1", "parent-1", budget);
+
+        assertEquals("trace-1", task.traceId());
+        assertEquals("run-1", task.runId());
+        assertEquals("parent-1", task.parentTaskId());
+        assertEquals(budget, task.executionBudget());
+    }
+
+    @Test
+    void executionBudgetMustRejectNonPositiveLimits() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new ExecutionBudget(0, null, null, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ExecutionBudget(null, null, -1L, null));
     }
 
     @Test
