@@ -4,6 +4,7 @@ import com.city.enums.SourceMode;
 import com.city.model.ActivityItem;
 import com.city.model.ActivitySessionResponse;
 import com.city.model.SlotBundle;
+import com.city.model.TravelTimeEvidence;
 import com.city.model.agent.PlanProposal;
 import com.city.model.agent.PlanValidationResult;
 import com.city.service.evidence.PlanningEvidenceRegistry;
@@ -35,12 +36,26 @@ class PlanProposalValidationServiceTest {
                 proposal,
                 registry,
                 BigDecimal.valueOf(300),
-                List.of()
+                List.of(new TravelTimeEvidence(101L, 202L, 30, "TEST"))
         );
 
         assertTrue(result.valid());
         assertNotNull(result.acceptedPlan());
         assertEquals(2, result.acceptedPlan().items().size());
+    }
+
+    @Test
+    void shouldRequireTravelEvidenceForDifferentVenues() {
+        PlanningEvidenceRegistry registry = registry(false);
+        PlanProposal proposal = new PlanProposal(List.of(
+                new PlanProposal.Item("14:00-16:00", 101L, 1001L),
+                new PlanProposal.Item("18:00-20:00", 202L, 2002L)
+        ));
+
+        PlanValidationResult result = service.validate(proposal, registry, null, List.of());
+
+        assertFalse(result.valid());
+        assertEquals("MISSING_TRAVEL_EVIDENCE", result.violations().getFirst().code());
     }
 
     @Test
@@ -57,14 +72,19 @@ class PlanProposalValidationServiceTest {
     }
 
     @Test
-    void shouldRejectTimeConflictEvenWhenAllIdsAreValidEvidence() {
+    void shouldRejectTimeConflictEvenWhenAllIdsAndTravelEvidenceAreValid() {
         PlanningEvidenceRegistry registry = registry(true);
         PlanProposal proposal = new PlanProposal(List.of(
                 new PlanProposal.Item("14:00-16:00", 101L, 1001L),
                 new PlanProposal.Item("18:00-20:00", 202L, 2002L)
         ));
 
-        PlanValidationResult result = service.validate(proposal, registry, null, List.of());
+        PlanValidationResult result = service.validate(
+                proposal,
+                registry,
+                null,
+                List.of(new TravelTimeEvidence(101L, 202L, 30, "TEST"))
+        );
 
         assertFalse(result.valid());
         assertEquals("HARD_CONSTRAINT_CONFLICT", result.violations().getFirst().code());
