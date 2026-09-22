@@ -47,6 +47,7 @@ mysql city_db < src/main/resources/db/evaluation_loop_migration.sql
 mysql city_db < src/main/resources/db/activity_venue_session_migration.sql
 mysql city_db < src/main/resources/db/agent_memory_migration.sql
 mysql city_db < src/main/resources/db/agent_ui_event_migration.sql
+mysql city_db < src/main/resources/db/chat_request_idempotency_migration.sql
 mysql city_db < src/main/resources/db/city_seed.sql
 # 可选：补充更多带具体场次的演示活动
 mysql city_db < src/main/resources/db/activity_catalog_seed.sql
@@ -56,6 +57,7 @@ mysql city_db < src/main/resources/db/activity_catalog_seed.sql
 `activity_venue_session_migration.sql` 会创建 `venue` 和 `activity_session`；只有执行该迁移并存在目标日期的 OPEN 场次时，具体 `sessionId/startAt/endAt` 才会作为 PlanAgent 的硬规划依据。
 `agent_memory_migration.sql` 会创建带版本号和软删除标记的长期偏好表。偏好只作为排序软信号，本轮明确条件优先。
 `agent_ui_event_migration.sql` 会创建可恢复 SSE 事件日志；未执行该迁移时聊天主链仍可运行，但 SSE 重连只能使用当前进程内的热缓存，应用重启后无法补发旧事件。
+`chat_request_idempotency_migration.sql` 会创建 `/chat` 请求幂等表；只有客户端传 `Idempotency-Key` 时该能力才参与请求处理。
 需要回滚长期记忆能力时，先备份偏好数据，再执行 `src/main/resources/db/rollback/agent_memory_rollback.sql`。
 
 完整的 AgentScope ReAct 改造计划见 `docs/architecture/cityflow-agentscope-refactor-plan.md`，旧版完整重构计划见 `docs/architecture/cityflow-full-refactor-plan.md`，冻结基线见 `docs/baseline/p0-baseline-2026-09-22.md`。
@@ -81,6 +83,14 @@ Last-Event-ID: trace_xxx:12
 
 服务端优先从 `agent_ui_event` 持久化日志补发该游标之后的事件，再继续推送 live event；数据库日志暂不可用时退化到当前进程最近 256 条事件的热缓存。事件重放只读取日志，不会重新执行 LLM、Retrieval Tool 或 PlanningSolver，SSE 断开也不会取消正在执行的 Run。
 
+为了避免刷新/网络重试重复触发同一轮 Agent，`POST /chat` 支持可选请求头：
+
+```text
+Idempotency-Key: <client-generated-unique-key>
+```
+
+同一用户下，相同 `Idempotency-Key` 必须对应同一请求内容。第一次请求会原子 claim 并执行；成功响应持久化后，后续相同请求直接返回原 `ChatResponse`，不会再次执行 Agent/Tool。若同一 key 仍为 `PENDING`，服务端采用 fail-closed 策略阻断自动重跑；只有业务调用明确失败时才释放 claim，避免业务已提交但响应快照异常时产生重复状态写入。
+
 长期偏好采用显式写入和删除，避免模型自行篡改用户画像：
 
 ```text
@@ -95,6 +105,7 @@ DELETE /api/v1/city/preferences/{id}?version={version}
 mysql city_db < src/main/resources/db/activity_slot_model_v3.sql
 mysql city_db < src/main/resources/db/activity_venue_session_migration.sql
 mysql city_db < src/main/resources/db/agent_ui_event_migration.sql
+mysql city_db < src/main/resources/db/chat_request_idempotency_migration.sql
 ```
 
 `activity_slot_model_v3.sql` 会完成：
