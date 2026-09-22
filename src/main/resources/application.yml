@@ -37,8 +37,7 @@ city:
     light-model: qwen-turbo
     response-model: qwen-turbo
   agent:
-    # AgentScope ReAct 灰度开关。推荐链已接入 Supervisor，默认仍关闭；异常自动回退旧链。
-    # 规划链已具备真实场地坐标、路线时长 Tool 与 Solver 强制校验，尚未切入 Supervisor 主链。
+    # AgentScope ReAct 灰度开关。推荐/规划链均已接入 Supervisor，默认关闭；关闭或异常时自动回退旧链。
     recommendation-react:
       enabled: ${CITY_RECOMMENDATION_REACT_ENABLED:false}
     planning-react:
