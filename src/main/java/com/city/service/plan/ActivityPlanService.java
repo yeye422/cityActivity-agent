@@ -2,7 +2,6 @@ package com.city.service.plan;
 
 import com.city.enums.SourceMode;
 import com.city.model.ActivityItem;
-import com.city.model.ActivityRankRequest;
 import com.city.model.ActivitySearchRequest;
 import com.city.model.ActivitySessionResponse;
 import com.city.model.SlotBundle;
@@ -32,8 +31,8 @@ import java.util.Set;
 
 /**
  * 多时段规划服务：把用户可用时间拆成细粒度候选发现窗口，
- * 再按窗口独立检索/排序后保留 TopK 候选。
- * Java 负责合法候选空间；真正选几个、选哪些、哪些窗口留空由 PlanResponseAgent 决定。
+ * 再按窗口组织 TopK 候选和具体场次证据。
+ * 候选检索与排序统一委托 RetrievalWorker，Java PlanningSolver 负责最终硬约束求解。
  */
 @Service
 public class ActivityPlanService {
@@ -52,16 +51,13 @@ public class ActivityPlanService {
     private static final int PLAN_CANDIDATE_LIMIT = 3;
 
     private final RetrievalWorker retrievalWorker;
-    private final ActivityRankService activityRankService;
     private final ActivitySessionService activitySessionService;
     private final EvidenceRefFactory evidenceRefFactory = new EvidenceRefFactory();
 
     @Autowired
     public ActivityPlanService(RetrievalWorker retrievalWorker,
-                               ActivityRankService activityRankService,
                                ActivitySessionService activitySessionService) {
         this.retrievalWorker = retrievalWorker;
-        this.activityRankService = activityRankService;
         this.activitySessionService = activitySessionService;
     }
 
@@ -71,12 +67,12 @@ public class ActivityPlanService {
     public ActivityPlanService(ActivitySearchService activitySearchService,
                                ActivityRankService activityRankService,
                                ActivitySessionService activitySessionService) {
-        this(new RetrievalWorker(activitySearchService), activityRankService, activitySessionService);
+        this(new RetrievalWorker(activitySearchService, activityRankService), activitySessionService);
     }
 
     /**
      * 例如 12:00~23:00 会拆成 12-14、14-16、16-18、18-20、20-23，
-     * 给 PlanResponseAgent 更大的合法组合空间。
+     * 给 Solver 更大的合法组合空间。
      */
     public List<String> resolveActivityTimes(SlotBundle slots, TimeConstraint timeConstraint) {
         return defaultActivityTimes(timeConstraint);
@@ -136,8 +132,8 @@ public class ActivityPlanService {
     }
 
     /**
-     * 按细窗口独立检索、排序并保留 Top3 候选。
-     * 有明确日期时，同时加载候选在该窗口内的具体 OPEN 场次，交给 PlanResponseAgent 参与组合。
+     * 按细窗口通过 RetrievalWorker 独立检索/排序并保留 Top3 候选。
+     * 有明确日期时，同时加载候选在该窗口内的具体 OPEN 场次，交给 PlanningSolver 参与组合。
      */
     public List<PlannedActivity> planActivities(SourceMode sourceMode,
                                                  Long userId,
@@ -187,14 +183,10 @@ public class ActivityPlanService {
                                            WeatherRecommendationContext weather) {
         SlotBundle querySlots = slotsForActivityTime(baseSlots, activityTime);
         TimeConstraint targetTimeConstraint = timeConstraintForActivityTime(timeConstraint, activityTime);
-        List<ActivityItem> candidates = retrievalWorker.retrieveCandidates(new ActivitySearchRequest(
-                sourceMode, userId, querySlots, List.of(), targetTimeConstraint, excludedSlots));
-        List<ActivityItem> topCandidates = activityRankService.rank(
-                        new ActivityRankRequest(candidates, querySlots, targetTimeConstraint, List.of()), weather)
-                .ranked().stream()
-                .filter(item -> item != null && item.id() != null)
-                .limit(PLAN_CANDIDATE_LIMIT)
-                .toList();
+        ActivitySearchRequest request = new ActivitySearchRequest(
+                sourceMode, userId, querySlots, List.of(), targetTimeConstraint, excludedSlots);
+        List<ActivityItem> topCandidates = retrievalWorker.retrieveRanked(
+                request, weather, PLAN_CANDIDATE_LIMIT);
         Map<Long, List<ActivitySessionResponse>> sessionsByActivityId = loadPlanningSessions(
                 topCandidates, targetTimeConstraint);
         return new PlannedActivity(
