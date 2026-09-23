@@ -46,3 +46,9 @@ build/
 !.env.example
 application-local.yml
 src/main/resources/application-local.yml
+
+
+### Frontend test output ###
+node_modules/
+playwright-report/
+test-results/

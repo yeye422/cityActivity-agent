@@ -207,3 +207,16 @@ src/
 
 database_init_final.sql # 全新数据库初始化脚本
 ```
+
+
+### Frontend browser E2E
+
+内置前端浏览器回归使用 Playwright Chromium。测试完全 mock City API，不消耗模型额度，也不依赖数据库：
+
+```bash
+npm install
+npx playwright install chromium
+npm run test:e2e
+```
+
+覆盖正常聊天单次渲染、SSE `Last-Event-ID` 重连，以及刷新恢复时复用原 `Idempotency-Key`。普通 CI 的 `Frontend E2E` job 会独立执行这些浏览器测试。
