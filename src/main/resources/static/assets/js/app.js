@@ -184,7 +184,14 @@
 
     function persistChatSessionId() {
         if (!state.chat.sessionId) return;
-        try { sessionStorage.setItem(chatSessionStorageKey(), state.chat.sessionId); } catch (_) { /* noop */ }
+        try {
+            sessionStorage.setItem(chatSessionStorageKey(), JSON.stringify({
+                sessionId: state.chat.sessionId,
+                sourceMode: state.chat.sourceMode,
+                city: state.chat.city || "",
+                location: state.chat.location || ""
+            }));
+        } catch (_) { /* noop */ }
     }
 
     function clearPersistedChatSession() {
@@ -422,11 +429,26 @@
     }
 
     function restoreChatRuntime() {
-        let sessionId = "";
-        try { sessionId = sessionStorage.getItem(chatSessionStorageKey()) || ""; } catch (_) { /* noop */ }
+        let storedSession = null;
+        try {
+            const rawSession = sessionStorage.getItem(chatSessionStorageKey());
+            if (rawSession) {
+                try {
+                    storedSession = JSON.parse(rawSession);
+                } catch (_) {
+                    storedSession = { sessionId: rawSession };
+                }
+            }
+        } catch (_) { /* noop */ }
+        const sessionId = storedSession?.sessionId || "";
         if (!sessionId) return;
 
         state.chat.sessionId = sessionId;
+        if (storedSession.sourceMode === "PERSONAL" || storedSession.sourceMode === "PUBLIC") {
+            state.chat.sourceMode = storedSession.sourceMode;
+        }
+        state.chat.city = storedSession.city || "";
+        state.chat.location = storedSession.location || "";
         let saved = null;
         try {
             const raw = sessionStorage.getItem(runStorageKey(sessionId));
@@ -975,6 +997,7 @@
         }
         state.chat.city = nextCity;
         state.chat.location = nextLocation;
+        persistChatSessionId();
         state.chat.weather = null;
         resetChat();
         showToast(nextCity ? `已切换到${nextCity}` : "已清除城市筛选");
@@ -2113,7 +2136,11 @@
     function initUserField() {
         userIdInput.value = CityApi.setUserId(CityApi.getUserId());
         userIdInput.addEventListener("change", () => {
-            CityApi.setUserId(userIdInput.value);
+            const nextUserId = userIdInput.value;
+            // 先按旧 userId 清理当前 tab 的 session/run，再切换身份。
+            resetChat();
+            CityApi.setUserId(nextUserId);
+            userIdInput.value = CityApi.getUserId();
 
             // 清除缓存
             cache.clear();
@@ -2123,7 +2150,6 @@
             state.publicActivities = [];
             state.traces.rows = [];
             state.traces.selected = null;
-            resetChat();
             showToast("用户 ID 已切换");
             render();
         });

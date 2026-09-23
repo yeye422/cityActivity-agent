@@ -100,7 +100,8 @@ for (const required of [
     "restoreChatRuntime",
     "subscribeAgentEvents",
     "RECONNECTING",
-    "lastCompletedTraceId"
+    "lastCompletedTraceId",
+    "sourceMode: state.chat.sourceMode"
 ]) {
     assert.match(appSource, new RegExp(required), `app.js missing frontend runtime contract: ${required}`);
 }
