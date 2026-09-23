@@ -53,7 +53,7 @@ class AgentRuntimeMetricsExtractorTest {
                     {"eventType":"PLANNING_DISCOVERY_TOOL_CALLED"},
                     {"eventType":"TRAVEL_TIME_TOOL_CALLED"},
                     {"eventType":"PLAN_VALIDATION_TOOL_CALLED"},
-                    {"eventType":"PLAN_VALIDATION_FAILED","outputPayload":"{\\\"violations\\\":[{\\\"code\\\":\\\"BUDGET_EXCEEDED\\\"}]}"},
+                    {"eventType":"PLAN_VALIDATION_FAILED","outputPayload":"{\\\"violations\\\":[{\\\"code\\\":\\\"SESSION_NOT_EXPOSED\\\"}]}"},
                     {"eventType":"PLAN_VALIDATION_TOOL_CALLED"},
                     {"eventType":"PLAN_VALIDATION_PASSED"},
                     {"eventType":"PLANNING_REACT_COMPLETED"}
@@ -71,7 +71,31 @@ class AgentRuntimeMetricsExtractorTest {
         assertEquals(1.0, metrics.get("travelToolCallCount"));
         assertEquals(4.0, metrics.get("reactToolCallCount"));
         assertEquals(1.0, metrics.get("planValidRate"));
-        assertEquals(1.0, metrics.get("planValidationBudgetViolationRate"));
+        assertEquals(0.0, metrics.get("evidenceViolationRate"));
+        assertEquals(1.0, metrics.get("sessionHallucinationRate"));
+    }
+
+    @Test
+    void shouldCountTerminalPlanningEvidenceFailureAfterInvalidProposal() {
+        RequestTraceRow trace = trace("""
+                {
+                  "events": [
+                    {"eventType":"PLANNING_REACT_ROUTE_SELECTED"},
+                    {"eventType":"PLAN_VALIDATION_TOOL_CALLED"},
+                    {"eventType":"PLAN_VALIDATION_FAILED","outputPayload":"{\\\"violations\\\":[{\\\"code\\\":\\\"SESSION_NOT_EXPOSED\\\"}]}"},
+                    {"eventType":"PLANNING_AGENT_FAILED","errorMessage":"IllegalStateException: PlanningAgent 最终方案补验失败: SESSION_NOT_EXPOSED"},
+                    {"eventType":"PLANNING_REACT_FAILED","errorMessage":"IllegalStateException: PlanningAgent 最终方案补验失败: SESSION_NOT_EXPOSED"},
+                    {"eventType":"PLANNING_DEGRADED","errorMessage":"IllegalStateException: PlanningAgent 最终方案补验失败: SESSION_NOT_EXPOSED"}
+                  ]
+                }
+                """);
+
+        Map<String, Double> metrics = extractor.aggregate(List.of(trace));
+
+        assertEquals(0.0, metrics.get("planningReactSuccessRate"));
+        assertEquals(1.0, metrics.get("reactDegradationRate"));
+        assertEquals(1.0, metrics.get("evidenceViolationRate"));
+        assertEquals(1.0, metrics.get("sessionHallucinationRate"));
     }
 
     @Test
