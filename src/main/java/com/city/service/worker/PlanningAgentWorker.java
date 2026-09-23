@@ -119,13 +119,7 @@ public final class PlanningAgentWorker {
              * 同一个 validate_plan Tool 对最终 proposal 做确定性补验。这样无论模型是否显式执行最后
              * 一次 Tool 调用，进入业务响应的方案都必须经过同一套 Evidence/Solver/Trace 路径。
              */
-            if (!planningContext.notebook().validated()) {
-                PlanValidationResult lateValidation = validationTool.validate(decision.plan(), planningContext);
-                if (!lateValidation.valid()) {
-                    throw new IllegalStateException(
-                            "PlanningAgent 最终方案补验失败: " + lateValidation.violations());
-                }
-            }
+            ensureToolValidated(decision, planningContext);
 
             PlanValidationResult finalValidation = validationService.validate(
                     decision.plan(),
@@ -169,6 +163,21 @@ public final class PlanningAgentWorker {
                     error
             );
             throw error;
+        }
+    }
+
+    /** package-private：便于回归测试 PlanningAgent 提前 generate_response 的补验边界。 */
+    void ensureToolValidated(PlanningDecision decision, PlanningToolContext planningContext) {
+        Objects.requireNonNull(decision, "decision");
+        Objects.requireNonNull(planningContext, "planningContext");
+        if (planningContext.notebook().validated()) {
+            return;
+        }
+
+        PlanValidationResult lateValidation = validationTool.validate(decision.plan(), planningContext);
+        if (!lateValidation.valid()) {
+            throw new IllegalStateException(
+                    "PlanningAgent 最终方案补验失败: " + lateValidation.violations());
         }
     }
 
