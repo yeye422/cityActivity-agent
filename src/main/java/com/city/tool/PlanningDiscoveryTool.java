@@ -43,7 +43,8 @@ public class PlanningDiscoveryTool {
         Objects.requireNonNull(planningContext, "planningContext");
         planningContext.evidenceRegistry().beginDiscovery();
         if (traceService != null) {
-            traceService.recordEvent(
+            traceService.recordEventForTrace(
+                    planningContext.verifiedRequestContext().traceId(),
                     "PLANNING_DISCOVERY_TOOL_CALLED",
                     "TOOL",
                     Map.of(
@@ -68,7 +69,8 @@ public class PlanningDiscoveryTool {
         planningContext.notebook().recordDiscovery(planningContext.evidenceRegistry().periods());
         PlanningDiscoveryToolResult toolResult = PlanningDiscoveryToolResult.from(result.plans());
         if (traceService != null) {
-            traceService.recordEvent(
+            traceService.recordEventForTrace(
+                    planningContext.verifiedRequestContext().traceId(),
                     "PLANNING_DISCOVERY_TOOL_COMPLETED",
                     "TOOL",
                     Map.of("windows", planningContext.windows()),
