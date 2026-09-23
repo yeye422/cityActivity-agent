@@ -48,7 +48,8 @@ public class PlanValidationTool {
         boolean repairing = planningContext.notebook().beginValidation(proposal);
         int validationCall = planningContext.evidenceRegistry().validationCalls();
         if (traceService != null) {
-            traceService.recordEvent(
+            traceService.recordEventForTrace(
+                    planningContext.verifiedRequestContext().traceId(),
                     "PLAN_VALIDATION_TOOL_CALLED",
                     "TOOL",
                     Map.of("validationCall", validationCall, "proposal", proposal),
@@ -56,14 +57,16 @@ public class PlanValidationTool {
             );
         }
         if (traceService != null) {
-            traceService.recordEvent(
+            traceService.recordEventForTrace(
+                    planningContext.verifiedRequestContext().traceId(),
                     "PLAN_PROPOSED",
                     "AGENT",
                     Map.of("repairing", repairing, "notebook", planningContext.notebook().snapshot()),
                     proposal
             );
             if (repairing) {
-                traceService.recordEvent(
+                traceService.recordEventForTrace(
+                        planningContext.verifiedRequestContext().traceId(),
                         "PLAN_REPAIRED",
                         "AGENT",
                         planningContext.notebook().snapshot(),
@@ -79,7 +82,8 @@ public class PlanValidationTool {
         );
         planningContext.notebook().completeValidation(result);
         if (traceService != null) {
-            traceService.recordEvent(
+            traceService.recordEventForTrace(
+                    planningContext.verifiedRequestContext().traceId(),
                     result.valid() ? "PLAN_VALIDATION_PASSED" : "PLAN_VALIDATION_FAILED",
                     "TOOL",
                     Map.of(
@@ -91,7 +95,8 @@ public class PlanValidationTool {
             );
         }
         if (traceService != null && result.valid()) {
-            traceService.recordEvent(
+            traceService.recordEventForTrace(
+                    planningContext.verifiedRequestContext().traceId(),
                     "PLAN_VALIDATED",
                     "AGENT",
                     planningContext.notebook().snapshot(),
