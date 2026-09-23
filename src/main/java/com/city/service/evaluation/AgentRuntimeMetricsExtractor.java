@@ -102,7 +102,7 @@ public final class AgentRuntimeMetricsExtractor {
         boolean planningRouteSelected = false;
         boolean planningCompleted = false;
         boolean reactDegraded = false;
-        boolean evidenceViolation = false;
+        boolean finalEvidenceViolation = false;
         boolean candidateOutOfSet = false;
         boolean sessionViolation = false;
         boolean timeConflictSeen = false;
@@ -146,7 +146,14 @@ public final class AgentRuntimeMetricsExtractor {
                     if (coverage != null) userGoalCoverage = coverage;
                 }
 
-                if (containsEvidenceViolation(combined)) evidenceViolation = true;
+                /*
+                 * validate_plan 的 invalid 是 ReAct 正常 repair 信号，不等于最终越过 Evidence Gate。
+                 * evidenceViolationRate 只统计最终失败链中的证据越界；session/candidate 指标仍保留
+                 * “本轮曾发生过”的诊断语义。
+                 */
+                if (isTerminalEvidenceFailure(type) && containsEvidenceViolation(combined)) {
+                    finalEvidenceViolation = true;
+                }
                 if (containsCandidateViolation(combined)) candidateOutOfSet = true;
                 if (containsSessionViolation(combined)) sessionViolation = true;
                 if (combined.contains("TIME_CONFLICT") || combined.contains("TRAVEL_TIME_CONFLICT")) {
@@ -162,7 +169,7 @@ public final class AgentRuntimeMetricsExtractor {
                 planningRouteSelected,
                 planningCompleted,
                 reactDegraded,
-                evidenceViolation,
+                finalEvidenceViolation,
                 candidateOutOfSet,
                 sessionViolation,
                 timeConflictSeen,
@@ -206,6 +213,16 @@ public final class AgentRuntimeMetricsExtractor {
             compared++;
         }
         return compared == 0 ? null : total / compared;
+    }
+
+    private boolean isTerminalEvidenceFailure(String eventType) {
+        if (eventType == null || eventType.isBlank()) return false;
+        return "RECOMMENDATION_AGENT_FAILED".equals(eventType)
+                || "PLANNING_AGENT_FAILED".equals(eventType)
+                || "RECOMMENDATION_REACT_FAILED".equals(eventType)
+                || "PLANNING_REACT_FAILED".equals(eventType)
+                || "RECOMMENDATION_DEGRADED".equals(eventType)
+                || "PLANNING_DEGRADED".equals(eventType);
     }
 
     private boolean containsEvidenceViolation(String value) {
