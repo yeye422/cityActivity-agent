@@ -61,7 +61,8 @@ public class RetrievalTool {
         String safeIntent = retrievalIntent == null ? "" : retrievalIntent.trim();
         evidenceRegistry.beginRetrieval(safeIntent);
         if (traceService != null) {
-            traceService.recordEvent(
+            traceService.recordEventForTrace(
+                    verifiedContext.traceId(),
                     "RETRIEVAL_TOOL_CALLED",
                     "TOOL",
                     Map.of("retrievalIntent", safeIntent, "retrievalCall", evidenceRegistry.retrievalCalls()),
@@ -87,7 +88,8 @@ public class RetrievalTool {
         RetrievalToolResult toolResult = RetrievalToolResult.from(safeIntent, result.finalCandidates());
         evidenceRegistry.recordResult(toolResult, result.finalCandidates());
         if (traceService != null) {
-            traceService.recordEvent(
+            traceService.recordEventForTrace(
+                    verifiedContext.traceId(),
                     "RETRIEVAL_TOOL_COMPLETED",
                     "TOOL",
                     Map.of("retrievalIntent", safeIntent, "retrievalCall", evidenceRegistry.retrievalCalls()),
