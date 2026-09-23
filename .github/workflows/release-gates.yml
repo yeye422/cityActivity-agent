@@ -76,6 +76,12 @@ jobs:
             mysql -h127.0.0.1 -uroot -proot city_db < src/main/resources/db/activity_catalog_seed.sql
           fi
 
+      - name: Verify frontend runtime contracts
+        run: |
+          node --check src/main/resources/static/assets/js/api.js
+          node --check src/main/resources/static/assets/js/app.js
+          node scripts/test-frontend-runtime.mjs
+
       - name: Build application
         run: mvn -B -ntp clean package
 
@@ -98,6 +104,12 @@ jobs:
           cat artifacts/application.log
           echo "Application did not become reachable" >&2
           exit 1
+
+      - name: Smoke frontend static serving
+        shell: bash
+        run: |
+          curl --fail --silent --show-error http://127.0.0.1:8080/ | grep -q "20260923-agentstream4"
+          curl --fail --silent --show-error http://127.0.0.1:8080/assets/js/api.js | grep -q "subscribeAgentEvents"
 
       - name: Run react-v1 and retrieval release verification
         shell: pwsh
