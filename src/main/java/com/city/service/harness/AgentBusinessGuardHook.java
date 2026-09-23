@@ -29,6 +29,7 @@ public final class AgentBusinessGuardHook implements Hook {
     private final int maxActingCalls;
     private final int repeatThreshold;
     private final AgentTraceService traceService;
+    private final String traceId;
     private final Map<String, Integer> signatures = new HashMap<>();
     private int reasoningSteps;
     private int actingCalls;
@@ -38,6 +39,15 @@ public final class AgentBusinessGuardHook implements Hook {
                                   int maxActingCalls,
                                   int repeatThreshold,
                                   AgentTraceService traceService) {
+        this(agentName, allowedTools, maxActingCalls, repeatThreshold, traceService, null);
+    }
+
+    public AgentBusinessGuardHook(String agentName,
+                                  Set<String> allowedTools,
+                                  int maxActingCalls,
+                                  int repeatThreshold,
+                                  AgentTraceService traceService,
+                                  String traceId) {
         this.agentName = requireText(agentName, "agentName");
         this.allowedTools = allowedTools == null ? Set.of() : Set.copyOf(allowedTools);
         if (maxActingCalls <= 0 || repeatThreshold <= 1) {
@@ -46,6 +56,7 @@ public final class AgentBusinessGuardHook implements Hook {
         this.maxActingCalls = maxActingCalls;
         this.repeatThreshold = repeatThreshold;
         this.traceService = traceService;
+        this.traceId = traceId == null ? "" : traceId.trim();
     }
 
     @Override
@@ -129,17 +140,25 @@ public final class AgentBusinessGuardHook implements Hook {
 
     private void record(String eventType, Object output) {
         if (traceService == null) return;
+        if (!traceId.isBlank()) {
+            traceService.recordEventForTrace(
+                    traceId, eventType, "AGENT_GUARD", Map.of("agentName", agentName), output);
+            return;
+        }
         traceService.recordEvent(eventType, "AGENT_GUARD", Map.of("agentName", agentName), output);
     }
 
     private void recordError(String eventType, String toolName, RuntimeException error) {
         if (traceService == null) return;
-        traceService.recordError(
-                eventType,
-                "AGENT_GUARD",
-                Map.of("agentName", agentName, "toolName", toolName == null ? "" : toolName),
-                error
+        Map<String, Object> input = Map.of(
+                "agentName", agentName,
+                "toolName", toolName == null ? "" : toolName
         );
+        if (!traceId.isBlank()) {
+            traceService.recordErrorForTrace(traceId, eventType, "AGENT_GUARD", input, error);
+            return;
+        }
+        traceService.recordError(eventType, "AGENT_GUARD", input, error);
     }
 
     private static String requireText(String value, String field) {
