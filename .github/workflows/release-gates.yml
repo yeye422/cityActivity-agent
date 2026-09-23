@@ -118,8 +118,10 @@ jobs:
       - name: Smoke frontend static serving
         shell: bash
         run: |
-          curl --fail --silent --show-error http://127.0.0.1:8080/ | grep -q "20260923-agente2e2"
-          curl --fail --silent --show-error http://127.0.0.1:8080/assets/js/api.js | grep -q "subscribeAgentEvents"
+          curl --fail --silent --show-error http://127.0.0.1:8080/ --output artifacts/frontend-index.html
+          grep -q "20260923-agente2e2" artifacts/frontend-index.html
+          curl --fail --silent --show-error http://127.0.0.1:8080/assets/js/api.js --output artifacts/frontend-api.js
+          grep -q "subscribeAgentEvents" artifacts/frontend-api.js
 
       - name: Run real packaged frontend browser smoke
         env:
