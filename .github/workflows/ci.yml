@@ -36,10 +36,11 @@ jobs:
           java -version
           mvn -version
 
-      - name: Check frontend JavaScript syntax
+      - name: Check frontend JavaScript syntax and runtime contracts
         run: |
           node --check src/main/resources/static/assets/js/api.js
           node --check src/main/resources/static/assets/js/app.js
+          node scripts/test-frontend-runtime.mjs
 
       - name: Build and run tests
         run: mvn -B -ntp clean verify

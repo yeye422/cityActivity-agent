@@ -66,6 +66,8 @@ mysql city_db < src/main/resources/db/activity_catalog_seed.sql
 
 AgentScope ReAct Agent 负责 Reason -> Tool -> Observe 循环；CityFlow Guard 负责 Tool 白名单、调用预算、重复调用和事实校验。RecommendationAgent / PlanningAgent 已是唯一在线决策主链；IntentAgent 的模型调用继续通过 AgentExecutionHarness 承担请求级调用预算、重复调用检测和熔断。
 
+内置前端会在发送聊天请求前建立 SSE，使用 `Idempotency-Key` 防止网络重试/刷新导致重复 Agent Run，并通过 `Last-Event-ID` 恢复运行事件。最终消息仍以 HTTP `ChatResponse` 为唯一渲染来源，避免 SSE 与同步响应重复显示。完整前端运行协议见 `docs/frontend/agentscope-chat-runtime.md`。
+
 前端可先订阅会话事件，再发起聊天请求：
 
 ```text
