@@ -3,7 +3,8 @@ param(
     [long]$UserId = 999999,
     [int]$Limit = 10,
     [switch]$PromoteBaseline,
-    [string]$BaselineName = ""
+    [string]$BaselineName = "",
+    [string]$OutputPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,6 +26,15 @@ $result = Invoke-RestMethod `
     -Uri "$BaseUrl/api/v1/city/evaluations/regression" `
     -Headers $headers `
     -Body $body
+
+if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+    $parent = Split-Path -Parent $OutputPath
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+    $result | ConvertTo-Json -Depth 100 | Set-Content -Path $OutputPath -Encoding utf8
+    Write-Host "Saved full react regression report: $OutputPath"
+}
 
 Write-Host ""
 Write-Host "runId:            $($result.runId)"
