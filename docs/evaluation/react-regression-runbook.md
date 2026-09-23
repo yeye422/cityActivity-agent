@@ -138,3 +138,24 @@ Promote react-v1 Baseline
 ```
 
 legacy 架构 fallback 已删除；PERSONAL -> PUBLIC 仍是业务数据源降级，不计作 legacy fallback。
+
+
+## 8. 一键发布验收
+
+在已经启动且具备真实数据库、模型、地图和天气配置的服务环境中，可以用一个脚本串行执行完整门禁：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-release-verification.ps1
+```
+
+该脚本严格按以下顺序执行，任一步失败都会立即退出：
+
+```text
+react-v1 首跑
+↓
+首跑 passed=true 后 Promote Baseline
+↓
+react-v1 第二次回归
+↓
+retrieval-v1 CURRENT_PIPELINE baseline
+```

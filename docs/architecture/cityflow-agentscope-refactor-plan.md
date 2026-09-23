@@ -1474,7 +1474,7 @@ Final Validator
 ↓
 ResponseGenerator
 ↓
-Supervisor Commit
+DecisionCommitService Commit
 ```
 
 ---
@@ -1614,7 +1614,7 @@ Structured Decision
 ↓
 Java Validator
 ↓
-Supervisor Commit
+DecisionCommitService Commit
 ```
 
 这样既保留 Agent 的动态推理能力，又不会把真实业务状态、时间、预算、Session 和数据库事实交给模型控制。
