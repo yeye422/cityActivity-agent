@@ -75,7 +75,8 @@ public class PlanningAgentBuilder {
                 Set.of("discover_plan_candidates", "get_travel_time", "validate_plan"),
                 10,
                 3,
-                traceService
+                traceService,
+                planningContext.verifiedRequestContext().traceId()
         );
 
         return ReActAgent.builder()
