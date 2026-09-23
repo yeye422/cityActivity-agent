@@ -36,12 +36,6 @@ city:
     main-model: qwen-max
     light-model: qwen-turbo
     response-model: qwen-turbo
-  agent:
-    # AgentScope ReAct 灰度开关。推荐/规划链均已接入 Supervisor，默认关闭；关闭或异常时自动回退旧链。
-    recommendation-react:
-      enabled: ${CITY_RECOMMENDATION_REACT_ENABLED:false}
-    planning-react:
-      enabled: ${CITY_PLANNING_REACT_ENABLED:false}
   session:
     max-history-turns: 10
     max-history-chars: 1200

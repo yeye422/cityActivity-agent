@@ -1,8 +1,8 @@
 # ReAct 专项回归 Runbook
 
-本文档用于在真实数据库 + 真实模型配置下验证 CityFlow 的 RecommendationAgent / PlanningAgent ReAct 主链。
+本文档用于在真实数据库 + 真实模型配置下验证 CityFlow 的 RecommendationAgent / PlanningAgent 唯一在线主链。
 
-GitHub CI 的 `mvn clean verify` 只验证编译和自动化测试，不代表真实模型调用已经通过本专项门禁。
+GitHub CI 的 `mvn clean verify` 只验证编译和自动化测试，不代表真实模型调用已经通过专项门禁。
 
 ## 1. 前置条件
 
@@ -18,33 +18,15 @@ mysql city_db < src/main/resources/db/chat_request_idempotency_migration.sql
 mysql city_db < src/main/resources/db/city_seed.sql
 ```
 
-同时准备正常运行所需的模型和外部服务配置。
-
-## 2. 使用 react-eval profile 启动
+同时准备正常运行所需的模型和外部服务配置，然后直接启动：
 
 ```bash
-SPRING_PROFILES_ACTIVE=react-eval mvn spring-boot:run
-```
-
-Windows PowerShell：
-
-```powershell
-$env:SPRING_PROFILES_ACTIVE = "react-eval"
 mvn spring-boot:run
 ```
 
-`application-react-eval.yml` 会同时开启：
+RecommendationAgent 与 PlanningAgent 已是唯一在线业务入口，不再存在 feature flag、legacy fallback 或 react-eval 专用 profile。
 
-```text
-city.agent.recommendation-react.enabled=true
-city.agent.planning-react.enabled=true
-```
-
-如果任一开关未开启，`suite=react` 会在执行用例和调用模型前直接失败。
-
-## 3. 执行 react-v1
-
-直接调用接口：
+## 2. 执行 react-v1
 
 ```http
 POST /api/v1/city/evaluations/regression
@@ -58,26 +40,15 @@ Content-Type: application/json
 }
 ```
 
-Windows 可使用仓库脚本：
+Windows 可执行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run-react-regression.ps1
 ```
 
-自定义地址：
+## 3. 发布门禁
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/run-react-regression.ps1 `
-  -BaseUrl "http://localhost:8080" `
-  -UserId 999999 `
-  -Limit 10
-```
-
-脚本会打印本次 `runId`、平均分和关键 ReAct 指标。
-
-## 4. 首次运行绝对门禁
-
-`react-v1` 即使尚无 Baseline，也必须通过 `ReactReleaseGate`：
+首次运行也必须通过 `ReactReleaseGate`：
 
 ```text
 reactRouteCoverage >= 0.60
@@ -87,31 +58,11 @@ reactFallbackRate <= 0.20
 evidenceViolationRate == 0
 ```
 
-辅助指标：
+辅助指标包括 Tool Call、Re-Retrieval、Travel Tool、Plan Validation/Repair，用于定位行为但不单独判失败。
 
-```text
-reactToolCallCount
-retrievalToolCallCount
-reRetrievalRate
-travelToolCallCount
-planValidationCallCount
-planValidationFailureRate
-planRepairSuccessRate
-```
+## 4. Baseline 与后续回归
 
-这些辅助指标用于分析链路行为，当前不会单独触发发布失败。
-
-## 5. 提升 Baseline
-
-只有返回：
-
-```text
-passed=true
-```
-
-的 Run 才允许提升。
-
-接口：
+只有 `passed=true` 的 Run 才允许提升：
 
 ```http
 POST /api/v1/city/evaluations/regression/baseline
@@ -124,58 +75,19 @@ Content-Type: application/json
 }
 ```
 
-也可以执行：
+也可以：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run-react-regression.ps1 -PromoteBaseline
 ```
 
-脚本只会在本次 `passed=true` 时发起 Baseline 提升。
+Baseline 建立后，相同 `react-v1` 除绝对门禁外还会经过 `RegressionGate`。
 
-## 6. 第二次回归
+## 5. BadCase 回流
 
-Baseline 建立后再次运行相同 `react-v1` case。
+人工确认失败 Trace 后，通过 `/api/v1/city/evaluations/cases/promote` 且 `suite=react` 写入 react-v1 数据库评测集。
 
-此时除绝对 `ReactReleaseGate` 外，还会经过 `RegressionGate`，检查：
-
-```text
-总体评分
-reactRouteCoverage
-recommendationReactSuccessRate
-planningReactSuccessRate
-reactFallbackRate
-evidenceViolationRate
-```
-
-是否相对 Baseline 发生明显回退。
-
-## 7. React BadCase 回流
-
-人工确认某条失败 Trace 值得长期保留时：
-
-```http
-POST /api/v1/city/evaluations/cases/promote
-X-User-Id: 999999
-Content-Type: application/json
-
-{
-  "traceId": "trace_xxx",
-  "suite": "react",
-  "caseDefinition": {
-    "id": "react_badcase_xxx",
-    "message": "周末在西安和朋友找个互动性强的活动",
-    "expectedIntent": "ACTIVITY_RECOMMENDATION",
-    "expectedSlots": {
-      "city": ["西安"],
-      "companion": ["朋友"]
-    }
-  }
-}
-```
-
-该用例会写入 `react-v1` 对应的数据库评测集；`suite` 为空时仍写入默认 `v2`。
-
-## 8. Retrieval relevance
+## 6. Retrieval relevance
 
 人工检索标注位于：
 
@@ -183,39 +95,10 @@ Content-Type: application/json
 src/main/resources/evaluation/retrieval-relevance-v1.json
 ```
 
-禁止把数据库自增 `activityId` 写入人工 relevance。稳定键格式为：
+稳定键格式：
 
 ```text
 SOURCE|CITY|ACTIVITY_NAME
 ```
 
-例如：
-
-```text
-PUBLIC|西安|曲江艺术中心周末特展
-```
-
-运行时通过 `RetrievalEvaluationKey` 从 `ActivityItem` 生成相同 key，再由 `StableRetrievalQualityEvaluator` 计算：
-
-```text
-Recall@K
-NDCG@K
-No-result false-positive
-```
-
-只有在相同 `retrieval-v1` relevance case 上验证 Vector / RRF 相比当前方案有稳定收益后，才将其接入默认 RetrievalPipeline。
-
-## 9. 删除 legacy 的最低条件
-
-只有满足以下条件才进入旧链物理删除：
-
-```text
-mvn clean verify 通过
-react-v1 通过 ReactReleaseGate
-存在显式提升的 react-v1 Baseline
-后续 react-v1 通过 RegressionGate
-evidenceViolationRate = 0
-fallback 率满足门禁
-```
-
-在此之前 `RecommendResponseAgentService / PlanResponseAgentService / RetrievalWorker / PlanningWorker / ResponseWorker` 继续只作为迁移期 fallback 保留。
+当前方案与未来 Vector / RRF 必须在相同 evalSetHash 与 K 下比较 Recall@K、NDCG@K、No-result false-positive。

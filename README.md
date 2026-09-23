@@ -134,22 +134,14 @@ Body: {"suite":"default","includeLlmJudge":false,"limit":35}
 
 `suite=default` 读取 `src/main/resources/evaluation/city-dialogue-eval-set.json`，当前版本为 `v2`，用于通用意图、槽位、澄清、多轮操作等回归。
 
-ReAct 专项回归必须先使用：
-
-```bash
-SPRING_PROFILES_ACTIVE=react-eval mvn spring-boot:run
-```
-
-再执行：
+ReAct 专项回归直接执行：
 
 ```text
 POST /api/v1/city/evaluations/regression
 Body: {"suite":"react","includeLlmJudge":false,"limit":10}
 ```
 
-`suite=react` 读取独立的 `src/main/resources/evaluation/city-react-eval-set.json`，当前版本为 `react-v1`，重点覆盖软目标权衡、Re-Retrieval、多时段规划、Solver Validate/Repair 和多轮上下文。若 Recommendation 或 Planning 任一 ReAct feature flag 未开启，服务端会在执行评测用例和调用模型前直接拒绝 `react` suite。
-
-ReAct 发布判断分三层：
+`suite=react` 读取独立的 `src/main/resources/evaluation/city-react-eval-set.json`，当前版本为 `react-v1`，重点覆盖软目标权衡、Re-Retrieval、多时段规划、Solver Validate/Repair 和多轮上下文。ReAct 发布判断分三层：
 
 ```text
 1. Runtime Gate
@@ -169,7 +161,7 @@ ReAct 发布判断分三层：
 
 `react-v1` 使用独立 `version + evalSetHash` 查找 Baseline，不与默认 `v2` 混用。首次专项评测即使没有 Baseline，也必须先通过 `ReactReleaseGate` 才能标记为 passed；未通过的 Run 不能提升为 Baseline。
 
-`application-react-eval.yml` 会同时开启 RecommendationAgent 和 PlanningAgent，其余数据库、模型和外部服务配置仍继承默认配置。固定回归会写入现有 Evaluation/Regression Gate，并统计 ReAct route coverage、success/fallback、Tool Call、Re-Retrieval、Plan Validation/Repair 和 Evidence Violation 等运行指标。
+RecommendationAgent 和 PlanningAgent 已是唯一在线决策主链；固定回归会写入现有 Evaluation/Regression Gate，并统计 ReAct route coverage、success/fallback、Tool Call、Re-Retrieval、Plan Validation/Repair 和 Evidence Violation 等运行指标。
 
 回归执行会自动运行用例、标注本次 Trace、生成意图/槽位/澄清/缺失槽位/操作/时间/多轮一致性等报告，并将评估运行保存到 `evaluation_run`。Baseline 取同一评测集版本和指纹下已显式提升的基线运行。
 
@@ -205,12 +197,6 @@ mvn spring-boot:run
 
 ```text
 src/main/resources/application.yml
-```
-
-ReAct 专项评测配置：
-
-```text
-src/main/resources/application-react-eval.yml
 ```
 
 ## 项目结构
