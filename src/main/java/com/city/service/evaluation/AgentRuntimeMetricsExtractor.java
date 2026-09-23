@@ -49,7 +49,7 @@ public final class AgentRuntimeMetricsExtractor {
                 ? bool(facts.recommendationCompleted()) : null);
         metrics.put("planningReactSuccessRate", facts.planningRouteSelected()
                 ? bool(facts.planningCompleted()) : null);
-        metrics.put("reactDegradedRate", facts.anyReactRouteSelected()
+        metrics.put("reactDegradationRate", facts.anyReactRouteSelected()
                 ? bool(facts.reactDegraded()) : null);
         metrics.put("reactToolCallCount", facts.anyReactRouteSelected()
                 ? (double) facts.toolCalls() : null);
