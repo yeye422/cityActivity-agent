@@ -1,6 +1,7 @@
 package com.city.model.context;
 
 import com.city.model.TravelTimeEvidence;
+import com.city.model.agent.PlanNotebook;
 import com.city.service.evidence.PlanningEvidenceRegistry;
 
 import java.math.BigDecimal;
@@ -15,6 +16,7 @@ public record PlanningToolContext(
         VerifiedRequestContext verifiedRequestContext,
         List<String> windows,
         PlanningEvidenceRegistry evidenceRegistry,
+        PlanNotebook notebook,
         BigDecimal maxBudget,
         List<TravelTimeEvidence> travelTimeEvidence
 ) {
@@ -22,6 +24,7 @@ public record PlanningToolContext(
         verifiedRequestContext = Objects.requireNonNull(verifiedRequestContext, "verifiedRequestContext");
         windows = windows == null ? List.of() : List.copyOf(windows);
         evidenceRegistry = Objects.requireNonNull(evidenceRegistry, "evidenceRegistry");
+        notebook = Objects.requireNonNull(notebook, "notebook");
         travelTimeEvidence = travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
     }
 

@@ -73,12 +73,14 @@ public class TravelTimeTool {
 
         TravelTimeEvidence evidence = travelTimeService.resolve(from, to);
         planningContext.evidenceRegistry().recordTravelEvidence(evidence);
+        planningContext.notebook().recordTravelLookup();
 
         if (traceService != null) {
             traceService.recordEvent(
                     "TRAVEL_TIME_EVIDENCE_READY",
                     "TOOL",
-                    Map.of("fromVenueId", from.venueId(), "toVenueId", to.venueId()),
+                    Map.of("fromVenueId", from.venueId(), "toVenueId", to.venueId(),
+                            "notebook", planningContext.notebook().snapshot()),
                     evidence
             );
         }

@@ -65,6 +65,7 @@ public class PlanningDiscoveryTool {
                 verified.weather()
         );
         planningContext.evidenceRegistry().record(result.plans());
+        planningContext.notebook().recordDiscovery(planningContext.evidenceRegistry().periods());
         PlanningDiscoveryToolResult toolResult = PlanningDiscoveryToolResult.from(result.plans());
         if (traceService != null) {
             traceService.recordEvent(
@@ -73,7 +74,8 @@ public class PlanningDiscoveryTool {
                     Map.of("windows", planningContext.windows()),
                     Map.of(
                             "windowCount", toolResult.windows().size(),
-                            "exposedActivityIds", planningContext.evidenceRegistry().exposedActivityIds()
+                            "exposedActivityIds", planningContext.evidenceRegistry().exposedActivityIds(),
+                            "notebook", planningContext.notebook().snapshot()
                     )
             );
         }

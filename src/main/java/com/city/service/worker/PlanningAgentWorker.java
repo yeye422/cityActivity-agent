@@ -2,6 +2,7 @@ package com.city.service.worker;
 
 import com.city.agent.builder.PlanningAgentBuilder;
 import com.city.model.TravelTimeEvidence;
+import com.city.model.agent.PlanNotebook;
 import com.city.model.agent.PlanningAgentExecutionResult;
 import com.city.model.agent.PlanningDecision;
 import com.city.model.agent.PlanValidationResult;
@@ -58,11 +59,13 @@ public final class PlanningAgentWorker {
         RunEvidenceStore evidenceStore = new RunEvidenceStore(verifiedContext.traceId());
         safeTravel.forEach(evidenceStore::recordTravelEvidence);
         PlanningEvidenceRegistry evidenceRegistry = new PlanningEvidenceRegistry(evidenceStore);
+        PlanNotebook notebook = new PlanNotebook(safeWindows);
         BigDecimal maxBudget = constraintParser.explicitMaxBudget(verifiedContext.effectiveSlots());
         PlanningToolContext planningContext = new PlanningToolContext(
                 verifiedContext,
                 safeWindows,
                 evidenceRegistry,
+                notebook,
                 maxBudget,
                 safeTravel
         );
@@ -87,6 +90,9 @@ public final class PlanningAgentWorker {
                 throw new IllegalStateException("PlanningAgent 返回为空");
             }
             PlanningDecision decision = response.getStructuredData(PlanningDecision.class);
+            if (!planningContext.notebook().validated()) {
+                throw new IllegalStateException("PlanningAgent 未通过 validate_plan 完成可验证方案");
+            }
             PlanValidationResult finalValidation = validationService.validate(
                     decision.plan(),
                     evidenceRegistry,
@@ -109,7 +115,8 @@ public final class PlanningAgentWorker {
                     java.util.Map.of(
                             "periods", evidenceRegistry.periods(),
                             "travelEvidence", planningContext.allTravelTimeEvidence(),
-                            "evidence", evidenceStore.snapshot()
+                            "evidence", evidenceStore.snapshot(),
+                            "notebook", planningContext.notebook().snapshot()
                     ),
                     result
             );
@@ -122,7 +129,8 @@ public final class PlanningAgentWorker {
                             "windows", safeWindows,
                             "exposedActivityIds", evidenceRegistry.exposedActivityIds(),
                             "travelEvidence", planningContext.allTravelTimeEvidence(),
-                            "evidence", evidenceStore.snapshot()
+                            "evidence", evidenceStore.snapshot(),
+                            "notebook", planningContext.notebook().snapshot()
                     ),
                     error
             );

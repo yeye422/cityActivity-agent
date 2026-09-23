@@ -8,6 +8,7 @@ import com.city.model.SessionState;
 import com.city.model.SlotBundle;
 import com.city.model.TravelTimeEvidence;
 import com.city.model.WeatherRecommendationContext;
+import com.city.model.agent.PlanNotebook;
 import com.city.model.context.PlanningToolContext;
 import com.city.model.context.SemanticContext;
 import com.city.model.context.VerifiedRequestContext;
@@ -89,7 +90,8 @@ class TravelTimeToolTest {
         SessionState state = SessionState.fresh("session-plan", 9L, SourceMode.PUBLIC);
         VerifiedRequestContext verified = VerifiedRequestContext.from(
                 state, "trace-plan", SemanticContext.empty(), WeatherRecommendationContext.inactive());
-        return new PlanningToolContext(verified, List.of("AFTERNOON", "EVENING"), registry, null, List.of());
+        return new PlanningToolContext(verified, List.of("AFTERNOON", "EVENING"), registry,
+                new PlanNotebook(List.of("AFTERNOON", "EVENING")), null, List.of());
     }
 
     private ActivityItem activity(Long id, String name) {

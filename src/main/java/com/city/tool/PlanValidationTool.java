@@ -45,6 +45,7 @@ public class PlanValidationTool {
     ) {
         Objects.requireNonNull(planningContext, "planningContext");
         planningContext.evidenceRegistry().beginValidation();
+        boolean repairing = planningContext.notebook().beginValidation(proposal);
         int validationCall = planningContext.evidenceRegistry().validationCalls();
         if (traceService != null) {
             traceService.recordEvent(
@@ -54,20 +55,46 @@ public class PlanValidationTool {
                     null
             );
         }
+        if (traceService != null) {
+            traceService.recordEvent(
+                    "PLAN_PROPOSED",
+                    "AGENT",
+                    Map.of("repairing", repairing, "notebook", planningContext.notebook().snapshot()),
+                    proposal
+            );
+            if (repairing) {
+                traceService.recordEvent(
+                        "PLAN_REPAIRED",
+                        "AGENT",
+                        planningContext.notebook().snapshot(),
+                        proposal
+                );
+            }
+        }
         PlanValidationResult result = validationService.validate(
                 proposal,
                 planningContext.evidenceRegistry(),
                 planningContext.maxBudget(),
                 planningContext.allTravelTimeEvidence()
         );
+        planningContext.notebook().completeValidation(result);
         if (traceService != null) {
             traceService.recordEvent(
                     result.valid() ? "PLAN_VALIDATION_PASSED" : "PLAN_VALIDATION_FAILED",
                     "TOOL",
                     Map.of(
                             "validationCall", validationCall,
-                            "travelEvidenceCount", planningContext.allTravelTimeEvidence().size()
+                            "travelEvidenceCount", planningContext.allTravelTimeEvidence().size(),
+                            "notebook", planningContext.notebook().snapshot()
                     ),
+                    result
+            );
+        }
+        if (traceService != null && result.valid()) {
+            traceService.recordEvent(
+                    "PLAN_VALIDATED",
+                    "AGENT",
+                    planningContext.notebook().snapshot(),
                     result
             );
         }
