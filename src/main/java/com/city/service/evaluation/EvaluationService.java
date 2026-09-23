@@ -234,6 +234,8 @@ public class EvaluationService {
         detail.put("expectedSlots", row.getExpectedSlots());
         // 人工标注的期望澄清动作。
         detail.put("expectedClarifyAction", row.getExpectedClarifyAction());
+        // 固定评测集会把 caseId 写入 labelNote；保留到逐 trace 报告，便于 Release artifact 精确定位失败用例。
+        detail.put("caseId", expectedMeta(row.getLabelNote()).path("caseId").asText("unknown"));
         detail.put("predictedMissingSlots", snapshot.missingSlots());
         detail.put("expectedMissingSlots", expectedMeta(row.getLabelNote()).path("expectedMissingSlots"));
         // 当前 session 关联到的反馈数量。
