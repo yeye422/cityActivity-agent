@@ -10,11 +10,13 @@ import com.city.service.evidence.PlanningEvidenceRegistry;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -116,6 +118,7 @@ public class PlanProposalValidationService {
 
         List<TravelTimeEvidence> safeTravel = travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
         violations.addAll(missingTravelEvidence(restrictedWindows, safeTravel));
+        violations.addAll(explicitConstraintViolations(restrictedWindows, maxBudget, safeTravel));
         if (!violations.isEmpty()) {
             return PlanValidationResult.invalid(violations);
         }
@@ -173,6 +176,75 @@ public class PlanProposalValidationService {
                         to.sessionId(),
                         "跨场地连续场次缺少真实路线时长证据",
                         "先对前后两个已暴露场次调用 get_travel_time，再重新 validate_plan"
+                ));
+            }
+        }
+        return result;
+    }
+
+    private List<PlanValidationResult.Violation> explicitConstraintViolations(
+            List<ActivityPlanService.PlannedActivity> windows,
+            BigDecimal maxBudget,
+            List<TravelTimeEvidence> travelTimeEvidence
+    ) {
+        List<PlanValidationResult.Violation> result = new ArrayList<>();
+        List<ActivityPlanService.PlannedActivity> concrete = windows.stream()
+                .filter(window -> window != null && window.selectedSession() != null)
+                .filter(window -> window.selectedSession().startAt() != null
+                        && window.selectedSession().endAt() != null)
+                .sorted(Comparator.comparing(window -> window.selectedSession().startAt()))
+                .toList();
+
+        BigDecimal totalCost = concrete.stream()
+                .map(window -> window.selectedSession().price())
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (maxBudget != null && totalCost.compareTo(maxBudget) > 0) {
+            result.add(violation(
+                    "BUDGET_EXCEEDED", "", null, null,
+                    "方案已知总价 " + totalCost + " 超过预算上限 " + maxBudget,
+                    "替换价格较高的活动或场次后重新 validate_plan"
+            ));
+        }
+
+        for (int i = 1; i < concrete.size(); i++) {
+            ActivityPlanService.PlannedActivity previous = concrete.get(i - 1);
+            ActivityPlanService.PlannedActivity next = concrete.get(i);
+            ActivitySessionResponse from = previous.selectedSession();
+            ActivitySessionResponse to = next.selectedSession();
+
+            if (from.startAt().isBefore(to.endAt()) && from.endAt().isAfter(to.startAt())) {
+                result.add(violation(
+                        "TIME_CONFLICT",
+                        next.period(),
+                        next.activity() == null ? null : next.activity().id(),
+                        to.sessionId(),
+                        "连续场次时间发生重叠",
+                        "更换冲突时段的活动或场次后重新 validate_plan"
+                ));
+                continue;
+            }
+
+            if (from.venueId() == null || to.venueId() == null || from.venueId().equals(to.venueId())) {
+                continue;
+            }
+            TravelTimeEvidence route = travelTimeEvidence.stream()
+                    .filter(Objects::nonNull)
+                    .filter(evidence -> from.venueId().equals(evidence.fromVenueId())
+                            && to.venueId().equals(evidence.toVenueId()))
+                    .findFirst()
+                    .orElse(null);
+            if (route == null) continue;
+            long availableMinutes = Duration.between(from.endAt(), to.startAt()).toMinutes();
+            if (availableMinutes < route.durationMinutes()) {
+                result.add(violation(
+                        "TRAVEL_TIME_CONFLICT",
+                        next.period(),
+                        next.activity() == null ? null : next.activity().id(),
+                        to.sessionId(),
+                        "前后场次间隔 " + availableMinutes + " 分钟，小于真实路线时长 "
+                                + route.durationMinutes() + " 分钟",
+                        "更换下一场次、缩短跨场地距离或调整时段后重新 validate_plan"
                 ));
             }
         }

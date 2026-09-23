@@ -25,6 +25,7 @@ class AgentRuntimeMetricsExtractorTest {
                     {"eventType":"RETRIEVAL_TOOL_COMPLETED"},
                     {"eventType":"RETRIEVAL_TOOL_CALLED"},
                     {"eventType":"RETRIEVAL_TOOL_COMPLETED"},
+                    {"eventType":"RECOMMENDATION_DECIDED","outputPayload":"{\"decision\":{\"selectedActivityIds\":[1,2],\"assessments\":[{\"activityId\":1,\"goalFit\":\"HIGH\"},{\"activityId\":2,\"goalFit\":\"MEDIUM\"}]}}"},
                     {"eventType":"RECOMMENDATION_REACT_COMPLETED"}
                   ]
                 }
@@ -39,6 +40,8 @@ class AgentRuntimeMetricsExtractorTest {
         assertEquals(2.0, metrics.get("reactToolCallCount"));
         assertEquals(0.0, metrics.get("reactDegradationRate"));
         assertEquals(0.0, metrics.get("evidenceViolationRate"));
+        assertEquals(0.75, metrics.get("userGoalCoverage"));
+        assertEquals(0.0, metrics.get("candidateOutOfSetRate"));
     }
 
     @Test
@@ -50,7 +53,7 @@ class AgentRuntimeMetricsExtractorTest {
                     {"eventType":"PLANNING_DISCOVERY_TOOL_CALLED"},
                     {"eventType":"TRAVEL_TIME_TOOL_CALLED"},
                     {"eventType":"PLAN_VALIDATION_TOOL_CALLED"},
-                    {"eventType":"PLAN_VALIDATION_FAILED"},
+                    {"eventType":"PLAN_VALIDATION_FAILED","outputPayload":"{\"violations\":[{\"code\":\"BUDGET_EXCEEDED\"}]}"},
                     {"eventType":"PLAN_VALIDATION_TOOL_CALLED"},
                     {"eventType":"PLAN_VALIDATION_PASSED"},
                     {"eventType":"PLANNING_REACT_COMPLETED"}
@@ -67,6 +70,8 @@ class AgentRuntimeMetricsExtractorTest {
         assertEquals(2.0, metrics.get("planValidationCallCount"));
         assertEquals(1.0, metrics.get("travelToolCallCount"));
         assertEquals(4.0, metrics.get("reactToolCallCount"));
+        assertEquals(1.0, metrics.get("planValidRate"));
+        assertEquals(1.0, metrics.get("planValidationBudgetViolationRate"));
     }
 
     @Test
@@ -87,6 +92,7 @@ class AgentRuntimeMetricsExtractorTest {
         assertEquals(0.0, metrics.get("recommendationReactSuccessRate"));
         assertEquals(1.0, metrics.get("reactDegradationRate"));
         assertEquals(1.0, metrics.get("evidenceViolationRate"));
+        assertEquals(1.0, metrics.get("candidateOutOfSetRate"));
     }
 
     @Test
@@ -115,6 +121,20 @@ class AgentRuntimeMetricsExtractorTest {
         Map<String, Double> metrics = extractor.aggregate(List.of(react, clarify));
 
         assertEquals(0.5, metrics.get("reactRouteCoverage"));
+    }
+
+    @Test
+    void shouldCalculateLatencyPercentilesAndToolErrorRate() {
+        RequestTraceRow first = trace("{\"events\":[{\"eventType\":\"RECOMMENDATION_REACT_ROUTE_SELECTED\"},{\"eventType\":\"RETRIEVAL_TOOL_CALLED\"},{\"eventType\":\"AGENT_TOOL_GUARD_BLOCKED\"}]}");
+        first.setDurationMs(100L);
+        RequestTraceRow second = trace("{\"events\":[{\"eventType\":\"RECOMMENDATION_REACT_ROUTE_SELECTED\"}]}");
+        second.setDurationMs(300L);
+
+        Map<String, Double> metrics = extractor.aggregate(List.of(first, second));
+
+        assertEquals(200.0, metrics.get("latencyP50Ms"));
+        assertEquals(290.0, metrics.get("latencyP95Ms"));
+        assertEquals(1.0, extractor.perTrace(first).get("toolErrorRate"));
     }
 
     private RequestTraceRow trace(String traceJson) {

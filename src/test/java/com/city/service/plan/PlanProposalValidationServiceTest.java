@@ -87,7 +87,26 @@ class PlanProposalValidationServiceTest {
         );
 
         assertFalse(result.valid());
-        assertEquals("HARD_CONSTRAINT_CONFLICT", result.violations().getFirst().code());
+        assertEquals("TIME_CONFLICT", result.violations().getFirst().code());
+    }
+
+    @Test
+    void shouldReturnStructuredBudgetViolation() {
+        PlanningEvidenceRegistry registry = registry(false);
+        PlanProposal proposal = new PlanProposal(List.of(
+                new PlanProposal.Item("14:00-16:00", 101L, 1001L),
+                new PlanProposal.Item("18:00-20:00", 202L, 2002L)
+        ));
+
+        PlanValidationResult result = service.validate(
+                proposal,
+                registry,
+                BigDecimal.valueOf(200),
+                List.of(new TravelTimeEvidence(101L, 202L, 30, "TEST"))
+        );
+
+        assertFalse(result.valid());
+        assertEquals("BUDGET_EXCEEDED", result.violations().getFirst().code());
     }
 
     private PlanningEvidenceRegistry registry(boolean overlapping) {

@@ -56,6 +56,16 @@ class RegressionGateTest {
     }
 
     @Test
+    void candidateOutOfSetIncreaseFailsGate() {
+        RegressionGate.Result result = RegressionGate.evaluate(82.0, 82.0,
+                Map.of("candidateOutOfSetRate", 0.0),
+                Map.of("candidateOutOfSetRate", 0.1));
+
+        assertFalse(result.passed());
+        assertEquals(0.1, result.metricDeltas().get("candidateOutOfSetRate"));
+    }
+
+    @Test
     void toolCallIncreaseIsObservedButDoesNotFailGate() {
         RegressionGate.Result result = RegressionGate.evaluate(82.0, 82.0,
                 Map.of("reactToolCallCount", 2.0),
