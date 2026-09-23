@@ -2136,3 +2136,66 @@ textarea:focus-visible {
         white-space: nowrap;
     }
 }
+
+
+/* AgentScope live run progress */
+.agent-run-card {
+    margin: var(--space-3) 0;
+    padding: var(--space-3) var(--space-4);
+    border: var(--rule) solid var(--color-rule);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-raised);
+}
+.agent-run-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    color: var(--color-ink);
+    font-size: 13px;
+}
+.agent-run-head span {
+    color: var(--color-ink-muted);
+    font-variant-numeric: tabular-nums;
+}
+.run-steps {
+    display: grid;
+    gap: var(--space-2);
+    margin: var(--space-3) 0 0;
+    padding: 0;
+    list-style: none;
+}
+.run-step {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-ink-soft);
+    font-size: 13px;
+}
+.run-step-mark {
+    width: 18px;
+    color: var(--color-accent-strong);
+    text-align: center;
+}
+.run-step.is-running .run-step-mark {
+    animation: agent-run-pulse 1.1s ease-in-out infinite alternate;
+}
+.run-error {
+    margin: var(--space-3) 0 0;
+    color: var(--color-danger);
+    font-size: 13px;
+}
+.run-retry {
+    margin-top: var(--space-3);
+}
+@keyframes agent-run-pulse {
+    from { opacity: .35; }
+    to { opacity: 1; }
+}
+@media (max-width: 760px) {
+    .agent-run-card { padding: var(--space-3); }
+    .run-steps .run-step:not(:last-child) { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .run-step.is-running .run-step-mark { animation: none; }
+}
