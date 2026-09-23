@@ -923,13 +923,12 @@
                 state.chat.activeRun.error = error.message || "这轮请求没有完成。";
             }
             persistActiveRun();
-            if (!isRetry) {
-                state.chat.messages.push({
-                    role: "assistant",
-                    text: "网络或处理链路出现问题。本轮请求可以安全重试，不会重复执行已成功提交的相同请求。"
-                });
-            }
-            showToast(error.message || "聊天请求失败", "error");
+            showToast(
+                isRetry
+                    ? (error.message || "重试仍未完成")
+                    : "网络或处理链路出现问题，可安全重试本轮请求。",
+                "error"
+            );
         } finally {
             state.chat.sending = false;
             renderChat();

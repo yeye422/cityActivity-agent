@@ -31,6 +31,7 @@ async function installCommonMocks(page, handlers = {}) {
   const state = {
     chatKeys: [],
     chatBodies: [],
+    relaxBodies: [],
     sseLastEventIds: [],
     sseCount: 0
   };
@@ -118,6 +119,20 @@ async function installCommonMocks(page, handlers = {}) {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(responsePayload("trace-e2e"))
+      });
+      return;
+    }
+
+    if (path === "/chat/relax" && request.method() === "POST") {
+      state.relaxBodies.push(request.postDataJSON());
+      if (handlers.relax) {
+        await handlers.relax(route, request, state);
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(responsePayload("trace-relax", "已为你展示相近活动。"))
       });
       return;
     }
@@ -577,4 +592,89 @@ test("mobile chat keeps the live run card within the viewport", async ({ page })
 
   releaseChat();
   await expect(page.locator(".message.assistant .bubble", { hasText: "移动端完成" })).toHaveCount(1);
+});
+
+
+test("failed HTTP chat can retry with the same idempotency key", async ({ page }) => {
+  const state = await installCommonMocks(page, {
+    chat: async (route, request, runtime) => {
+      if (runtime.chatKeys.length === 1) {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ message: "temporary failure" })
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(responsePayload("trace-retry", "重试完成"))
+      });
+    }
+  });
+
+  await page.goto("/#/city/chat");
+  await page.locator("#chatForm textarea[name=message]").fill("帮我找个活动");
+  await page.locator("#chatForm button[type=submit]").click();
+
+  await expect(page.locator('[data-action="retry-chat"]')).toBeVisible();
+  await expect(page.locator(".run-error")).toContainText("temporary failure");
+  await expect(page.locator(".message.assistant .bubble", { hasText: "网络或处理链路出现问题" })).toHaveCount(0);
+
+  expect(state.chatKeys).toHaveLength(1);
+  const originalKey = state.chatKeys[0];
+
+  await page.locator('[data-action="retry-chat"]').click();
+
+  await expect(page.locator(".message.assistant .bubble", { hasText: "重试完成" })).toHaveCount(1);
+  expect(state.chatKeys).toHaveLength(2);
+  expect(state.chatKeys[1]).toBe(originalKey);
+  expect(state.chatBodies[1]).toEqual(state.chatBodies[0]);
+});
+
+test("relaxation action keeps the existing synchronous response flow", async ({ page }) => {
+  const state = await installCommonMocks(page, {
+    chat: async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...responsePayload("trace-strict", "没有完全匹配的活动。"),
+          relaxationOptions: [
+            {
+              level: 1,
+              label: "稍微放宽条件",
+              candidateCount: 3
+            }
+          ]
+        })
+      });
+    },
+    relax: async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...responsePayload("trace-relax", "已展示稍微放宽后的活动。"),
+          displayBlocks: []
+        })
+      });
+    }
+  });
+
+  await page.goto("/#/city/chat");
+  await page.locator("#chatForm textarea[name=message]").fill("必须完全符合条件");
+  await page.locator("#chatForm button[type=submit]").click();
+
+  const relaxButton = page.locator('[data-action="show-relaxed"][data-level="1"]');
+  await expect(relaxButton).toBeVisible();
+  await relaxButton.click();
+
+  await expect(page.locator(".message.assistant .bubble", { hasText: "已展示稍微放宽后的活动。" })).toHaveCount(1);
+  expect(state.relaxBodies).toHaveLength(1);
+  expect(state.relaxBodies[0]).toMatchObject({
+    sessionId: "session-e2e",
+    level: 1
+  });
 });
