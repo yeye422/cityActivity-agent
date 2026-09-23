@@ -1,10 +1,20 @@
 package com.city.agent;
 
+import com.city.enums.SourceMode;
+import com.city.model.ActivityItem;
+import com.city.model.PlanCandidate;
+import com.city.model.SlotBundle;
+import com.city.model.agent.PlanValidationResult;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agentscope.core.tool.ToolValidator;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
@@ -34,4 +44,33 @@ class AgentScopeToolValidatorRuntimeTest {
 
         assertNull(validationError);
     }
+    @Test
+    void shouldSerializePlanValidationResultReturnedByTool() throws Exception {
+        ActivityItem activity = new ActivityItem(
+                1L,
+                SourceMode.PUBLIC,
+                null,
+                "Museum",
+                SlotBundle.empty(),
+                null,
+                null,
+                null,
+                null,
+                90,
+                0.9
+        );
+        PlanValidationResult result = PlanValidationResult.valid(new PlanCandidate(
+                List.of(new PlanCandidate.Item("morning", activity, null)),
+                BigDecimal.ZERO
+        ));
+
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        JsonNode json = objectMapper.readTree(objectMapper.writeValueAsString(result));
+
+        JsonNode serializedActivity = json.path("acceptedPlan").path("items").get(0).path("activity");
+        assertEquals(1L, serializedActivity.path("id").asLong());
+        assertEquals("Museum", serializedActivity.path("name").asText());
+        assertEquals("PUBLIC", serializedActivity.path("sourceType").asText());
+    }
+
 }
