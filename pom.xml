@@ -43,7 +43,8 @@
         <dependency>
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-spring-boot-starter</artifactId>
-            <version>1.0.11</version>
+            <!-- 1.0.12 fixes the 1.0.11 Jackson 2/3 json-schema-validator runtime conflict. -->
+            <version>1.0.12</version>
         </dependency>
         <!-- Lombok -->
         <dependency>
