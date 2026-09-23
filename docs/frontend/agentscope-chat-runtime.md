@@ -111,3 +111,23 @@ node scripts/test-frontend-runtime.mjs
 - 页面保留 run progress / retry / restore 合同
 
 真实浏览器 + 真模型联调仍应在 Release Gate 环境执行 Recommendation、Clarify、Planning Repair、Relaxation 和断网/刷新场景。
+
+
+## 真环境浏览器 smoke
+
+手动 `Release Gates` 在 Spring Boot 应用启动后还会执行：
+
+```bash
+REAL_BASE_URL=http://127.0.0.1:8080 npm run test:e2e:real
+```
+
+该用例不 mock API，会直接通过打包后的页面完成一轮真实聊天，并检查：
+
+- 浏览器确实建立 SSE 请求；
+- SSE 携带当前 `X-User-Id`；
+- `POST /chat` 携带非空 `Idempotency-Key`；
+- HTTP 返回成功；
+- 页面最终新增 assistant 消息；
+- UI 不出现 terminal run error。
+
+这是一条真实浏览器 + Spring Boot + MySQL + DashScope 的 smoke，不替代 `react-v1` 质量评测，但能阻止“后端门禁通过、前端实际链路断裂”的发布。

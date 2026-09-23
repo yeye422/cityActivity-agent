@@ -220,3 +220,6 @@ npm run test:e2e
 ```
 
 覆盖正常聊天单次渲染、SSE `Last-Event-ID` 重连、刷新恢复时复用原 `Idempotency-Key`、HTTP 失败后同 key 安全重试、Clarify、Planning Validate/Repair、Relaxation 以及移动端运行卡布局。普通 CI 的 `Frontend E2E` job 会独立执行这些浏览器测试。
+
+
+手动 Release Gates 还会运行一条真实浏览器 smoke：Chromium 直接访问打包后的 Spring Boot 页面，建立 SSE 并发起一轮真实聊天，检查浏览器侧 `X-User-Id`、`Idempotency-Key` 与最终 assistant 响应。该 smoke 与 react-v1 / Retrieval Gate 一起构成发布前端到后端的完整联调门禁。
