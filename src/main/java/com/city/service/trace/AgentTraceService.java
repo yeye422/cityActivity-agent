@@ -303,8 +303,8 @@ public class AgentTraceService {
                 eventType, payload, Instant.now()));
     }
 
-    private AgentUiEventType toUiEventType(String eventType, String errorMessage) {
-        if (errorMessage != null || (eventType != null && eventType.endsWith("FAILED"))) {
+    static AgentUiEventType toUiEventType(String eventType, String errorMessage) {
+        if (errorMessage != null || isTerminalUiFailure(eventType)) {
             return AgentUiEventType.ERROR;
         }
         if ("REQUEST_RECEIVED".equals(eventType)) return AgentUiEventType.RUN_STARTED;
@@ -316,6 +316,14 @@ public class AgentTraceService {
             return AgentUiEventType.STEP_STARTED;
         }
         return AgentUiEventType.STEP_COMPLETED;
+    }
+
+    private static boolean isTerminalUiFailure(String eventType) {
+        return "REQUEST_FAILED".equals(eventType)
+                || "RECOMMENDATION_AGENT_FAILED".equals(eventType)
+                || "PLANNING_AGENT_FAILED".equals(eventType)
+                || "RECOMMENDATION_REACT_FAILED".equals(eventType)
+                || "PLANNING_REACT_FAILED".equals(eventType);
     }
 
     /**

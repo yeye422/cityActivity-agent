@@ -2,6 +2,7 @@ package com.city.service.trace;
 
 import com.city.mapper.AgentTraceMapper;
 import com.city.model.RequestTraceRow;
+import com.city.model.AgentUiEventType;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -13,6 +14,22 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentTraceServiceTest {
+
+    @Test
+    void shouldTreatRecoverablePlanValidationFailureAsStepInsteadOfRunError() {
+        assertEquals(
+                AgentUiEventType.STEP_COMPLETED,
+                AgentTraceService.toUiEventType("PLAN_VALIDATION_FAILED", null)
+        );
+        assertEquals(
+                AgentUiEventType.ERROR,
+                AgentTraceService.toUiEventType("PLANNING_AGENT_FAILED", null)
+        );
+        assertEquals(
+                AgentUiEventType.ERROR,
+                AgentTraceService.toUiEventType("PLAN_VALIDATION_FAILED", "solver crashed")
+        );
+    }
 
     @Test
     void shouldPersistSemanticVersionsAndGitCommit() throws Exception {

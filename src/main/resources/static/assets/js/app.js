@@ -170,10 +170,24 @@
         }
     }
     const RUN_STORAGE_PREFIX = "city.agent.run.";
+    const CHAT_SESSION_STORAGE_PREFIX = "city.chat.session.";
     const RUN_RECONNECT_DELAYS = [500, 1000, 2000, 5000];
 
     function runStorageKey(sessionId) {
         return `${RUN_STORAGE_PREFIX}${CityApi.getUserId()}.${sessionId}`;
+    }
+
+    function chatSessionStorageKey() {
+        return `${CHAT_SESSION_STORAGE_PREFIX}${CityApi.getUserId()}`;
+    }
+
+    function persistChatSessionId() {
+        if (!state.chat.sessionId) return;
+        try { sessionStorage.setItem(chatSessionStorageKey(), state.chat.sessionId); } catch (_) { /* noop */ }
+    }
+
+    function clearPersistedChatSession() {
+        try { sessionStorage.removeItem(chatSessionStorageKey()); } catch (_) { /* noop */ }
     }
 
     function persistActiveRun() {
@@ -186,7 +200,8 @@
                 traceId: run.traceId || "",
                 lastEventId: run.lastEventId || "",
                 steps: run.steps || [],
-                startedAt: run.startedAt || Date.now()
+                startedAt: run.startedAt || Date.now(),
+                pendingRequest: state.chat.pendingRequest || null
             }));
         } catch (_) { /* storage must not interrupt chat */ }
     }
@@ -239,7 +254,11 @@
             steps.push(step);
         }
         step.label = descriptor.label;
-        step.status = event.event === "STEP_STARTED" ? "RUNNING" : "COMPLETED";
+        const eventName = String(event?.data?.eventName || "").toUpperCase();
+        const isStarted = event.event === "STEP_STARTED"
+            || eventName.endsWith("_STARTED")
+            || eventName.endsWith("_CALLED");
+        step.status = isStarted ? "RUNNING" : "COMPLETED";
         state.chat.activeRun.steps = steps.slice(-6);
     }
 
@@ -283,6 +302,9 @@
             run.error = payload?.payload?.message || "处理过程中出现错误";
         } else if (event.event === "RUN_FINISHED") {
             if (run.status !== "FAILED") run.status = "COMPLETED";
+            if (run.restored && state.chat.pendingRequest && !state.chat.sending) {
+                window.setTimeout(() => retryPendingChat(), 0);
+            }
         }
 
         persistActiveRun();
@@ -303,6 +325,7 @@
 
     function scheduleAgentStreamReconnect(sessionId) {
         if (!sessionId || state.chat.reconnectTimer || state.chat.sessionId !== sessionId) return;
+        if (!state.chat.activeRun) return;
         const attempt = state.chat.reconnectAttempts;
         if (attempt >= RUN_RECONNECT_DELAYS.length) {
             if (state.chat.activeRun && state.chat.activeRun.status !== "COMPLETED") {
@@ -386,6 +409,54 @@
                 ${retry}
             </div>
         `;
+    }
+
+    function restoreChatRuntime() {
+        let sessionId = "";
+        try { sessionId = sessionStorage.getItem(chatSessionStorageKey()) || ""; } catch (_) { /* noop */ }
+        if (!sessionId) return;
+
+        state.chat.sessionId = sessionId;
+        let saved = null;
+        try {
+            const raw = sessionStorage.getItem(runStorageKey(sessionId));
+            saved = raw ? JSON.parse(raw) : null;
+        } catch (_) {
+            saved = null;
+        }
+        if (!saved) return;
+
+        state.chat.activeRun = {
+            idempotencyKey: saved.pendingRequest?.idempotencyKey || "",
+            traceId: saved.traceId || "",
+            status: saved.status || "RECONNECTING",
+            lastEventId: saved.lastEventId || "",
+            steps: Array.isArray(saved.steps) ? saved.steps : [],
+            startedAt: saved.startedAt || Date.now(),
+            error: "",
+            restored: true
+        };
+        state.chat.pendingRequest = saved.pendingRequest || null;
+
+        if (state.chat.pendingRequest?.payload?.message) {
+            state.chat.messages.push({
+                role: "user",
+                text: state.chat.pendingRequest.payload.message
+            });
+        }
+
+        window.setTimeout(async () => {
+            try {
+                await ensureAgentEventStream(sessionId, true);
+                if (state.chat.activeRun?.status === "COMPLETED"
+                    && state.chat.pendingRequest
+                    && !state.chat.sending) {
+                    await retryPendingChat();
+                }
+            } catch (_) {
+                scheduleAgentStreamReconnect(sessionId);
+            }
+        }, 0);
     }
 
     function showToast(message, type) {
@@ -728,6 +799,7 @@
         if (!state.chat.sessionId) {
             const session = await CityApi.createSession();
             state.chat.sessionId = session.sessionId;
+            persistChatSessionId();
         }
 
         state.chat.activeRun = {
@@ -791,6 +863,7 @@
                 idempotencyKey: pending.idempotencyKey
             });
             state.chat.sessionId = response.sessionId || state.chat.sessionId;
+            persistChatSessionId();
             state.chat.messages.push({
                 role: "assistant",
                 text: response.clarifyQuestion || response.speechText || "我已经处理完这轮请求。",
@@ -839,6 +912,7 @@
         const previousSessionId = state.chat.sessionId;
         stopAgentEventStream();
         clearPersistedRun(previousSessionId);
+        clearPersistedChatSession();
         state.chat.sessionId = null;
         state.chat.activeRun = null;
         state.chat.pendingRequest = null;
@@ -2046,6 +2120,7 @@
     app.addEventListener("click", handleClick);
     app.addEventListener("submit", handleSubmit);
     initUserField();
+    restoreChatRuntime();
     if (!location.hash) {
         navigate("/city");
     } else {
