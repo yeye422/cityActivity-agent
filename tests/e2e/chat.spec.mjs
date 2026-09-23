@@ -358,3 +358,223 @@ test("startup recovery replays SSE and reuses the original idempotency key", asy
   await expect(page.locator(".message.assistant .bubble", { hasText: "刷新恢复完成" })).toHaveCount(1);
   await expect(page.locator(".agent-run-card")).toHaveCount(0);
 });
+
+
+test("clarification response remains a normal assistant turn", async ({ page }) => {
+  const state = await installCommonMocks(page, {
+    chat: async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          sessionId: "session-e2e",
+          speechText: "",
+          clarifyQuestion: "你想在哪个城市找活动？",
+          responseType: "CLARIFICATION",
+          displayBlocks: [],
+          missingSlots: ["city"],
+          traceId: "trace-clarify",
+          relaxationOptions: [],
+          appliedSlots: {},
+          excludedSlots: {},
+          timeConstraint: null
+        })
+      });
+    }
+  });
+
+  await page.goto("/#/city/chat");
+  await page.locator("#chatForm textarea[name=message]").fill("周末想出去玩");
+  await page.locator("#chatForm button[type=submit]").click();
+
+  await expect(page.locator(".message.assistant .bubble", { hasText: "你想在哪个城市找活动？" })).toHaveCount(1);
+  await expect(page.locator(".message.assistant .chip", { hasText: "城市" })).toHaveCount(1);
+  await expect(page.locator(".run-error")).toHaveCount(0);
+  expect(state.chatKeys[0]).not.toBe("");
+});
+
+test("planning validation failure is rendered as repair progress instead of run error", async ({ page }) => {
+  let releaseChat;
+  const chatGate = new Promise((resolve) => {
+    releaseChat = resolve;
+  });
+
+  await installCommonMocks(page, {
+    events: async (route) => {
+      const body =
+        sseEvent({
+          event: "connected",
+          data: { sessionId: "session-e2e", replay: false }
+        }) +
+        sseEvent({
+          id: "trace-plan:1",
+          event: "RUN_STARTED",
+          data: {
+            type: "RUN_STARTED",
+            traceId: "trace-plan",
+            sessionId: "session-e2e",
+            sequence: 1,
+            phase: "HTTP",
+            eventName: "REQUEST_RECEIVED",
+            payload: null
+          }
+        }) +
+        sseEvent({
+          id: "trace-plan:2",
+          event: "STEP_COMPLETED",
+          data: {
+            type: "STEP_COMPLETED",
+            traceId: "trace-plan",
+            sessionId: "session-e2e",
+            sequence: 2,
+            phase: "TOOL",
+            eventName: "PLAN_VALIDATION_FAILED",
+            payload: { valid: false }
+          }
+        }) +
+        sseEvent({
+          id: "trace-plan:3",
+          event: "STEP_COMPLETED",
+          data: {
+            type: "STEP_COMPLETED",
+            traceId: "trace-plan",
+            sessionId: "session-e2e",
+            sequence: 3,
+            phase: "AGENT",
+            eventName: "PLAN_REPAIRED",
+            payload: {}
+          }
+        }) +
+        sseEvent({
+          id: "trace-plan:4",
+          event: "STEP_COMPLETED",
+          data: {
+            type: "STEP_COMPLETED",
+            traceId: "trace-plan",
+            sessionId: "session-e2e",
+            sequence: 4,
+            phase: "TOOL",
+            eventName: "PLAN_VALIDATION_PASSED",
+            payload: { valid: true }
+          }
+        });
+      await route.fulfill({
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+        body
+      });
+    },
+    chat: async (route) => {
+      await chatGate;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(responsePayload("trace-plan", "规划完成"))
+      });
+    }
+  });
+
+  await page.goto("/#/city/chat");
+  await page.locator("#chatForm textarea[name=message]").fill("帮我安排半天活动");
+  await page.locator("#chatForm button[type=submit]").click();
+
+  await expect(page.locator(".agent-run-card")).toContainText("校验活动安排");
+  await expect(page.locator(".agent-run-card")).toContainText("调整计划冲突");
+  await expect(page.locator(".run-error")).toHaveCount(0);
+  await expect(page.locator(".agent-run-card")).not.toContainText("处理未完成");
+
+  releaseChat();
+
+  await expect(page.locator(".message.assistant .bubble", { hasText: "规划完成" })).toHaveCount(1);
+  await expect(page.locator(".agent-run-card")).toHaveCount(0);
+});
+
+test("mobile chat keeps the live run card within the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  let releaseChat;
+  const chatGate = new Promise((resolve) => {
+    releaseChat = resolve;
+  });
+
+  await installCommonMocks(page, {
+    events: async (route) => {
+      const body =
+        sseEvent({
+          event: "connected",
+          data: { sessionId: "session-e2e", replay: false }
+        }) +
+        sseEvent({
+          id: "trace-mobile:1",
+          event: "STEP_COMPLETED",
+          data: {
+            type: "STEP_COMPLETED",
+            traceId: "trace-mobile",
+            sessionId: "session-e2e",
+            sequence: 1,
+            phase: "INTENT",
+            eventName: "INTENT_RECOGNIZED",
+            payload: {}
+          }
+        }) +
+        sseEvent({
+          id: "trace-mobile:2",
+          event: "STEP_COMPLETED",
+          data: {
+            type: "STEP_COMPLETED",
+            traceId: "trace-mobile",
+            sessionId: "session-e2e",
+            sequence: 2,
+            phase: "SEARCH",
+            eventName: "RETRIEVAL_TOOL_COMPLETED",
+            payload: {}
+          }
+        }) +
+        sseEvent({
+          id: "trace-mobile:3",
+          event: "STEP_COMPLETED",
+          data: {
+            type: "STEP_COMPLETED",
+            traceId: "trace-mobile",
+            sessionId: "session-e2e",
+            sequence: 3,
+            phase: "PLAN",
+            eventName: "PLANNING_AGENT_DECIDED",
+            payload: {}
+          }
+        });
+      await route.fulfill({
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+        body
+      });
+    },
+    chat: async (route) => {
+      await chatGate;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(responsePayload("trace-mobile", "移动端完成"))
+      });
+    }
+  });
+
+  await page.goto("/#/city/chat");
+  await expect(page.locator(".mobile-bottom-nav")).toBeVisible();
+
+  await page.locator("#chatForm textarea[name=message]").fill("移动端找活动");
+  await page.locator("#chatForm button[type=submit]").click();
+
+  const card = page.locator(".agent-run-card");
+  await expect(card).toBeVisible();
+  const box = await card.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(390);
+
+  expect(await page.locator(".run-step").count()).toBeGreaterThanOrEqual(3);
+  await expect(page.locator(".run-step:visible")).toHaveCount(1);
+
+  releaseChat();
+  await expect(page.locator(".message.assistant .bubble", { hasText: "移动端完成" })).toHaveCount(1);
+});

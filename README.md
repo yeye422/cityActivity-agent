@@ -219,4 +219,4 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-覆盖正常聊天单次渲染、SSE `Last-Event-ID` 重连，以及刷新恢复时复用原 `Idempotency-Key`。普通 CI 的 `Frontend E2E` job 会独立执行这些浏览器测试。
+覆盖正常聊天单次渲染、SSE `Last-Event-ID` 重连、刷新恢复时复用原 `Idempotency-Key`、Clarify、Planning Validate/Repair 进度语义和移动端运行卡布局。普通 CI 的 `Frontend E2E` job 会独立执行这些浏览器测试。
