@@ -21,9 +21,11 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -52,6 +54,9 @@ public class AgentTraceService {
 
     /** 当前请求线程绑定的 TraceScope；Scope.close() 时必须 remove。 */
     private final ThreadLocal<TraceScope> currentScope = new ThreadLocal<>();
+
+    /** AgentScope Tool/Hook 会切换到 Reactor worker 线程；显式 traceId 用于跨线程续写当前请求。 */
+    private final Map<String, TraceScope> activeScopes = new ConcurrentHashMap<>();
 
     private final AgentTraceMapper agentTraceMapper;
     private final ObjectMapper objectMapper;
@@ -97,6 +102,7 @@ public class AgentTraceService {
         TraceScope scope = new TraceScope(
                 traceId, sessionId, userId, executionHarness.openRun(sessionId));
         currentScope.set(scope);
+        activeScopes.put(traceId, scope);
         return scope;
     }
 
@@ -110,6 +116,29 @@ public class AgentTraceService {
     public void recordEvent(String eventType, String phase, Object inputPayload, Object outputPayload, Long latencyMs) {
         record(eventType, phase, null, null, inputPayload, outputPayload,
                 latencyMs, null, null, null, null);
+    }
+
+    /**
+     * AgentScope Tool/Hook 在 Reactor worker 线程执行时，按 traceId 显式记录事件。
+     * 这条路径不依赖 ThreadLocal，因此工具调用不会在切线程后丢失。
+     */
+    public void recordEventForTrace(String traceId,
+                                    String eventType,
+                                    String phase,
+                                    Object inputPayload,
+                                    Object outputPayload) {
+        recordForTrace(traceId, eventType, phase, null, null, inputPayload, outputPayload,
+                null, null, null, null, null);
+    }
+
+    /** 在异步 AgentScope 线程中按 traceId 记录异常。 */
+    public void recordErrorForTrace(String traceId,
+                                    String eventType,
+                                    String phase,
+                                    Object inputPayload,
+                                    Exception error) {
+        recordForTrace(traceId, eventType, phase, null, null, inputPayload, null,
+                null, null, null, null, error);
     }
 
     /** 记录业务阶段异常，并把当前 Trace 标记为 FAILED。 */
@@ -262,11 +291,53 @@ public class AgentTraceService {
         if (scope == null) {
             return;
         }
+        record(scope, eventType, phase, agentName, modelName, inputPayload, outputPayload,
+                latencyMs, inputTokens, outputTokens, totalTokens, error);
+    }
+
+    private void recordForTrace(
+            String traceId,
+            String eventType,
+            String phase,
+            String agentName,
+            String modelName,
+            Object inputPayload,
+            Object outputPayload,
+            Long latencyMs,
+            Long inputTokens,
+            Long outputTokens,
+            Long totalTokens,
+            Exception error
+    ) {
+        if (traceId == null || traceId.isBlank()) {
+            return;
+        }
+        TraceScope scope = activeScopes.get(traceId.trim());
+        if (scope == null) {
+            return;
+        }
+        record(scope, eventType, phase, agentName, modelName, inputPayload, outputPayload,
+                latencyMs, inputTokens, outputTokens, totalTokens, error);
+    }
+
+    private void record(
+            TraceScope scope,
+            String eventType,
+            String phase,
+            String agentName,
+            String modelName,
+            Object inputPayload,
+            Object outputPayload,
+            Long latencyMs,
+            Long inputTokens,
+            Long outputTokens,
+            Long totalTokens,
+            Exception error
+    ) {
         String errorMessage = error == null
                 ? null
                 : trim(error.getClass().getSimpleName() + ": " + error.getMessage());
 
-        // stepOrder 在一个 Scope 内单调递增，回放时按该字段即可还原真实执行顺序。
         int sequence = scope.nextStep();
         scope.addEvent(new TraceEvent(
                 sequence,
@@ -449,7 +520,7 @@ public class AgentTraceService {
         private final Long userId;
         private final AtomicInteger stepOrder = new AtomicInteger(0);
         private final long startedAt = System.nanoTime();
-        private final List<TraceEvent> events = new ArrayList<>();
+        private final List<TraceEvent> events = Collections.synchronizedList(new ArrayList<>());
         private String status = "SUCCESS";
         private String errorMessage;
         private boolean closed;
@@ -484,7 +555,9 @@ public class AgentTraceService {
         }
 
         private List<TraceEvent> events() {
-            return List.copyOf(events);
+            synchronized (events) {
+                return List.copyOf(events);
+            }
         }
 
         private int eventCount() {
@@ -521,9 +594,12 @@ public class AgentTraceService {
                 // 可观测链路是旁路能力：数据库 Trace 写入失败不能覆盖真实业务结果。
                 log.warn("Failed to persist request trace: traceId={}", traceId, error);
             } finally {
+                activeScopes.remove(traceId, this);
                 harnessScope.close();
                 // 线程池会复用线程；不 remove 会导致下一次请求继续写入旧 Scope。
-                currentScope.remove();
+                if (currentScope.get() == this) {
+                    currentScope.remove();
+                }
             }
         }
     }
