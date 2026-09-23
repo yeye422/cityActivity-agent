@@ -4,7 +4,8 @@ param(
     [int]$ReactLimit = 10,
     [int]$RetrievalK = 5,
     [string]$BaselineName = "",
-    [string]$RetrievalOutputPath = ""
+    [string]$RetrievalOutputPath = "",
+    [string]$ReactOutputDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,11 +33,22 @@ Invoke-Step "1/4 react-v1 first run + promote baseline" {
     if (-not [string]::IsNullOrWhiteSpace($BaselineName)) {
         $params.BaselineName = $BaselineName
     }
+    if (-not [string]::IsNullOrWhiteSpace($ReactOutputDirectory)) {
+        $params.OutputPath = Join-Path $ReactOutputDirectory "react-first.json"
+    }
     & $reactScript @params
 }
 
 Invoke-Step "2/4 react-v1 regression against promoted baseline" {
-    & $reactScript -BaseUrl $BaseUrl -UserId $UserId -Limit $ReactLimit
+    $params = @{
+        BaseUrl = $BaseUrl
+        UserId = $UserId
+        Limit = $ReactLimit
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ReactOutputDirectory)) {
+        $params.OutputPath = Join-Path $ReactOutputDirectory "react-regression.json"
+    }
+    & $reactScript @params
 }
 
 Invoke-Step "3/4 retrieval-v1 CURRENT_PIPELINE baseline" {
