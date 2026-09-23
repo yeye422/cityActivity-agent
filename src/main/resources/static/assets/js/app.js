@@ -106,6 +106,7 @@
             reconnectTimer: null,
             reconnectAttempts: 0,
             pendingRequest: null,
+            lastCompletedTraceId: "",
             messages: [
                 {
                     role: "assistant",
@@ -276,6 +277,12 @@
         }
 
         if (!state.chat.activeRun) {
+            if (payload.traceId && payload.traceId === state.chat.lastCompletedTraceId) {
+                return;
+            }
+            if (!state.chat.pendingRequest && event.event !== "RUN_STARTED") {
+                return;
+            }
             state.chat.activeRun = {
                 idempotencyKey: state.chat.pendingRequest?.idempotencyKey || "",
                 traceId: payload.traceId || "",
@@ -371,8 +378,11 @@
         });
         state.chat.eventStream = stream;
         stream.done.finally(() => {
-            if (state.chat.eventStream === stream) state.chat.eventStream = null;
-            if (state.chat.sessionId === sessionId) scheduleAgentStreamReconnect(sessionId);
+            const wasCurrent = state.chat.eventStream === stream;
+            if (wasCurrent) state.chat.eventStream = null;
+            if (wasCurrent && state.chat.sessionId === sessionId && state.chat.activeRun) {
+                scheduleAgentStreamReconnect(sessionId);
+            }
         }).catch(() => {});
         return stream;
     }
@@ -881,6 +891,7 @@
                 state.chat.activeRun.traceId = response.traceId || state.chat.activeRun.traceId;
                 state.chat.activeRun.status = "COMPLETED";
             }
+            state.chat.lastCompletedTraceId = response.traceId || state.chat.activeRun?.traceId || "";
             state.chat.pendingRequest = null;
             clearPersistedRun(state.chat.sessionId);
             state.chat.activeRun = null;
@@ -916,6 +927,7 @@
         state.chat.sessionId = null;
         state.chat.activeRun = null;
         state.chat.pendingRequest = null;
+        state.chat.lastCompletedTraceId = "";
         state.chat.sending = false;
         state.chat.messages = [
             {

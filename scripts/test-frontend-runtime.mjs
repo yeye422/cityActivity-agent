@@ -99,7 +99,8 @@ for (const required of [
     "retryPendingChat",
     "restoreChatRuntime",
     "subscribeAgentEvents",
-    "RECONNECTING"
+    "RECONNECTING",
+    "lastCompletedTraceId"
 ]) {
     assert.match(appSource, new RegExp(required), `app.js missing frontend runtime contract: ${required}`);
 }
