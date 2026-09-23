@@ -23,19 +23,32 @@ if (-not (Test-Path $reactScript)) { throw "Missing script: $reactScript" }
 if (-not (Test-Path $retrievalScript)) { throw "Missing script: $retrievalScript" }
 
 Invoke-Step "1/4 react-v1 first run + promote baseline" {
-    $args = @("-ExecutionPolicy","Bypass","-File",$reactScript,"-BaseUrl",$BaseUrl,"-UserId",$UserId,"-Limit",$ReactLimit,"-PromoteBaseline")
-    if (-not [string]::IsNullOrWhiteSpace($BaselineName)) { $args += @("-BaselineName",$BaselineName) }
-    & powershell @args
+    $params = @{
+        BaseUrl = $BaseUrl
+        UserId = $UserId
+        Limit = $ReactLimit
+        PromoteBaseline = $true
+    }
+    if (-not [string]::IsNullOrWhiteSpace($BaselineName)) {
+        $params.BaselineName = $BaselineName
+    }
+    & $reactScript @params
 }
 
 Invoke-Step "2/4 react-v1 regression against promoted baseline" {
-    & powershell -ExecutionPolicy Bypass -File $reactScript -BaseUrl $BaseUrl -UserId $UserId -Limit $ReactLimit
+    & $reactScript -BaseUrl $BaseUrl -UserId $UserId -Limit $ReactLimit
 }
 
 Invoke-Step "3/4 retrieval-v1 CURRENT_PIPELINE baseline" {
-    $args = @("-ExecutionPolicy","Bypass","-File",$retrievalScript,"-BaseUrl",$BaseUrl,"-UserId",$UserId,"-K",$RetrievalK)
-    if (-not [string]::IsNullOrWhiteSpace($RetrievalOutputPath)) { $args += @("-OutputPath",$RetrievalOutputPath) }
-    & powershell @args
+    $params = @{
+        BaseUrl = $BaseUrl
+        UserId = $UserId
+        K = $RetrievalK
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RetrievalOutputPath)) {
+        $params.OutputPath = $RetrievalOutputPath
+    }
+    & $retrievalScript @params
 }
 
 Write-Host ""

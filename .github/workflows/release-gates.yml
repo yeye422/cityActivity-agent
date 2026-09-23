@@ -1,0 +1,118 @@
+name: Release Gates
+
+on:
+  workflow_dispatch:
+    inputs:
+      react_limit:
+        description: react-v1 case limit
+        required: true
+        default: '10'
+      retrieval_k:
+        description: retrieval-v1 K
+        required: true
+        default: '5'
+
+permissions:
+  contents: read
+
+jobs:
+  real-environment-gates:
+    name: Real Environment Gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      DB_URL: jdbc:mysql://127.0.0.1:3306/city_db?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true
+      DB_USERNAME: root
+      DB_PASSWORD: root
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      AMAP_WEB_SERVICE_KEY: ${{ secrets.AMAP_WEB_SERVICE_KEY }}
+      QWEATHER_API_HOST: ${{ secrets.QWEATHER_API_HOST }}
+      QWEATHER_API_KEY: ${{ secrets.QWEATHER_API_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Require real model secret
+        shell: bash
+        run: |
+          if [[ -z "$DASHSCOPE_API_KEY" ]]; then
+            echo "Missing repository secret: DASHSCOPE_API_KEY" >&2
+            exit 2
+          fi
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Initialize evaluation database
+        shell: bash
+        run: |
+          mysql -h127.0.0.1 -uroot -proot < database_init_final.sql
+          mysql -h127.0.0.1 -uroot -proot city_db < src/main/resources/db/evaluation_loop_migration.sql
+          mysql -h127.0.0.1 -uroot -proot city_db < src/main/resources/db/activity_venue_session_migration.sql
+          mysql -h127.0.0.1 -uroot -proot city_db < src/main/resources/db/agent_memory_migration.sql
+          mysql -h127.0.0.1 -uroot -proot city_db < src/main/resources/db/agent_ui_event_migration.sql
+          mysql -h127.0.0.1 -uroot -proot city_db < src/main/resources/db/chat_request_idempotency_migration.sql
+          mysql -h127.0.0.1 -uroot -proot city_db < src/main/resources/db/city_seed.sql
+          if [[ -f src/main/resources/db/activity_catalog_seed.sql ]]; then
+            mysql -h127.0.0.1 -uroot -proot city_db < src/main/resources/db/activity_catalog_seed.sql
+          fi
+
+      - name: Build application
+        run: mvn -B -ntp clean package
+
+      - name: Start application
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          nohup java -jar target/city-agent-1.0-SNAPSHOT.jar > artifacts/application.log 2>&1 &
+          echo $! > artifacts/application.pid
+          for i in {1..60}; do
+            if curl --silent --output /dev/null http://127.0.0.1:8080/ 2>/dev/null; then
+              exit 0
+            fi
+            if ! kill -0 "$(cat artifacts/application.pid)" 2>/dev/null; then
+              cat artifacts/application.log
+              exit 1
+            fi
+            sleep 2
+          done
+          cat artifacts/application.log
+          echo "Application did not become reachable" >&2
+          exit 1
+
+      - name: Run react-v1 and retrieval release verification
+        shell: pwsh
+        run: |
+          ./scripts/run-release-verification.ps1 \
+            -BaseUrl "http://127.0.0.1:8080" \
+            -UserId 999999 \
+            -ReactLimit ${{ inputs.react_limit }} \
+            -RetrievalK ${{ inputs.retrieval_k }} \
+            -RetrievalOutputPath "artifacts/retrieval-current.json"
+
+      - name: Upload release verification artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-gate-reports
+          path: artifacts/
+          if-no-files-found: warn

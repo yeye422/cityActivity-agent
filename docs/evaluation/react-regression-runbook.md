@@ -159,3 +159,28 @@ react-v1 第二次回归
 ↓
 retrieval-v1 CURRENT_PIPELINE baseline
 ```
+
+
+## 8. GitHub Actions 手动门禁
+
+`.github/workflows/release-gates.yml` 只支持 `workflow_dispatch`，不会在普通 push / pull_request 自动调用真实模型。
+
+仓库需要配置：
+
+```text
+DASHSCOPE_API_KEY
+AMAP_WEB_SERVICE_KEY
+QWEATHER_API_HOST
+QWEATHER_API_KEY
+```
+
+工作流使用临时 MySQL 初始化完整测试数据，随后执行 `scripts/run-release-verification.ps1`：
+
+```text
+react-v1 首跑 -> ReactReleaseGate
+-> promote 临时 Baseline
+-> react-v1 二跑 -> RegressionGate
+-> retrieval-v1 CURRENT_PIPELINE baseline
+```
+
+运行日志和 Retrieval JSON 会上传为 `release-gate-reports` artifact。临时数据库中的 Baseline 只用于验证完整门禁流程；正式环境仍需在持久化 Evaluation DB 中建立正式 Baseline。
