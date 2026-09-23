@@ -25,7 +25,7 @@ class AgentRuntimeMetricsExtractorTest {
                     {"eventType":"RETRIEVAL_TOOL_COMPLETED"},
                     {"eventType":"RETRIEVAL_TOOL_CALLED"},
                     {"eventType":"RETRIEVAL_TOOL_COMPLETED"},
-                    {"eventType":"RECOMMENDATION_DECIDED","outputPayload":"{\"decision\":{\"selectedActivityIds\":[1,2],\"assessments\":[{\"activityId\":1,\"goalFit\":\"HIGH\"},{\"activityId\":2,\"goalFit\":\"MEDIUM\"}]}}"},
+                    {"eventType":"RECOMMENDATION_DECIDED","outputPayload":"{\\\"decision\\\":{\\\"selectedActivityIds\\\":[1,2],\\\"assessments\\\":[{\\\"activityId\\\":1,\\\"goalFit\\\":\\\"HIGH\\\"},{\\\"activityId\\\":2,\\\"goalFit\\\":\\\"MEDIUM\\\"}]}}"},
                     {"eventType":"RECOMMENDATION_REACT_COMPLETED"}
                   ]
                 }
@@ -53,7 +53,7 @@ class AgentRuntimeMetricsExtractorTest {
                     {"eventType":"PLANNING_DISCOVERY_TOOL_CALLED"},
                     {"eventType":"TRAVEL_TIME_TOOL_CALLED"},
                     {"eventType":"PLAN_VALIDATION_TOOL_CALLED"},
-                    {"eventType":"PLAN_VALIDATION_FAILED","outputPayload":"{\"violations\":[{\"code\":\"BUDGET_EXCEEDED\"}]}"},
+                    {"eventType":"PLAN_VALIDATION_FAILED","outputPayload":"{\\\"violations\\\":[{\\\"code\\\":\\\"BUDGET_EXCEEDED\\\"}]}"},
                     {"eventType":"PLAN_VALIDATION_TOOL_CALLED"},
                     {"eventType":"PLAN_VALIDATION_PASSED"},
                     {"eventType":"PLANNING_REACT_COMPLETED"}
