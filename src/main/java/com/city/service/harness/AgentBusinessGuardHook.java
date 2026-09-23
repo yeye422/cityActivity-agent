@@ -24,6 +24,9 @@ import java.util.Set;
  */
 public final class AgentBusinessGuardHook implements Hook {
 
+    /** AgentScope 为强类型结构化输出自动注册的框架级 Tool，不属于 CityFlow 业务 Tool。 */
+    static final String FRAMEWORK_RESPONSE_TOOL = "generate_response";
+
     private final String agentName;
     private final Set<String> allowedTools;
     private final int maxActingCalls;
@@ -102,6 +105,13 @@ public final class AgentBusinessGuardHook implements Hook {
     /** package-private 便于纯单测验证，不需要构造 AgentScope HookEvent。 */
     synchronized void beforeToolCall(String toolName, Object input) {
         String safeTool = requireText(toolName, "toolName");
+
+        // generate_response 由 AgentScope 在 call(..., StructuredType.class) 时自动注入，
+        // 仅用于提交最终强类型响应。它不是业务能力，不应占用业务 Tool 配额或参与重复调用检测。
+        if (FRAMEWORK_RESPONSE_TOOL.equals(safeTool)) {
+            return;
+        }
+
         if (!allowedTools.contains(safeTool)) {
             throw new CityException("Agent 无权调用工具: " + safeTool);
         }
