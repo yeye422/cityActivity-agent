@@ -5,6 +5,7 @@ import com.city.model.ActivitySessionResponse;
 import com.city.model.TravelTimeEvidence;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
@@ -27,6 +28,7 @@ public class AmapTravelTimeService {
     private final ObjectMapper objectMapper;
     private final String apiKey;
 
+    @Autowired
     public AmapTravelTimeService(ObjectMapper objectMapper,
                                  @Value("${amap.web-service-key:}") String apiKey) {
         this(RestClient.create(), objectMapper, apiKey);
