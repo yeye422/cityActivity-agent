@@ -14,9 +14,11 @@ import com.city.service.evidence.RunEvidenceStore;
 import com.city.service.plan.PlanProposalValidationService;
 import com.city.service.plan.PlanningConstraintParser;
 import com.city.service.trace.AgentTraceService;
+import com.city.tool.PlanValidationTool;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -32,18 +34,38 @@ public final class PlanningAgentWorker {
     private final PlanningAgentBuilder agentBuilder;
     private final PlanningConstraintParser constraintParser;
     private final PlanProposalValidationService validationService;
+    private final PlanValidationTool validationTool;
     private final DecisionEvidenceValidator evidenceValidator = new DecisionEvidenceValidator();
     private final AgentTraceService traceService;
 
+    /** 保留现有纯单测构造入口。 */
     public PlanningAgentWorker(
             PlanningAgentBuilder agentBuilder,
             PlanningConstraintParser constraintParser,
             PlanProposalValidationService validationService,
             AgentTraceService traceService
     ) {
+        this(
+                agentBuilder,
+                constraintParser,
+                validationService,
+                new PlanValidationTool(validationService, traceService),
+                traceService
+        );
+    }
+
+    @Autowired
+    public PlanningAgentWorker(
+            PlanningAgentBuilder agentBuilder,
+            PlanningConstraintParser constraintParser,
+            PlanProposalValidationService validationService,
+            PlanValidationTool validationTool,
+            AgentTraceService traceService
+    ) {
         this.agentBuilder = Objects.requireNonNull(agentBuilder, "agentBuilder");
         this.constraintParser = Objects.requireNonNull(constraintParser, "constraintParser");
         this.validationService = Objects.requireNonNull(validationService, "validationService");
+        this.validationTool = Objects.requireNonNull(validationTool, "validationTool");
         this.traceService = Objects.requireNonNull(traceService, "traceService");
     }
 
@@ -90,9 +112,21 @@ public final class PlanningAgentWorker {
                 throw new IllegalStateException("PlanningAgent 返回为空");
             }
             PlanningDecision decision = response.getStructuredData(PlanningDecision.class);
+
+            /*
+             * AgentScope 的 generate_response 是框架级结构化输出 Tool，不能在 Hook 中通过抛异常阻止，
+             * 否则会直接终止整个 ReAct。若模型提前提交最终 PlanningDecision，则在 Worker 边界使用
+             * 同一个 validate_plan Tool 对最终 proposal 做确定性补验。这样无论模型是否显式执行最后
+             * 一次 Tool 调用，进入业务响应的方案都必须经过同一套 Evidence/Solver/Trace 路径。
+             */
             if (!planningContext.notebook().validated()) {
-                throw new IllegalStateException("PlanningAgent 未通过 validate_plan 完成可验证方案");
+                PlanValidationResult lateValidation = validationTool.validate(decision.plan(), planningContext);
+                if (!lateValidation.valid()) {
+                    throw new IllegalStateException(
+                            "PlanningAgent 最终方案补验失败: " + lateValidation.violations());
+                }
             }
+
             PlanValidationResult finalValidation = validationService.validate(
                     decision.plan(),
                     evidenceRegistry,
