@@ -1,6 +1,7 @@
 package com.city.model;
 
 import com.city.enums.SourceMode;
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.experimental.Accessors;
@@ -10,6 +11,7 @@ import java.time.LocalTime;
 
 @Data
 @Accessors(fluent = true)
+@JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY)
 @AllArgsConstructor
 public class ActivityItem {
     private Long id;
