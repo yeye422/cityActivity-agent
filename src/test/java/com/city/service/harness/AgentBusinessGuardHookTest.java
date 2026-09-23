@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Map;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -24,6 +25,46 @@ class AgentBusinessGuardHookTest {
 
         assertThrows(CityException.class,
                 () -> hook.beforeToolCall("validate_plan", Map.of()));
+        assertEquals(0, hook.actingCalls());
+    }
+
+    @Test
+    void shouldAllowAgentScopeStructuredResponseToolWithoutConsumingBusinessBudget() {
+        AgentBusinessGuardHook hook = new AgentBusinessGuardHook(
+                "recommendation",
+                Set.of("search_activities"),
+                2,
+                3,
+                null
+        );
+
+        hook.beforeToolCall("search_activities", Map.of("q", "约会"));
+        assertDoesNotThrow(() -> hook.beforeToolCall(
+                AgentBusinessGuardHook.FRAMEWORK_RESPONSE_TOOL,
+                Map.of("selectedActivityIds", java.util.List.of(1L))
+        ));
+        assertEquals(1, hook.actingCalls());
+
+        hook.beforeToolCall("search_activities", Map.of("q", "互动"));
+        assertDoesNotThrow(() -> hook.beforeToolCall(
+                AgentBusinessGuardHook.FRAMEWORK_RESPONSE_TOOL,
+                Map.of("selectedActivityIds", java.util.List.of(2L))
+        ));
+        assertEquals(2, hook.actingCalls());
+    }
+
+    @Test
+    void shouldStillRejectUnknownFrameworkLikeTool() {
+        AgentBusinessGuardHook hook = new AgentBusinessGuardHook(
+                "recommendation",
+                Set.of("search_activities"),
+                2,
+                3,
+                null
+        );
+
+        assertThrows(CityException.class,
+                () -> hook.beforeToolCall("generate_something_else", Map.of()));
         assertEquals(0, hook.actingCalls());
     }
 
