@@ -17,6 +17,7 @@ import com.city.model.RegressionEvaluationRequest;
 import com.city.model.RequestTraceRow;
 import com.city.model.SlotBundle;
 import com.city.model.TraceLabelRequest;
+import com.city.model.TraceEvaluationResult;
 import com.city.service.orchestrator.CityAgentSupervisor;
 import com.city.service.trace.AgentTraceService;
 import com.city.service.trace.BuildVersionService;
@@ -274,11 +275,48 @@ public class RegressionEvaluationService {
     private EvaluationReport enrichRuntimeMetrics(EvaluationReport report,
                                                   List<RequestTraceRow> traces) {
         if (report == null) return null;
+
+        AgentRuntimeMetricsExtractor extractor = new AgentRuntimeMetricsExtractor(objectMapper);
         Map<String, Double> merged = new LinkedHashMap<>();
         if (report.metricAverages() != null) {
             merged.putAll(report.metricAverages());
         }
-        merged.putAll(new AgentRuntimeMetricsExtractor(objectMapper).aggregate(traces));
+        merged.putAll(extractor.aggregate(traces));
+
+        Map<String, Map<String, Double>> runtimeByTraceId = new LinkedHashMap<>();
+        if (traces != null) {
+            for (RequestTraceRow trace : traces) {
+                if (trace == null || trace.getTraceId() == null || trace.getTraceId().isBlank()) continue;
+                runtimeByTraceId.put(trace.getTraceId(), extractor.perTrace(trace));
+            }
+        }
+
+        List<TraceEvaluationResult> enrichedTraceResults = report.traceResults() == null
+                ? List.of()
+                : report.traceResults().stream()
+                        .map(result -> {
+                            Map<String, Double> metrics = new LinkedHashMap<>();
+                            if (result.metrics() != null) metrics.putAll(result.metrics());
+                            Map<String, Double> runtime = runtimeByTraceId.get(result.traceId());
+                            if (runtime != null) {
+                                runtime.forEach((name, value) -> {
+                                    if (value != null) metrics.put(name, value);
+                                });
+                            }
+                            return new TraceEvaluationResult(
+                                    result.traceId(),
+                                    result.sessionId(),
+                                    result.createdAt(),
+                                    result.score(),
+                                    result.ruleScore(),
+                                    result.llmJudgeScore(),
+                                    result.userFeedbackScore(),
+                                    metrics,
+                                    result.detail()
+                            );
+                        })
+                        .toList();
+
         return new EvaluationReport(
                 report.startAt(),
                 report.endAt(),
@@ -286,7 +324,7 @@ public class RegressionEvaluationService {
                 report.labeledTraces(),
                 report.avgScore(),
                 Map.copyOf(merged),
-                report.traceResults()
+                enrichedTraceResults
         );
     }
 
