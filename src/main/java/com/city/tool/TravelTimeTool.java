@@ -57,7 +57,8 @@ public class TravelTimeTool {
         }
 
         if (traceService != null) {
-            traceService.recordEvent(
+            traceService.recordEventForTrace(
+                    planningContext.verifiedRequestContext().traceId(),
                     "TRAVEL_TIME_TOOL_CALLED",
                     "TOOL",
                     Map.of(
@@ -76,7 +77,8 @@ public class TravelTimeTool {
         planningContext.notebook().recordTravelLookup();
 
         if (traceService != null) {
-            traceService.recordEvent(
+            traceService.recordEventForTrace(
+                    planningContext.verifiedRequestContext().traceId(),
                     "TRAVEL_TIME_EVIDENCE_READY",
                     "TOOL",
                     Map.of("fromVenueId", from.venueId(), "toVenueId", to.venueId(),
