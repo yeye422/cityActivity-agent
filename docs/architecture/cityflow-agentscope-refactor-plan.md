@@ -1,6 +1,6 @@
 # CityFlow 基于 AgentScope 1.0 的架构改造计划
 
-> 当前实施状态（2026-09-22）：`refactor/agentscope-react` 已完成 P1-P9 主体迁移，并前置完成 P14 的 ReAct 运行指标接入；RecommendationAgent / PlanningAgent 均已接入 Supervisor 灰度主链，默认 feature flag 关闭。旧链仍保留作为 fallback，P10/P12 等收口阶段尚未执行。
+> 当前实施状态（2026-09-23）：`refactor/agentscope-react` 已完成 P1-P15 的架构代码收口。RecommendationAgent / PlanningAgent 是唯一在线决策主链，不再存在 ReAct feature flag、legacy Worker/ResponseAgent fallback 或双轨兼容层。P6 已补齐显式 PlanNotebook，P11 已接入 MemoryMutationProposal -> MemoryPolicy，P12 已收敛为薄 Supervisor，P14 已补齐单轨 ReAct 运行/质量指标。剩余发布工作仅为真实数据库 + 真实模型环境的 react-v1 / Retrieval Baseline 验收；Vector/RRF 属于通过同口径检索评测后再决定的后续优化，不是本次架构完成前置条件。
 
 ## 1. 改造目标
 
@@ -56,7 +56,9 @@ Final Validator
         ↓
 ResponseGenerator
         ↓
-Supervisor Commit SessionState
+DecisionCommitService
+        ↓
+SessionStateService
 ```
 
 核心原则：
@@ -1153,16 +1155,30 @@ BusinessTraceService
 ```text
 load SessionState
 ↓
-create Run
+create Run / Trace
 ↓
 route Workflow
 ↓
-workflow.execute
-↓
-commit StatePatch
+delegate AgentRunService
 ↓
 complete Trace
 ```
+
+状态提交单独收敛到：
+
+```text
+Workflow / AgentRunService
+↓
+DecisionCommitService
+↓
+output RiskGuard
+↓
+SessionStateService.save
+↓
+assistant message / response trace
+```
+
+这样 Supervisor 保持纯编排边界，`DecisionCommitService` 成为 CityFlow 唯一 SessionState 写入边界。
 
 从 Supervisor 移除：
 
@@ -1183,7 +1199,7 @@ Plan Agent
 - Supervisor 不包含具体推荐算法。
 - Supervisor 不直接执行 Retrieval。
 - Supervisor 不直接调用业务 Agent。
-- Supervisor 是 SessionState 唯一最终提交者。
+- `DecisionCommitService` 是 CityFlow 唯一 `SessionStateService.save` 提交边界；Supervisor 不直接承载响应生成、输出 Guard 或状态保存细节。
 
 ---
 
@@ -1268,18 +1284,27 @@ PLAN_VALIDATED
 ```text
 recommendationReactSuccessRate
 planningReactSuccessRate
-reactFallbackRate
+reactDegradationRate
 reactToolCallCount
+toolErrorRate
 retrievalToolCallCount
 reRetrievalRate
+userGoalCoverage
+candidateOutOfSetRate
 travelToolCallCount
 planValidationCallCount
 planValidationFailureRate
 planRepairSuccessRate
+planValidRate
+planValidationTimeConflictRate
+planValidationBudgetViolationRate
+sessionHallucinationRate
 evidenceViolationRate
+latencyP50Ms
+latencyP95Ms
 ```
 
-这些指标直接从现有 `trace_json.events` 聚合并并入固定评测的 `metricSnapshot`。Regression Gate 对 ReAct 成功率下降、fallback 率上升和 Evidence 违规率上升设置方向性门禁；Tool Call / Re-Retrieval / Validation Failure 目前只用于观测，不直接判定失败。
+这些指标直接从现有 `trace_json.events` 聚合并并入固定评测的 `metricSnapshot`。单轨架构中 `*_REACT_COMPLETED` 表示主链成功，`*_REACT_FAILED / *_DEGRADED` 计入 `reactDegradationRate`；不存在 legacy fallback 指标。Regression Gate 对 ReAct 成功率、Goal Coverage、Plan Valid Rate 的下降，以及 degradation、Tool Error、候选越界、Session 幻觉和 Evidence 违规率的上升设置方向性门禁。Tool Call / Re-Retrieval / Validation Failure 等行为指标继续用于诊断。
 
 ## Retrieval 评测
 
@@ -1323,7 +1348,7 @@ Session 幻觉率
 ```text
 Token
 P50 / P95 latency
-Fallback Rate
+ReAct Degradation Rate
 Tool Error Rate
 ```
 
@@ -1346,7 +1371,9 @@ DiscoveryWorker
 Supervisor 内遗留业务逻辑
 ```
 
-`EvaluationJudgeAgent` 可以继续作为离线评测 Agent，不进入在线 Runtime。
+`EvaluationJudgeAgent` 继续只作为离线评测 Agent，不进入在线 Runtime。
+
+此外已删除迁移期未接入 AgentScope Toolkit/Hook 主链的 `WorkerDispatcher / AgentTask / ToolContractRegistry / ToolCapability` 合同层，避免并存第二套 Tool 权限模型。
 
 ---
 
@@ -1397,7 +1424,7 @@ CandidateValidator
 ↓
 ResponseGenerator
 ↓
-Supervisor Commit
+DecisionCommitService Commit
 ```
 
 ---
@@ -1515,12 +1542,12 @@ Delete
 5. 所有推荐 Activity 来自 Retrieval Evidence。
 6. 所有 Planning Session 真实存在且可参加。
 7. PlanningSolver 可完全脱离 LLM 单元测试。
-8. Worker / Agent 不直接修改 SessionState。
+8. Worker / Agent 不直接修改 SessionState，所有 `SessionStateService.save` 统一经过 `DecisionCommitService`。
 9. 长期记忆写入必须经过 MemoryPolicy。
 10. Tool 调用受权限和 Budget 限制。
 11. SSE 重连不会重新执行已经完成的 Agent / Tool。
 12. 推荐和规划核心指标不低于旧 Baseline。
-13. Regression Gate 通过后才能删除旧链路。
+13. 旧兼容链已物理删除；发布/合并前必须在真实环境通过 `ReactReleaseGate`，建立显式 Baseline 后再通过 `RegressionGate`。
 14. 不存在 Candidate Set 外实体进入最终 Response。
 15. 不存在确定性时间冲突的 Plan 被返回给用户。
 

@@ -20,7 +20,7 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.Map;
 
-/** Supervisor 唯一状态提交边界。Worker/Agent 不直接写 SessionState。 */
+/** CityFlow 唯一 SessionState 状态提交边界。Supervisor 只编排，Worker/Agent 不直接写 SessionState。 */
 @Service
 public class DecisionCommitService {
     private final SessionStateService sessionStateService;

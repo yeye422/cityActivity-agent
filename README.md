@@ -31,9 +31,9 @@ activityType / style / duration / feature
 - 用户偏好匹配
 - 多时段活动规划
 - 具体场次约束规划
-- Orchestrator + Worker 分层编排与能力边界
+- 薄 Supervisor + Workflow/AgentRunService 分层编排
 - 单轮调用预算、重复调用检测和 Agent 熔断
-- 边界上下文压缩与跨会话偏好记忆
+- 边界上下文压缩、MemoryMutationProposal + MemoryPolicy 长期偏好写入
 - SQL 硬过滤、BM25 文本相关性、时间/天气/偏好重排与多样性控制
 - Trace、回归评估和按会话推送的 SSE 执行事件
 
@@ -64,7 +64,7 @@ mysql city_db < src/main/resources/db/activity_catalog_seed.sql
 
 ## Agent 执行与实时事件
 
-AgentScope ReAct Agent 负责 Reason -> Tool -> Observe 循环；CityFlow Guard 负责 Tool 白名单、调用预算、重复调用和事实校验。旧链模型调用仍保留 Harness 熔断与降级能力。
+AgentScope ReAct Agent 负责 Reason -> Tool -> Observe 循环；CityFlow Guard 负责 Tool 白名单、调用预算、重复调用和事实校验。RecommendationAgent / PlanningAgent 已是唯一在线决策主链；IntentAgent 的模型调用继续通过 AgentExecutionHarness 承担请求级调用预算、重复调用检测和熔断。
 
 前端可先订阅会话事件，再发起聊天请求：
 
@@ -91,7 +91,7 @@ Idempotency-Key: <client-generated-unique-key>
 
 同一用户下，相同 `Idempotency-Key` 必须对应同一请求内容。第一次请求会原子 claim 并执行；成功响应持久化后，后续相同请求直接返回原 `ChatResponse`，不会再次执行 Agent/Tool。若同一 key 仍为 `PENDING`，服务端采用 fail-closed 策略阻断自动重跑；只有业务调用明确失败时才释放 claim，避免业务已提交但响应快照异常时产生重复状态写入。
 
-长期偏好采用显式写入和删除，避免模型自行篡改用户画像：
+长期偏好支持用户显式写入/删除，以及 IntentAgent 只在用户明确表达长期偏好时提出 `MemoryMutationProposal`；自动写入仍必须经过 Java `MemoryPolicy`，预算、城市、地点、同行人、活动时长等一次性上下文禁止自动持久化：
 
 ```text
 GET    /api/v1/city/preferences
@@ -144,24 +144,21 @@ Body: {"suite":"react","includeLlmJudge":false,"limit":10}
 `suite=react` 读取独立的 `src/main/resources/evaluation/city-react-eval-set.json`，当前版本为 `react-v1`，重点覆盖软目标权衡、Re-Retrieval、多时段规划、Solver Validate/Repair 和多轮上下文。ReAct 发布判断分三层：
 
 ```text
-1. Runtime Gate
-   recommendation-react.enabled = true
-   planning-react.enabled = true
-
-2. ReactReleaseGate（首次运行也生效）
+1. ReactReleaseGate（首次运行也生效）
    reactRouteCoverage >= 0.60
    recommendationReactSuccessRate >= 0.80
    planningReactSuccessRate >= 0.70
-   reactFallbackRate <= 0.20
+   reactDegradationRate <= 0.20
    evidenceViolationRate == 0
 
-3. RegressionGate（已有 Baseline 后）
-   检测总分、route coverage、success、fallback、evidence violation 的相对回退
+2. RegressionGate（已有 Baseline 后）
+   检测总分、route coverage、success、goal coverage、plan valid、
+   degradation、tool error、candidate/session/evidence violation 的相对回退
 ```
 
 `react-v1` 使用独立 `version + evalSetHash` 查找 Baseline，不与默认 `v2` 混用。首次专项评测即使没有 Baseline，也必须先通过 `ReactReleaseGate` 才能标记为 passed；未通过的 Run 不能提升为 Baseline。
 
-RecommendationAgent 和 PlanningAgent 已是唯一在线决策主链；固定回归会写入现有 Evaluation/Regression Gate，并统计 ReAct route coverage、success/fallback、Tool Call、Re-Retrieval、Plan Validation/Repair 和 Evidence Violation 等运行指标。
+RecommendationAgent 和 PlanningAgent 已是唯一在线决策主链；固定回归会写入现有 Evaluation/Regression Gate，并统计 ReAct route coverage、success/degradation、Tool Call/Error、Re-Retrieval、UserGoal Coverage、Plan Validation/Repair/Valid、候选/Session/Evidence 违规以及 P50/P95 延迟等运行指标。
 
 回归执行会自动运行用例、标注本次 Trace、生成意图/槽位/澄清/缺失槽位/操作/时间/多轮一致性等报告，并将评估运行保存到 `evaluation_run`。Baseline 取同一评测集版本和指纹下已显式提升的基线运行。
 
@@ -181,7 +178,7 @@ RecommendationAgent 和 PlanningAgent 已是唯一在线决策主链；固定回
 20:00-23:00
 ```
 
-这些窗口只是候选召回锚点，不是活动时长。PlanningAgent 会同时使用真实场次、活动预计耗时和服务器硬约束，并通过 Java PlanningSolver 做最终确定性校验。
+这些窗口只是候选召回锚点，不是活动时长。PlanningAgent 会同时使用真实场次、活动预计耗时和服务器硬约束；显式 `PlanNotebook` 记录 Discovery / Proposal / Validate / Repair / Validated 生命周期，最终仍通过 Java PlanningSolver 做确定性复核。
 
 优先级是：具体场次 > 明确耗时 > 标签估算 > 类型软估算。Java 最后验证 activityId、sessionId、重复活动、预算、交通证据和确定性时间冲突。
 

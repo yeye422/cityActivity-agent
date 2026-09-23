@@ -54,11 +54,26 @@ powershell -ExecutionPolicy Bypass -File scripts/run-react-regression.ps1
 reactRouteCoverage >= 0.60
 recommendationReactSuccessRate >= 0.80
 planningReactSuccessRate >= 0.70
-reactFallbackRate <= 0.20
+reactDegradationRate <= 0.20
 evidenceViolationRate == 0
 ```
 
-辅助指标包括 Tool Call、Re-Retrieval、Travel Tool、Plan Validation/Repair，用于定位行为但不单独判失败。
+同时重点检查：
+
+```text
+toolErrorRate
+userGoalCoverage
+candidateOutOfSetRate
+planValidRate
+planRepairSuccessRate
+planValidationTimeConflictRate
+planValidationBudgetViolationRate
+sessionHallucinationRate
+latencyP50Ms
+latencyP95Ms
+```
+
+其中 Goal Coverage / Plan Valid 属于越高越好的回归指标；Tool Error、Candidate/Session/Evidence 违规属于越低越好的回归指标。Tool Call、Re-Retrieval、Travel Tool 和 Validation Failure 等行为指标用于定位链路。
 
 ## 4. Baseline 与后续回归
 
@@ -102,3 +117,24 @@ SOURCE|CITY|ACTIVITY_NAME
 ```
 
 当前方案与未来 Vector / RRF 必须在相同 evalSetHash 与 K 下比较 Recall@K、NDCG@K、No-result false-positive。
+
+
+## 7. 当前架构验收状态
+
+仓库级 `mvn clean verify` 用于验证编译、单测和确定性边界；真实发布验收必须由有 MySQL、模型和地图/天气配置的运行环境完成。
+
+推荐顺序：
+
+```text
+react-v1 首跑并通过 ReactReleaseGate
+↓
+Promote react-v1 Baseline
+↓
+再次执行 react-v1 并通过 RegressionGate
+↓
+执行 retrieval-v1 CURRENT_PIPELINE baseline
+↓
+固定结果后再决定是否启动 Vector / RRF 实验
+```
+
+legacy 架构 fallback 已删除；PERSONAL -> PUBLIC 仍是业务数据源降级，不计作 legacy fallback。
