@@ -3,10 +3,12 @@ package com.city.service.intent;
 import com.city.agent.factory.AgentFactory;
 import com.city.enums.ConstraintOperationType;
 import com.city.enums.Intent;
+import com.city.enums.PreferencePolarity;
 import com.city.enums.TemporalMode;
 import com.city.model.ConstraintOperation;
 import com.city.model.ConversationTurn;
 import com.city.model.IntentResult;
+import com.city.model.MemoryMutationProposal;
 import com.city.model.SlotBundle;
 import com.city.model.TemporalMutation;
 import com.city.model.TimeConstraint;
@@ -32,7 +34,7 @@ import java.util.Map;
 /**
  * IntentAgent 的业务适配层：把自然语言转换成 Orchestrator 可执行的结构化 Patch。
  *
- * <p>一次识别只产出三类业务信息：intent、ConstraintOperation、TemporalMutation。
+ * <p>一次识别产出业务路由、ConstraintOperation、TemporalMutation，以及可选的长期记忆 Proposal。
  * 九维普通条件的新增、替换、排除和取消限制全部通过 operations 表达；时间变化只通过 temporal 表达。
  * 历史普通状态由 SlotMutationService 确定性更新，历史时间状态由 TimeResolutionService 确定性更新。</p>
  *
@@ -162,7 +164,10 @@ public class IntentAgentService {
                 - 时间、日期、上午/下午/晚上等变化只能写 temporal，绝不能写 operations。
                 - 当前消息没有修改某个普通字段时，不为该字段生成 operation。
                 - 纯“换一批”必须是 ACTIVITY_ADJUST + operations=[] + temporal KEEP/KEEP。
-                - 最终只输出合法 JSON，顶层只能包含 intent、operations、temporal、confidence。
+                - memoryProposals 只用于用户明确表达长期偏好/长期排除，例如“以后都喜欢安静的展览”“以后不要户外”。
+                - 本次预算、日期、地点、同行人、活动时长等一次性上下文绝不能写 memoryProposals。
+                - memoryProposals 每项必须包含 slotName、slotValue、polarity(PREFER|AVOID)、explicitLongTerm=true、raw。
+                - 最终只输出合法 JSON，顶层只能包含 intent、operations、temporal、memoryProposals、confidence。
                 """.formatted(
                 now.toLocalDateTime(),
                 now.toLocalDate(),
@@ -187,8 +192,38 @@ public class IntentAgentService {
                 intent,
                 confidence,
                 parseOperations(root.path("operations"), slotOptions),
-                parseTemporal(root.path("temporal"))
+                parseTemporal(root.path("temporal")),
+                parseMemoryProposals(root.path("memoryProposals"), slotOptions),
+                false
         );
+    }
+
+    private List<MemoryMutationProposal> parseMemoryProposals(
+            JsonNode node,
+            Map<String, List<String>> options
+    ) {
+        if (node == null || !node.isArray()) return List.of();
+        List<MemoryMutationProposal> result = new ArrayList<>();
+        for (JsonNode item : node) {
+            String slotName = item.path("slotName").asText("").trim();
+            String slotValue = item.path("slotValue").asText("").trim();
+            if (!SlotOptionService.SLOT_NAMES.contains(slotName)) continue;
+            if (!options.getOrDefault(slotName, List.of()).contains(slotValue)) continue;
+            try {
+                PreferencePolarity polarity = PreferencePolarity.valueOf(
+                        item.path("polarity").asText("PREFER").toUpperCase(Locale.ROOT));
+                result.add(new MemoryMutationProposal(
+                        slotName,
+                        slotValue,
+                        polarity,
+                        item.path("explicitLongTerm").asBoolean(false),
+                        item.path("raw").asText("")
+                ));
+            } catch (IllegalArgumentException ignored) {
+                // 单条非法长期记忆建议直接丢弃。
+            }
+        }
+        return List.copyOf(result);
     }
 
     /**

@@ -3,6 +3,7 @@ package com.city.service.memory;
 import com.city.enums.PreferencePolarity;
 import com.city.exception.CityException;
 import com.city.mapper.PreferenceFactMapper;
+import com.city.model.MemoryMutationProposal;
 import com.city.model.PreferenceFact;
 import com.city.model.PreferenceFactRequest;
 import com.city.service.slot.SlotOptionService;
@@ -47,8 +48,8 @@ public class PreferenceMemoryService {
      * 供未来 IntentAgent -> MemoryMutationProposal -> Java Policy 链路使用。
      * 只有 MemoryPolicy 允许的稳定槽位可进入这里。
      */
-    public PreferenceFact rememberConfirmedAgentPreference(Long userId, PreferenceFactRequest request) {
-        return persist(userId, memoryPolicy.confirmedAgentWrite(request));
+    public PreferenceFact rememberConfirmedAgentPreference(Long userId, MemoryMutationProposal proposal) {
+        return persist(userId, memoryPolicy.confirmedAgentWrite(proposal));
     }
 
     private PreferenceFact persist(Long userId, PreferenceFactRequest request) {

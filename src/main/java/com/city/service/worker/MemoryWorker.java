@@ -1,5 +1,6 @@
 package com.city.service.worker;
 
+import com.city.model.MemoryMutationProposal;
 import com.city.model.PreferenceFact;
 import com.city.model.PreferenceFactRequest;
 import com.city.service.memory.PreferenceMemoryService;
@@ -33,8 +34,8 @@ public final class MemoryWorker {
     }
 
     /** 未来 Agent Proposal 经上层确认后使用的唯一写入口。 */
-    public PreferenceFact rememberConfirmedAgentPreference(Long userId, PreferenceFactRequest request) {
-        return preferenceMemoryService.rememberConfirmedAgentPreference(userId, request);
+    public PreferenceFact rememberConfirmedAgentPreference(Long userId, MemoryMutationProposal proposal) {
+        return preferenceMemoryService.rememberConfirmedAgentPreference(userId, proposal);
     }
 
     public void forget(Long userId, Long factId, Integer expectedVersion) {

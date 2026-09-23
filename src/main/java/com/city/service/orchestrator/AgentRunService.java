@@ -8,6 +8,7 @@ import com.city.exception.CityException;
 import com.city.model.ChatRequest;
 import com.city.model.ChatResponse;
 import com.city.model.IntentResult;
+import com.city.model.MemoryMutationProposal;
 import com.city.model.RelaxationContext;
 import com.city.model.RelaxationRequest;
 import com.city.model.ResponseResult;
@@ -27,6 +28,7 @@ import com.city.service.time.TimeResolutionService;
 import com.city.service.trace.AgentTraceService;
 import com.city.service.weather.WeatherRecommendationService;
 import com.city.service.worker.ContextWorker;
+import com.city.service.worker.MemoryWorker;
 import com.city.service.workflow.WorkflowType;
 import org.springframework.stereotype.Service;
 
@@ -51,6 +53,7 @@ public class AgentRunService {
     private final SlotOptionService slotOptionService;
     private final ActivityService activityService;
     private final ContextWorker contextWorker;
+    private final MemoryWorker memoryWorker;
     private final TimeResolutionService timeResolutionService;
     private final RiskGuardService riskGuardService;
     private final ClarifyRuleService clarifyRuleService;
@@ -65,6 +68,7 @@ public class AgentRunService {
                            SlotOptionService slotOptionService,
                            ActivityService activityService,
                            ContextWorker contextWorker,
+                           MemoryWorker memoryWorker,
                            TimeResolutionService timeResolutionService,
                            RiskGuardService riskGuardService,
                            ClarifyRuleService clarifyRuleService,
@@ -78,6 +82,7 @@ public class AgentRunService {
         this.slotOptionService = slotOptionService;
         this.activityService = activityService;
         this.contextWorker = contextWorker;
+        this.memoryWorker = memoryWorker;
         this.timeResolutionService = timeResolutionService;
         this.riskGuardService = riskGuardService;
         this.clarifyRuleService = clarifyRuleService;
@@ -132,6 +137,8 @@ public class AgentRunService {
                     traceId, state, state.currentIntent(), safeResponse, true);
             return new PreparedRun(state, intent, publicFallbackUsed, terminal);
         }
+
+        persistMemoryProposals(userId, intent.memoryProposals());
 
         TimeResolutionResult timeResolution = timeResolutionService.resolve(
                 state.timeConstraint(), intent.temporal(), request.message());
@@ -287,6 +294,28 @@ public class AgentRunService {
     private String contextValue(Map<String, Object> context, String key) {
         Object value = context.get(key);
         return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    private void persistMemoryProposals(Long userId, List<MemoryMutationProposal> proposals) {
+        if (proposals == null || proposals.isEmpty()) return;
+        for (MemoryMutationProposal proposal : proposals) {
+            try {
+                var stored = memoryWorker.rememberConfirmedAgentPreference(userId, proposal);
+                traceService.recordEvent(
+                        "MEMORY_PROPOSAL_COMMITTED",
+                        "MEMORY",
+                        proposal,
+                        Map.of("memoryId", stored == null ? "" : String.valueOf(stored.getId()))
+                );
+            } catch (RuntimeException error) {
+                traceService.recordEvent(
+                        "MEMORY_PROPOSAL_REJECTED",
+                        "MEMORY",
+                        proposal,
+                        Map.of("reason", String.valueOf(error.getMessage()))
+                );
+            }
+        }
     }
 
     private boolean hasPendingClarification(SessionState state) {

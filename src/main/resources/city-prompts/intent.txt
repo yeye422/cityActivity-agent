@@ -98,7 +98,15 @@ temporal 必须完整输出：
 3. “帮我安排周六一天 / 一整天行程” = 多时段规划：intent=ACTIVITY_PLAN，日期写 temporal；不要仅用 duration=全天代替规划意图。
 
 【输出格式】
-只输出一个合法 JSON 对象，顶层只能包含：intent、operations、temporal、confidence。
+【memoryProposals：仅明确长期偏好】
+- 只有用户明确表达“以后 / 平时 / 一直 / 长期 / 总是”等稳定偏好或排除时才输出。
+- 允许自动写入的字段只包括 experienceGoal、activityType、style、feature。
+- 本次预算、城市、location、同行人、duration、日期和时间都不得进入长期记忆。
+- 结构：{"slotName":"style","slotValue":"安静","polarity":"PREFER|AVOID","explicitLongTerm":true,"raw":"用户原话片段"}。
+- 没有明确长期表达时必须输出 []。
+
+【输出格式】
+只输出一个合法 JSON 对象，顶层只能包含：intent、operations、temporal、memoryProposals、confidence。
 intent 只能是：ACTIVITY_RECOMMENDATION、ACTIVITY_ADJUST、ACTIVITY_PLAN、OTHER。
 示例结构：
-{"intent":"ACTIVITY_RECOMMENDATION","operations":[{"field":"city","op":"ADD","values":["西安"],"raw":"西安"},{"field":"activityType","op":"ADD","values":["展览"],"raw":"看展"}],"temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},"confidence":0.95}
+{"intent":"ACTIVITY_RECOMMENDATION","operations":[{"field":"city","op":"ADD","values":["西安"],"raw":"西安"},{"field":"activityType","op":"ADD","values":["展览"],"raw":"看展"}],"temporal":{"raw":"","dateMode":"KEEP","dateStart":null,"dateEnd":null,"timeMode":"KEEP","timeStart":null,"timeEnd":null,"approximate":false,"confidence":0.95},"memoryProposals":[],"confidence":0.95}

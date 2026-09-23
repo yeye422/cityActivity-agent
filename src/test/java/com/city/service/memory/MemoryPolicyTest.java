@@ -2,6 +2,7 @@ package com.city.service.memory;
 
 import com.city.enums.PreferencePolarity;
 import com.city.exception.CityException;
+import com.city.model.MemoryMutationProposal;
 import com.city.model.PreferenceFactRequest;
 import org.junit.jupiter.api.Test;
 
@@ -18,27 +19,28 @@ class MemoryPolicyTest {
         PreferenceFactRequest normalized = policy.explicit(
                 new PreferenceFactRequest("style", "安静", PreferencePolarity.PREFER, "AGENT_INFERRED")
         );
-
         assertEquals(MemoryPolicy.EXPLICIT, normalized.source());
     }
 
     @Test
-    void confirmedAgentWriteShouldAllowStablePreference() {
+    void confirmedAgentWriteShouldAllowExplicitStablePreference() {
         PreferenceFactRequest normalized = policy.confirmedAgentWrite(
-                new PreferenceFactRequest("style", "安静", PreferencePolarity.PREFER, "whatever")
+                new MemoryMutationProposal("style", "安静", PreferencePolarity.PREFER, true, "以后都喜欢安静")
         );
-
         assertEquals(MemoryPolicy.AGENT_CONFIRMED, normalized.source());
         assertTrue(policy.isAgentWritableStableSlot("style"));
     }
 
     @Test
-    void confirmedAgentWriteShouldRejectContextDependentConstraint() {
+    void confirmedAgentWriteShouldRejectOneOffOrContextDependentConstraint() {
         assertThrows(CityException.class, () -> policy.confirmedAgentWrite(
-                new PreferenceFactRequest("budget", "200以内", PreferencePolarity.PREFER, null)
+                new MemoryMutationProposal("style", "安静", PreferencePolarity.PREFER, false, "今天想安静点")
         ));
         assertThrows(CityException.class, () -> policy.confirmedAgentWrite(
-                new PreferenceFactRequest("location", "浦东", PreferencePolarity.PREFER, null)
+                new MemoryMutationProposal("budget", "200元内", PreferencePolarity.PREFER, true, "以后预算200")
+        ));
+        assertThrows(CityException.class, () -> policy.confirmedAgentWrite(
+                new MemoryMutationProposal("companion", "朋友", PreferencePolarity.PREFER, true, "以后和朋友")
         ));
     }
 }

@@ -3,6 +3,7 @@ package com.city.service.memory;
 import com.city.enums.PreferencePolarity;
 import com.city.exception.CityException;
 import com.city.mapper.PreferenceFactMapper;
+import com.city.model.MemoryMutationProposal;
 import com.city.model.PreferenceFact;
 import com.city.model.PreferenceFactRequest;
 import com.city.service.slot.SlotOptionService;
@@ -59,7 +60,7 @@ class PreferenceMemoryServiceTest {
                 .thenReturn(new PreferenceFact());
 
         service.rememberConfirmedAgentPreference(1L,
-                new PreferenceFactRequest("style", "安静", PreferencePolarity.PREFER, null));
+                new MemoryMutationProposal("style", "安静", PreferencePolarity.PREFER, true, "以后喜欢安静"));
 
         verify(mapper).upsert(1L, "style", "安静", PreferencePolarity.PREFER, MemoryPolicy.AGENT_CONFIRMED);
     }
@@ -67,7 +68,7 @@ class PreferenceMemoryServiceTest {
     @Test
     void confirmedAgentPreferenceShouldRejectBudgetBeforePersistence() {
         assertThrows(CityException.class, () -> service.rememberConfirmedAgentPreference(1L,
-                new PreferenceFactRequest("budget", "200以内", PreferencePolarity.PREFER, null)));
+                new MemoryMutationProposal("budget", "200元内", PreferencePolarity.PREFER, true, "以后预算200")));
 
         verify(mapper, never()).upsert(
                 org.mockito.ArgumentMatchers.anyLong(),
