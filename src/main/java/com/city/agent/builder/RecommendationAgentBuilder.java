@@ -66,7 +66,8 @@ public class RecommendationAgentBuilder {
                 Set.of("search_activities"),
                 2,
                 3,
-                traceService
+                traceService,
+                verifiedContext.traceId()
         );
 
         return ReActAgent.builder()
