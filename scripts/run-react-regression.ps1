@@ -39,7 +39,7 @@ $metricNames = @(
     "reactRouteCoverage",
     "recommendationReactSuccessRate",
     "planningReactSuccessRate",
-    "reactFallbackRate",
+    "reactDegradationRate",
     "reactToolCallCount",
     "retrievalToolCallCount",
     "reRetrievalRate",

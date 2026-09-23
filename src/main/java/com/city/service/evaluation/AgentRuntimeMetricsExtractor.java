@@ -13,8 +13,8 @@ import java.util.Objects;
 /**
  * 从现有 request trace 事件中提取 AgentScope ReAct 运行指标。
  *
- * <p>不新增数据库字段，只消费 trace_json.events；没有启用 ReAct 的历史 Trace 对成功率等比例返回 null，
- * reactRouteCoverage 则始终按全部 Trace 统计，用于识别“专项评测实际上没有走新链”。</p>
+ * <p>不新增数据库字段，只消费 trace_json.events；未进入 ReAct 路由的 Trace 对成功率等比例返回 null；
+ * reactRouteCoverage 始终按全部 Trace 统计。单轨架构中 COMPLETED 表示成功，FAILED/DEGRADED 表示运行降级。</p>
  */
 public final class AgentRuntimeMetricsExtractor {
 
@@ -46,11 +46,11 @@ public final class AgentRuntimeMetricsExtractor {
 
         metrics.put("reactRouteCoverage", bool(facts.anyReactRouteSelected()));
         metrics.put("recommendationReactSuccessRate", facts.recommendationRouteSelected()
-                ? bool(facts.recommendationMainlineUsed()) : null);
+                ? bool(facts.recommendationCompleted()) : null);
         metrics.put("planningReactSuccessRate", facts.planningRouteSelected()
-                ? bool(facts.planningMainlineUsed()) : null);
-        metrics.put("reactFallbackRate", facts.anyReactRouteSelected()
-                ? bool(facts.reactFallback()) : null);
+                ? bool(facts.planningCompleted()) : null);
+        metrics.put("reactDegradedRate", facts.anyReactRouteSelected()
+                ? bool(facts.reactDegraded()) : null);
         metrics.put("reactToolCallCount", facts.anyReactRouteSelected()
                 ? (double) facts.toolCalls() : null);
         metrics.put("retrievalToolCallCount", facts.recommendationRouteSelected()
@@ -64,7 +64,7 @@ public final class AgentRuntimeMetricsExtractor {
         metrics.put("planValidationFailureRate", facts.planningRouteSelected()
                 ? bool(facts.planValidationFailures() > 0) : null);
         metrics.put("planRepairSuccessRate", facts.planValidationFailures() > 0
-                ? bool(facts.planValidationPasses() > 0 && facts.planningMainlineUsed()) : null);
+                ? bool(facts.planValidationPasses() > 0 && facts.planningCompleted()) : null);
         metrics.put("evidenceViolationRate", facts.anyReactRouteSelected()
                 ? bool(facts.evidenceViolation()) : null);
 
@@ -76,10 +76,10 @@ public final class AgentRuntimeMetricsExtractor {
         JsonNode events = root.path("events");
 
         boolean recommendationRouteSelected = false;
-        boolean recommendationMainlineUsed = false;
+        boolean recommendationCompleted = false;
         boolean planningRouteSelected = false;
-        boolean planningMainlineUsed = false;
-        boolean reactFallback = false;
+        boolean planningCompleted = false;
+        boolean reactDegraded = false;
         boolean evidenceViolation = false;
         int toolCalls = 0;
         int retrievalCalls = 0;
@@ -96,11 +96,13 @@ public final class AgentRuntimeMetricsExtractor {
                 String output = event.path("outputPayload").asText("");
 
                 if ("RECOMMENDATION_REACT_ROUTE_SELECTED".equals(type)) recommendationRouteSelected = true;
-                if ("RECOMMENDATION_REACT_MAINLINE_USED".equals(type)) recommendationMainlineUsed = true;
+                if ("RECOMMENDATION_REACT_COMPLETED".equals(type)) recommendationCompleted = true;
                 if ("PLANNING_REACT_ROUTE_SELECTED".equals(type)) planningRouteSelected = true;
-                if ("PLANNING_REACT_MAINLINE_USED".equals(type)) planningMainlineUsed = true;
-                if ("RECOMMENDATION_REACT_FALLBACK".equals(type)
-                        || "PLANNING_REACT_FALLBACK".equals(type)) reactFallback = true;
+                if ("PLANNING_REACT_COMPLETED".equals(type)) planningCompleted = true;
+                if ("RECOMMENDATION_REACT_FAILED".equals(type)
+                        || "PLANNING_REACT_FAILED".equals(type)
+                        || "RECOMMENDATION_DEGRADED".equals(type)
+                        || "PLANNING_DEGRADED".equals(type)) reactDegraded = true;
 
                 if (type.endsWith("_TOOL_CALLED")) toolCalls++;
                 if ("RETRIEVAL_TOOL_CALLED".equals(type)) retrievalCalls++;
@@ -119,10 +121,10 @@ public final class AgentRuntimeMetricsExtractor {
 
         return new RuntimeFacts(
                 recommendationRouteSelected,
-                recommendationMainlineUsed,
+                recommendationCompleted,
                 planningRouteSelected,
-                planningMainlineUsed,
-                reactFallback,
+                planningCompleted,
+                reactDegraded,
                 evidenceViolation,
                 toolCalls,
                 retrievalCalls,
@@ -160,10 +162,10 @@ public final class AgentRuntimeMetricsExtractor {
 
     private record RuntimeFacts(
             boolean recommendationRouteSelected,
-            boolean recommendationMainlineUsed,
+            boolean recommendationCompleted,
             boolean planningRouteSelected,
-            boolean planningMainlineUsed,
-            boolean reactFallback,
+            boolean planningCompleted,
+            boolean reactDegraded,
             boolean evidenceViolation,
             int toolCalls,
             int retrievalCalls,

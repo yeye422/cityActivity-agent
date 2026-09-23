@@ -25,7 +25,7 @@ class AgentRuntimeMetricsExtractorTest {
                     {"eventType":"RETRIEVAL_TOOL_COMPLETED"},
                     {"eventType":"RETRIEVAL_TOOL_CALLED"},
                     {"eventType":"RETRIEVAL_TOOL_COMPLETED"},
-                    {"eventType":"RECOMMENDATION_REACT_MAINLINE_USED"}
+                    {"eventType":"RECOMMENDATION_REACT_COMPLETED"}
                   ]
                 }
                 """);
@@ -37,7 +37,7 @@ class AgentRuntimeMetricsExtractorTest {
         assertEquals(1.0, metrics.get("reRetrievalRate"));
         assertEquals(2.0, metrics.get("retrievalToolCallCount"));
         assertEquals(2.0, metrics.get("reactToolCallCount"));
-        assertEquals(0.0, metrics.get("reactFallbackRate"));
+        assertEquals(0.0, metrics.get("reactDegradationRate"));
         assertEquals(0.0, metrics.get("evidenceViolationRate"));
     }
 
@@ -53,7 +53,7 @@ class AgentRuntimeMetricsExtractorTest {
                     {"eventType":"PLAN_VALIDATION_FAILED"},
                     {"eventType":"PLAN_VALIDATION_TOOL_CALLED"},
                     {"eventType":"PLAN_VALIDATION_PASSED"},
-                    {"eventType":"PLANNING_REACT_MAINLINE_USED"}
+                    {"eventType":"PLANNING_REACT_COMPLETED"}
                   ]
                 }
                 """);
@@ -70,13 +70,13 @@ class AgentRuntimeMetricsExtractorTest {
     }
 
     @Test
-    void shouldMarkEvidenceViolationAndFallback() {
+    void shouldMarkEvidenceViolationAndDegradation() {
         RequestTraceRow trace = trace("""
                 {
                   "events": [
                     {"eventType":"RECOMMENDATION_REACT_ROUTE_SELECTED"},
                     {"eventType":"RECOMMENDATION_AGENT_FAILED","errorMessage":"IllegalStateException: 推荐结果引用当前 Run 未登记 Activity Evidence: [999]"},
-                    {"eventType":"RECOMMENDATION_REACT_FALLBACK"}
+                    {"eventType":"RECOMMENDATION_DEGRADED"}
                   ]
                 }
                 """);
@@ -85,7 +85,7 @@ class AgentRuntimeMetricsExtractorTest {
 
         assertEquals(1.0, metrics.get("reactRouteCoverage"));
         assertEquals(0.0, metrics.get("recommendationReactSuccessRate"));
-        assertEquals(1.0, metrics.get("reactFallbackRate"));
+        assertEquals(1.0, metrics.get("reactDegradationRate"));
         assertEquals(1.0, metrics.get("evidenceViolationRate"));
     }
 
@@ -100,7 +100,7 @@ class AgentRuntimeMetricsExtractorTest {
         assertEquals(0.0, metrics.get("reactRouteCoverage"));
         assertFalse(metrics.containsKey("recommendationReactSuccessRate"));
         assertFalse(metrics.containsKey("planningReactSuccessRate"));
-        assertFalse(metrics.containsKey("reactFallbackRate"));
+        assertFalse(metrics.containsKey("reactDegradationRate"));
     }
 
     @Test

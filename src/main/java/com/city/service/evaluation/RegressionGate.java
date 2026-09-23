@@ -19,7 +19,7 @@ public final class RegressionGate {
 
     /** 越低越好的 Agent 运行风险指标；上升超过 2% 判定回归。 */
     private static final String[] LOWER_IS_BETTER_METRICS = {
-            "reactFallbackRate", "evidenceViolationRate"
+            "reactDegradationRate", "evidenceViolationRate"
     };
 
     private RegressionGate() { }

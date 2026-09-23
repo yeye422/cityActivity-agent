@@ -46,13 +46,13 @@ class RegressionGateTest {
     }
 
     @Test
-    void reactFallbackIncreaseFailsGate() {
+    void reactDegradationIncreaseFailsGate() {
         RegressionGate.Result result = RegressionGate.evaluate(82.0, 82.0,
-                Map.of("reactFallbackRate", 0.01),
-                Map.of("reactFallbackRate", 0.05));
+                Map.of("reactDegradationRate", 0.01),
+                Map.of("reactDegradationRate", 0.05));
 
         assertFalse(result.passed());
-        assertEquals(0.04, result.metricDeltas().get("reactFallbackRate"));
+        assertEquals(0.04, result.metricDeltas().get("reactDegradationRate"));
     }
 
     @Test

@@ -15,7 +15,7 @@ class ReactReleaseGateTest {
                 "reactRouteCoverage", 0.9,
                 "recommendationReactSuccessRate", 0.9,
                 "planningReactSuccessRate", 0.8,
-                "reactFallbackRate", 0.1,
+                "reactDegradationRate", 0.1,
                 "evidenceViolationRate", 0.0
         ));
 
@@ -35,12 +35,12 @@ class ReactReleaseGateTest {
     }
 
     @Test
-    void shouldFailFallbackAndEvidenceViolationsEvenWithoutBaseline() {
+    void shouldFailDegradationAndEvidenceViolationsEvenWithoutBaseline() {
         ReactReleaseGate.Result result = ReactReleaseGate.evaluate(Map.of(
                 "reactRouteCoverage", 1.0,
                 "recommendationReactSuccessRate", 0.7,
                 "planningReactSuccessRate", 0.9,
-                "reactFallbackRate", 0.3,
+                "reactDegradationRate", 0.3,
                 "evidenceViolationRate", 0.1
         ));
 
