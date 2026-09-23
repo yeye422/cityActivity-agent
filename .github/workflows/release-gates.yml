@@ -131,7 +131,7 @@ jobs:
 
       - name: Run react-v1 and retrieval release verification
         shell: pwsh
-        run: ./scripts/run-release-verification.ps1 -BaseUrl "http://127.0.0.1:8080" -UserId 999999 -ReactLimit ${{ inputs.react_limit }} -RetrievalK ${{ inputs.retrieval_k }} -RetrievalOutputPath "artifacts/retrieval-current.json"
+        run: ./scripts/run-release-verification.ps1 -BaseUrl "http://127.0.0.1:8080" -UserId 999999 -ReactLimit ${{ inputs.react_limit }} -RetrievalK ${{ inputs.retrieval_k }} -RetrievalOutputPath "artifacts/retrieval-current.json" -ReactOutputDirectory "artifacts"
 
       - name: Upload release verification artifacts
         if: always()
