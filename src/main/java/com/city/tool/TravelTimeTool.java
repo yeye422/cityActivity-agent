@@ -31,10 +31,8 @@ public class TravelTimeTool {
             description = "Get verified travel duration between two sessions already exposed in the current planning run."
     )
     public TravelTimeEvidence getTravelTime(
-            @ToolParam(name = "fromPeriod", description = "Source planning period") String fromPeriod,
             @ToolParam(name = "fromActivityId", description = "Source activityId from current candidates") Long fromActivityId,
             @ToolParam(name = "fromSessionId", description = "Source sessionId from current candidates") Long fromSessionId,
-            @ToolParam(name = "toPeriod", description = "Destination planning period") String toPeriod,
             @ToolParam(name = "toActivityId", description = "Destination activityId from current candidates") Long toActivityId,
             @ToolParam(name = "toSessionId", description = "Destination sessionId from current candidates") Long toSessionId,
             PlanningToolContext planningContext
@@ -43,9 +41,9 @@ public class TravelTimeTool {
         planningContext.evidenceRegistry().beginTravelLookup();
 
         ActivitySessionResponse from = planningContext.evidenceRegistry()
-                .session(fromPeriod, fromActivityId, fromSessionId);
+                .session(fromActivityId, fromSessionId);
         ActivitySessionResponse to = planningContext.evidenceRegistry()
-                .session(toPeriod, toActivityId, toSessionId);
+                .session(toActivityId, toSessionId);
         if (from == null || to == null) {
             throw new CityException("路线查询只能引用 discover_plan_candidates 已暴露的真实场次");
         }
