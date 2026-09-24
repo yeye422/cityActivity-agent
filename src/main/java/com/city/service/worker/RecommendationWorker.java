@@ -65,8 +65,7 @@ public final class RecommendationWorker {
                 verifiedContext,
                 evidenceRegistry
         );
-        ReActAgent agent = agentBuilder.build(verifiedContext);
-        RuntimeContext runtimeContext = RuntimeContext.builder()
+        RuntimeContext explorerRuntime = RuntimeContext.builder()
                 .userId(String.valueOf(verifiedContext.userId()))
                 .sessionId(verifiedContext.sessionId())
                 .put(VerifiedRequestContext.class, verifiedContext)
@@ -76,7 +75,10 @@ public final class RecommendationWorker {
                         AgentDecisionToolContext.recommendation(verifiedContext, evidenceRegistry)
                 )
                 .build();
-        String prompt = buildUserPrompt(userInput, verifiedContext, initialCandidates);
+        RuntimeContext finalizerRuntime = RuntimeContext.builder()
+                .userId(String.valueOf(verifiedContext.userId()))
+                .sessionId(verifiedContext.sessionId())
+                .build();
 
         traceService.recordEvent(
                 "RECOMMENDATION_AGENT_STARTED",
@@ -85,7 +87,22 @@ public final class RecommendationWorker {
                 null
         );
         try {
-            RecommendationDecision decision = callDecision(agent, prompt, runtimeContext);
+            String explorationNotes = explore(
+                    agentBuilder.buildExplorer(verifiedContext),
+                    buildExplorationPrompt(userInput, verifiedContext, initialCandidates),
+                    explorerRuntime,
+                    verifiedContext
+            );
+            RetrievalToolResult allCandidates = RetrievalToolResult.from(
+                    "all-exposed",
+                    evidenceStore.resolveActivities(evidenceRegistry.exposedActivityIds().stream().toList())
+            );
+            ReActAgent finalizer = agentBuilder.buildFinalizer();
+            RecommendationDecision decision = callDecision(
+                    finalizer,
+                    buildFinalizerPrompt(userInput, verifiedContext, allCandidates, explorationNotes),
+                    finalizerRuntime
+            );
             if (needsServerRetry(decision) && evidenceRegistry.retrievalCalls() < MAX_RETRIEVAL_CALLS) {
                 RetrievalToolResult retryCandidates = retrievalTool.searchActivities(
                         retryRetrievalIntent(userInput, verifiedContext),
@@ -101,10 +118,19 @@ public final class RecommendationWorker {
                                 "retryCandidates", retryCandidates
                         )
                 );
+                allCandidates = RetrievalToolResult.from(
+                        "all-exposed",
+                        evidenceStore.resolveActivities(evidenceRegistry.exposedActivityIds().stream().toList())
+                );
                 decision = callDecision(
-                        agent,
-                        buildRetryPrompt(verifiedContext, retryCandidates),
-                        runtimeContext
+                        finalizer,
+                        buildFinalizerPrompt(
+                                userInput,
+                                verifiedContext,
+                                allCandidates,
+                                explorationNotes + "\n服务器已执行唯一一次补充检索。"
+                        ),
+                        finalizerRuntime
                 );
             }
             RecommendationDecision validated = decisionValidator.validate(decision, evidenceRegistry);
@@ -142,9 +168,9 @@ public final class RecommendationWorker {
         }
     }
 
-    String buildUserPrompt(String userInput,
-                           VerifiedRequestContext context,
-                           RetrievalToolResult initialCandidates) {
+    String buildExplorationPrompt(String userInput,
+                                  VerifiedRequestContext context,
+                                  RetrievalToolResult initialCandidates) {
         String safeInput = userInput == null ? "" : userInput.trim();
         return """
                 用户原话：%s
@@ -153,15 +179,67 @@ public final class RecommendationWorker {
                 服务器硬约束摘要：%s
                 服务器已执行首次 search_activities，真实候选快照：%s
 
-                首次候选已经绑定到当前 Run Evidence，请直接基于这些 activityId 做软目标权衡。
-                如果第一批候选整体无法覆盖核心 UserGoal，可以调用 search_activities 再检索一次；
-                硬约束由服务器固定，不要尝试修改。最终只能从本轮 Tool 已返回的 activityId 中选择。
+                判断当前候选是否足以支持 UserGoal。
+                只有确有信息缺口时才调用 Tool；完成后给 Finalizer 一段简短探索摘要。
                 """.formatted(
                 safeInput,
                 context.userGoal(),
                 context.effectiveSlots(),
                 context.hardConstraints(),
                 initialCandidates
+        );
+    }
+
+    private String explore(ReActAgent explorer,
+                           String prompt,
+                           RuntimeContext runtimeContext,
+                           VerifiedRequestContext context) {
+        try {
+            Msg response = explorer.call(
+                    List.of(
+                            Msg.builder()
+                                    .role(MsgRole.USER)
+                                    .textContent(prompt)
+                                    .build()
+                    ),
+                    runtimeContext
+            ).block();
+            String notes = response == null ? "" : response.getTextContent();
+            return notes == null ? "" : notes.trim();
+        } catch (RuntimeException error) {
+            traceService.recordError(
+                    "RECOMMENDATION_EXPLORATION_DEGRADED",
+                    "AGENT",
+                    java.util.Map.of("userGoal", context.userGoal()),
+                    error
+            );
+            return "";
+        }
+    }
+
+    private String buildFinalizerPrompt(String userInput,
+                                        VerifiedRequestContext context,
+                                        RetrievalToolResult allCandidates,
+                                        String explorationNotes) {
+        return """
+                用户原话：%s
+                UserGoal：%s
+                当前已生效槽位：%s
+                服务器硬约束摘要：%s
+                Explorer 后的完整已验证候选：%s
+                Explorer 摘要：%s
+
+                现在只做最终推荐结构化决策。
+                事实以候选快照为准；只能选择其中真实 activityId。
+                只要候选非空，就在这些候选中 best-effort 选择 1~3 个，并将 candidatePoolSufficient 设为 true。
+                不得调用 Tool，不得补充候选之外事实。
+                """.formatted(
+                userInput == null ? "" : userInput.trim(),
+                context.userGoal(),
+                context.effectiveSlots(),
+                context.hardConstraints(),
+                allCandidates,
+                explorationNotes == null ? "" : explorationNotes
         );
     }
 
@@ -187,24 +265,6 @@ public final class RecommendationWorker {
         return !decision.candidatePoolSufficient()
                 || selected == null
                 || selected.stream().filter(Objects::nonNull).findAny().isEmpty();
-    }
-
-    private String buildRetryPrompt(VerifiedRequestContext context,
-                                    RetrievalToolResult retryCandidates) {
-        return """
-                上一轮你没有形成可提交的最终推荐，因此服务器已执行本轮唯一一次补充检索。
-                UserGoal：%s
-                当前已生效槽位：%s
-                补充候选快照：%s
-
-                现在必须在本轮已经暴露的真实 activityId 中做 best-effort 最终选择。
-                只要候选池非空，就选择 1~3 个最符合核心 UserGoal 的候选，并将 candidatePoolSufficient 设为 true。
-                不要返回空 selectedActivityIds，不得引用未暴露 activityId，也不要补充未知事实。
-                """.formatted(
-                context.userGoal(),
-                context.effectiveSlots(),
-                retryCandidates
-        );
     }
 
     private RecommendationDecision structuredDecision(Msg response) {
