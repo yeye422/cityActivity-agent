@@ -7,6 +7,7 @@ import com.city.model.ActivitySessionResponse;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
 import com.city.model.WeatherRecommendationContext;
+import com.city.model.context.PlanningHorizon;
 import com.city.model.agent.AgentResult;
 import com.city.model.agent.EvidenceRef;
 import com.city.model.agent.PlanningResult;
@@ -51,7 +52,7 @@ public class ActivityPlanService {
             new PlanWindow("20:00-23:00", LocalTime.of(20, 0), LocalTime.of(23, 0))
     );
 
-    private static final int PLAN_CANDIDATE_LIMIT = 3;
+    private static final int PLAN_CANDIDATE_LIMIT = 8;
 
     private final RetrievalPipeline retrievalPipeline;
     private final ActivitySessionService activitySessionService;
@@ -171,6 +172,63 @@ public class ActivityPlanService {
         return discoverWindow(
                 sourceMode, userId, baseSlots, excludedSlots,
                 activityTime, timeConstraint, weather, "", List.of());
+    }
+
+    /** 在线 Planning 首次发现：按真实日期/时间范围检索，不切固定 bucket。 */
+    public List<CandidateBatch> discoverHorizon(SourceMode sourceMode,
+                                                Long userId,
+                                                SlotBundle baseSlots,
+                                                SlotBundle excludedSlots,
+                                                PlanningHorizon horizon,
+                                                WeatherRecommendationContext weather) {
+        if (horizon == null || horizon.isEmpty()) return List.of();
+        return horizon.ranges().stream()
+                .map(range -> discoverRange(
+                        sourceMode, userId, baseSlots, excludedSlots,
+                        range, weather, "", List.of()))
+                .toList();
+    }
+
+    /** PlanningAgent 的按需时间缺口检索；requested range 必须先由 Tool 校验在 horizon 内。 */
+    public CandidateBatch discoverRange(SourceMode sourceMode,
+                                        Long userId,
+                                        SlotBundle baseSlots,
+                                        SlotBundle excludedSlots,
+                                        PlanningHorizon.Range range,
+                                        WeatherRecommendationContext weather,
+                                        String retrievalIntent,
+                                        List<Long> excludeActivityIds) {
+        if (range == null) throw new IllegalArgumentException("planning range 不能为空");
+        SlotBundle safeSlots = baseSlots == null ? SlotBundle.empty() : baseSlots;
+        SlotBundle safeExcluded = excludedSlots == null ? SlotBundle.empty() : excludedSlots;
+        WeatherRecommendationContext safeWeather = weather == null
+                ? WeatherRecommendationContext.inactive()
+                : weather;
+        TimeConstraint target = new TimeConstraint(
+                range.toString(),
+                range.startAt().toLocalDate(),
+                range.endAt().toLocalDate(),
+                range.startAt().toLocalTime(),
+                range.endAt().toLocalTime(),
+                null
+        );
+        ActivitySearchRequest request = new ActivitySearchRequest(
+                sourceMode,
+                userId,
+                safeSlots,
+                excludeActivityIds == null ? List.of() : List.copyOf(excludeActivityIds),
+                target,
+                safeExcluded
+        );
+        RetrievalResult retrieval = retrievalPipeline.retrieve(new RetrievalRequest(
+                request,
+                retrievalIntent == null ? "" : retrievalIntent.trim(),
+                safeWeather,
+                PLAN_CANDIDATE_LIMIT
+        ));
+        List<ActivityItem> candidates = retrieval.finalCandidates();
+        Map<Long, List<ActivitySessionResponse>> sessions = loadPlanningSessions(candidates, target);
+        return new CandidateBatch(range, candidates, sessions);
     }
 
     /** PlanningAgent 的受控单窗口扩展检索；硬约束仍由服务器固定。 */
@@ -353,6 +411,19 @@ public class ActivityPlanService {
     }
 
     private record PlanWindow(String label, LocalTime start, LocalTime end) { }
+
+    /** Run-scoped 候选发现批次；range 只描述本次检索范围，不作为最终计划项 ID。 */
+    public record CandidateBatch(
+            PlanningHorizon.Range range,
+            List<ActivityItem> candidates,
+            Map<Long, List<ActivitySessionResponse>> sessionsByActivityId
+    ) {
+        public CandidateBatch {
+            if (range == null) throw new IllegalArgumentException("range 不能为空");
+            candidates = candidates == null ? List.of() : List.copyOf(candidates);
+            sessionsByActivityId = sessionsByActivityId == null ? Map.of() : Map.copyOf(sessionsByActivityId);
+        }
+    }
 
     public record PlannedActivity(
             String period,
