@@ -108,6 +108,25 @@ public class ActivityPlanService {
         return new CandidateBatch(range, candidates, sessions.sessionsByActivityId());
     }
 
+    /**
+     * Planning 中 duration 常表达整段行程长度（如“半天行程”），
+     * 不把它作为单个 Activity 的硬检索条件。
+     */
+    private SlotBundle planningSearchSlots(SlotBundle base) {
+        SlotBundle safe = base == null ? SlotBundle.empty() : base;
+        return new SlotBundle(
+                safe.city(),
+                safe.location(),
+                safe.experienceGoal(),
+                safe.companion(),
+                safe.budget(),
+                safe.activityType(),
+                safe.style(),
+                List.of(),
+                safe.feature()
+        );
+    }
+
     private SessionLoad loadSessions(
             List<ActivityItem> candidates,
             PlanningHorizon.Range range
@@ -120,17 +139,12 @@ public class ActivityPlanService {
         java.util.Set<Long> sessionBacked = new java.util.LinkedHashSet<>();
         for (ActivityItem candidate : candidates) {
             if (candidate == null || candidate.id() == null) continue;
-            List<ActivitySessionResponse> available;
-            try {
-                available = activitySessionService
-                        .findAvailable(candidate.id(), range.startAt().toLocalDate())
-                        .stream()
-                        .filter(session -> "OPEN".equalsIgnoreCase(session.status()))
-                        .filter(session -> session.remainingSeats() == null || session.remainingSeats() > 0)
-                        .toList();
-            } catch (RuntimeException ignored) {
-                available = List.of();
-            }
+            List<ActivitySessionResponse> available = activitySessionService
+                    .findAvailable(candidate.id(), range.startAt().toLocalDate())
+                    .stream()
+                    .filter(session -> "OPEN".equalsIgnoreCase(session.status()))
+                    .filter(session -> session.remainingSeats() == null || session.remainingSeats() > 0)
+                    .toList();
             if (!available.isEmpty()) sessionBacked.add(candidate.id());
             List<ActivitySessionResponse> inRange = available.stream()
                     .filter(session -> sessionWithinRange(session, range))
