@@ -249,9 +249,10 @@ public final class PlanningAgentWorker {
 
                 候选已经由服务器通过 discover_plan_candidates 绑定到当前 Run Evidence。
                 只从上面的真实 activityId/sessionId 中选择；如确有必要可再次调用 discover_plan_candidates 刷新。
-                当方案包含不同 venueId 的连续场次时，必须先调用 get_travel_time 获取对应场次间的真实路线时长证据。
-                然后必须调用 validate_plan；若返回 invalid，依据 violations/repairHint 修改冲突窗口并再次 validate_plan。
-                只有最近一次 validate_plan 为 valid 时才能输出最终 PlanningDecision，最终 plan 必须与该 valid proposal 一致。
+                当方案包含不同 venueId 的连续场次时，优先调用 get_travel_time 获取对应场次间的真实路线时长证据。
+                现在先提交一个完整 PlanningDecision proposal；服务器会在 Java 边界强制调用 validate_plan。
+                如果服务器随后返回 repair 请求，请严格根据 Notebook 中的 latestViolations/repairHint 修改冲突窗口。
+                不要因为自己尚未调用 validate_plan 而返回空 plan，也不要跳过任何规划窗口。
                 """.formatted(
                 userInput == null ? "" : userInput.trim(),
                 verifiedContext.userGoal(),
@@ -268,8 +269,9 @@ public final class PlanningAgentWorker {
                 当前 Notebook：%s
 
                 请严格根据 latestViolations/repairHint 只修改冲突窗口。
-                如新的连续场次跨 venueId，先调用 get_travel_time 补齐路线证据。
-                修改后必须再次调用 validate_plan；只有 valid 后才能输出新的 PlanningDecision。
+                如新的连续场次跨 venueId，优先调用 get_travel_time 补齐路线证据。
+                直接提交修正后的完整 PlanningDecision；服务器会再次强制调用 validate_plan。
+                不要返回空 plan，也不要重复上一个已被拒绝的 proposal。
                 """.formatted(planningContext.notebook().snapshot());
     }
 }
