@@ -8,8 +8,8 @@ import java.util.Set;
 /**
  * 单次 PlanningAgent Run 的显式计划状态。
  *
- * <p>Notebook 不判断业务合法性，合法性仍由 PlanningSolver/validate_plan 决定；
- * 它只记录 Agent 已完成的 Discovery、Travel、Validate、Repair 状态，使 ReAct 规划循环可观测、可测试。</p>
+ * <p>Notebook 不判断业务合法性，合法性由 Java validate_plan 决定；
+ * 它只记录 Discovery、Travel、Validate、Repair 状态，使同一个 PlanningAgent 的迭代修复循环可观测、可测试。</p>
  */
 public final class PlanNotebook {
 
@@ -49,7 +49,7 @@ public final class PlanNotebook {
     }
 
     /**
-     * 开始一次 validate_plan。返回 true 表示这是上一轮 invalid 后提交的修复方案。
+     * 开始一次 validate_plan。返回 true 表示当前提案来自此前 invalid 后的修复循环。
      */
     public synchronized boolean beginValidation(PlanProposal proposal) {
         boolean repairing = status == Status.REPAIR_REQUIRED;
