@@ -3,6 +3,7 @@ package com.city.service.worker;
 import com.city.agent.builder.PlanningAgentBuilder;
 import com.city.model.ActivitySessionResponse;
 import com.city.model.TravelTimeEvidence;
+import com.city.model.PlanCandidate;
 import com.city.model.agent.PlanNotebook;
 import com.city.model.agent.PlanProposal;
 import com.city.model.agent.PlanningAgentExecutionResult;
@@ -123,16 +124,19 @@ public final class PlanningAgentWorker {
                     PlanningDiscoveryToolResult.from(evidenceRegistry.windows());
 
             ReActAgent finalizer = agentBuilder.buildFinalizer();
-            PlanningDecision decision = callDecision(
-                    finalizer,
-                    buildPrompt(
-                            userInput,
-                            verifiedContext,
-                            safeWindows,
-                            enrichedCandidates,
-                            explorationNotes
+            PlanningDecision decision = normalizeDecisionReferences(
+                    callDecision(
+                            finalizer,
+                            buildPrompt(
+                                    userInput,
+                                    verifiedContext,
+                                    safeWindows,
+                                    enrichedCandidates,
+                                    explorationNotes
+                            ),
+                            finalizerRuntime
                     ),
-                    finalizerRuntime
+                    planningContext
             );
 
             try {
@@ -149,10 +153,13 @@ public final class PlanningAgentWorker {
                         java.util.Map.of("reason", firstValidationError.getMessage())
                 );
 
-                decision = callDecision(
-                        finalizer,
-                        buildRepairPrompt(planningContext, enrichedCandidates, explorationNotes),
-                        finalizerRuntime
+                decision = normalizeDecisionReferences(
+                        callDecision(
+                                finalizer,
+                                buildRepairPrompt(planningContext, enrichedCandidates, explorationNotes),
+                                finalizerRuntime
+                        ),
+                        planningContext
                 );
                 ensureTravelEvidence(decision.plan(), planningContext);
                 ensureToolValidated(decision, planningContext);
@@ -167,6 +174,22 @@ public final class PlanningAgentWorker {
             if (!finalValidation.valid() || finalValidation.acceptedPlan() == null) {
                 throw new IllegalStateException(
                         "PlanningAgent 最终方案未通过 Java Solver 复核: " + finalValidation.violations());
+            }
+
+            int travelCallsBefore = evidenceRegistry.travelCalls();
+            ensureTravelEvidence(finalValidation.acceptedPlan(), planningContext);
+            if (evidenceRegistry.travelCalls() > travelCallsBefore) {
+                finalValidation = validationService.validate(
+                        proposalFromAcceptedPlan(finalValidation.acceptedPlan()),
+                        evidenceRegistry,
+                        maxBudget,
+                        planningContext.allTravelTimeEvidence()
+                );
+                if (!finalValidation.valid() || finalValidation.acceptedPlan() == null) {
+                    throw new IllegalStateException(
+                            "PlanningAgent 路线补证后方案未通过 Java Solver 复核: "
+                                    + finalValidation.violations());
+                }
             }
 
             evidenceValidator.validatePlan(finalValidation.acceptedPlan(), evidenceStore);
@@ -237,7 +260,25 @@ public final class PlanningAgentWorker {
             selected.add(new SelectedSession(item.period(), item.activityId(), session));
         }
         selected.sort(Comparator.comparing(item -> item.session().startAt()));
+        ensureTravelEvidence(selected, planningContext);
+    }
 
+    void ensureTravelEvidence(PlanCandidate plan, PlanningToolContext planningContext) {
+        Objects.requireNonNull(plan, "plan");
+        Objects.requireNonNull(planningContext, "planningContext");
+
+        List<SelectedSession> selected = plan.items().stream()
+                .filter(Objects::nonNull)
+                .filter(item -> item.activity() != null && item.activity().id() != null)
+                .filter(item -> item.session() != null && item.session().startAt() != null)
+                .map(item -> new SelectedSession(item.period(), item.activity().id(), item.session()))
+                .sorted(Comparator.comparing(item -> item.session().startAt()))
+                .toList();
+        ensureTravelEvidence(selected, planningContext);
+    }
+
+    private void ensureTravelEvidence(List<SelectedSession> selected,
+                                      PlanningToolContext planningContext) {
         for (int i = 1; i < selected.size(); i++) {
             SelectedSession from = selected.get(i - 1);
             SelectedSession to = selected.get(i);
@@ -256,6 +297,65 @@ public final class PlanningAgentWorker {
                     planningContext
             );
         }
+    }
+
+    private PlanningDecision normalizeDecisionReferences(
+            PlanningDecision decision,
+            PlanningToolContext planningContext
+    ) {
+        Objects.requireNonNull(decision, "decision");
+        Objects.requireNonNull(planningContext, "planningContext");
+        if (decision.plan() == null || decision.plan().items() == null) return decision;
+
+        List<PlanProposal.Item> normalized = new ArrayList<>();
+        int corrections = 0;
+        for (PlanProposal.Item item : decision.plan().items()) {
+            if (item == null || item.activityId() == null) continue;
+            String period = item.period();
+            if (planningContext.evidenceRegistry().activity(period, item.activityId()) == null) {
+                List<String> periods = planningContext.evidenceRegistry()
+                        .periodsForActivity(item.activityId());
+                if (periods.size() == 1) {
+                    period = periods.getFirst();
+                    corrections++;
+                }
+            }
+
+            Long sessionId = item.sessionId();
+            if (sessionId != null
+                    && planningContext.evidenceRegistry().session(period, item.activityId(), sessionId) == null) {
+                sessionId = null;
+                corrections++;
+            }
+            normalized.add(new PlanProposal.Item(period, item.activityId(), sessionId));
+        }
+
+        PlanningDecision result = new PlanningDecision(
+                new PlanProposal(normalized),
+                decision.decisionSummary(),
+                decision.confidence()
+        );
+        if (corrections > 0) {
+            traceService.recordEvent(
+                    "PLANNING_REFERENCES_NORMALIZED",
+                    "JAVA_BOUNDARY",
+                    decision,
+                    java.util.Map.of("corrections", corrections, "normalizedDecision", result)
+            );
+        }
+        return result;
+    }
+
+    private PlanProposal proposalFromAcceptedPlan(PlanCandidate plan) {
+        return new PlanProposal(plan.items().stream()
+                .filter(Objects::nonNull)
+                .filter(item -> item.activity() != null && item.activity().id() != null)
+                .map(item -> new PlanProposal.Item(
+                        item.period(),
+                        item.activity().id(),
+                        item.session() == null ? null : item.session().sessionId()
+                ))
+                .toList());
     }
 
     /** package-private：回归测试 Java 强制 validate_plan 边界。 */
