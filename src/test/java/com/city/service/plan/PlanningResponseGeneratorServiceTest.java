@@ -14,6 +14,7 @@ import com.city.model.agent.PlanningDecision;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -28,7 +29,7 @@ class PlanningResponseGeneratorServiceTest {
                 201L, SourceMode.PUBLIC, null, "双人陶艺", SlotBundle.empty(),
                 null, null, null, null, 120, 0.91);
         PlanProposal proposal = new PlanProposal(List.of(
-                new PlanProposal.Item("14:00-16:00", 201L, null)
+                new PlanProposal.Item(201L, null, start(), end())
         ));
         PlanningDecision decision = new PlanningDecision(
                 proposal,
@@ -36,7 +37,7 @@ class PlanningResponseGeneratorServiceTest {
                 0.9
         );
         PlanCandidate accepted = new PlanCandidate(
-                List.of(new PlanCandidate.Item("14:00-16:00", activity, null)),
+                List.of(new PlanCandidate.Item(activity, null, start(), end())),
                 BigDecimal.ZERO
         );
         PlanningAgentExecutionResult execution = new PlanningAgentExecutionResult(
@@ -62,5 +63,13 @@ class PlanningResponseGeneratorServiceTest {
         assertEquals(201L, result.response().displayBlocks().getFirst().id());
         assertTrue(result.response().speechText().contains("下午先安排互动体验"));
         assertTrue(result.response().speechText().contains("双人陶艺"));
+    }
+
+    private LocalDateTime start() {
+        return LocalDateTime.of(2026, 9, 27, 14, 0);
+    }
+
+    private LocalDateTime end() {
+        return LocalDateTime.of(2026, 9, 27, 16, 0);
     }
 }
