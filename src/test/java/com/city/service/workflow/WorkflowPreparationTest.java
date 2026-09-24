@@ -90,12 +90,12 @@ class WorkflowPreparationTest {
     void planningShouldNotResolveHorizonWhenClarificationIsRequired() {
         SlotMutationService mutationService = mock(SlotMutationService.class);
         ClarifyRuleService clarify = mock(ClarifyRuleService.class);
-        TimeWindowResolver timeWindowResolver = mock(TimeWindowResolver.class);
+        PlanningHorizonResolver horizonResolver = mock(PlanningHorizonResolver.class);
         when(mutationService.apply(any(), any(), any(), any())).thenReturn(SlotMutation.empty());
         when(clarify.missingRequiredFields(eq(Intent.ACTIVITY_PLAN), any(), any()))
                 .thenReturn(List.of(ClarifyField.CITY));
 
-        PlanningWorkflow.Preparation result = new PlanningWorkflow(mutationService, clarify, timeWindowResolver)
+        PlanningWorkflow.Preparation result = new PlanningWorkflow(mutationService, clarify, horizonResolver)
                 .prepare(state(), new IntentResult(Intent.ACTIVITY_PLAN, 1.0));
 
         assertEquals(ClarifyField.CITY, result.missingField());
