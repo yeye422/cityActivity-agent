@@ -13,6 +13,7 @@ import com.city.tool.PlanValidationTool;
 import com.city.tool.PlanningDiscoveryTool;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -96,7 +97,11 @@ class PlanningAgentWorkerTest {
 
     private PlanProposal proposal() {
         return new PlanProposal(List.of(
-                new PlanProposal.Item("afternoon", 101L, null)
+                new PlanProposal.Item(
+                        101L,
+                        null,
+                        LocalDateTime.of(2026, 9, 27, 14, 0),
+                        LocalDateTime.of(2026, 9, 27, 16, 0))
         ));
     }
 }
