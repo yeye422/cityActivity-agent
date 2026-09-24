@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
@@ -124,8 +125,8 @@ public class PlanProposalValidationService {
                     ));
                     continue;
                 }
-                startAt = proposed.plannedStartAt();
-                endAt = proposed.plannedEndAt();
+                startAt = parseDateTime(proposed.plannedStartAt());
+                endAt = parseDateTime(proposed.plannedEndAt());
                 if (startAt == null || endAt == null || !startAt.isBefore(endAt)) {
                     violations.add(violation(
                             "PLANNED_TIME_REQUIRED", proposedRange(proposed),
@@ -298,7 +299,19 @@ public class PlanProposalValidationService {
     }
 
     private String proposedRange(PlanProposal.Item item) {
-        return item == null ? "" : rangeLabel(item.plannedStartAt(), item.plannedEndAt());
+        if (item == null) return "";
+        String start = item.plannedStartAt() == null ? "" : item.plannedStartAt();
+        String end = item.plannedEndAt() == null ? "" : item.plannedEndAt();
+        return start.isBlank() && end.isBlank() ? "" : start + "/" + end;
+    }
+
+    private LocalDateTime parseDateTime(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return LocalDateTime.parse(value.trim());
+        } catch (DateTimeParseException ignored) {
+            return null;
+        }
     }
 
     private String sessionRange(ActivitySessionResponse session) {
