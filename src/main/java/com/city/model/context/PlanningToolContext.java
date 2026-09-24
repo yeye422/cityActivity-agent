@@ -14,7 +14,7 @@ import java.util.Objects;
 /** Planning Java 边界共享的模型不可见规划上下文。 */
 public record PlanningToolContext(
         VerifiedRequestContext verifiedRequestContext,
-        List<String> windows,
+        PlanningHorizon horizon,
         PlanningEvidenceRegistry evidenceRegistry,
         PlanNotebook notebook,
         BigDecimal maxBudget,
@@ -22,7 +22,7 @@ public record PlanningToolContext(
 ) {
     public PlanningToolContext {
         verifiedRequestContext = Objects.requireNonNull(verifiedRequestContext, "verifiedRequestContext");
-        windows = windows == null ? List.of() : List.copyOf(windows);
+        horizon = horizon == null ? PlanningHorizon.empty() : horizon;
         evidenceRegistry = Objects.requireNonNull(evidenceRegistry, "evidenceRegistry");
         notebook = Objects.requireNonNull(notebook, "notebook");
         travelTimeEvidence = travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
