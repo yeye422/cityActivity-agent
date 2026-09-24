@@ -16,6 +16,7 @@ import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import org.springframework.stereotype.Component;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Objects;
@@ -35,6 +36,7 @@ public final class RecommendationWorker {
     private final RetrievalTool retrievalTool;
     private final DecisionEvidenceValidator evidenceValidator = new DecisionEvidenceValidator();
     private final AgentTraceService traceService;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public RecommendationWorker(RecommendationAgentBuilder agentBuilder,
                                 RecommendationDecisionValidator decisionValidator,
@@ -78,13 +80,9 @@ public final class RecommendationWorker {
                     Msg.builder()
                             .role(MsgRole.USER)
                             .textContent(prompt)
-                            .build(),
-                    RecommendationDecision.class
+                            .build()
             ).block();
-            if (response == null) {
-                throw new IllegalStateException("RecommendationAgent 返回为空");
-            }
-            RecommendationDecision decision = response.getStructuredData(RecommendationDecision.class);
+            RecommendationDecision decision = parseDecision(response);
             RecommendationDecision validated = decisionValidator.validate(decision, evidenceRegistry);
             List<ActivityItem> selected = evidenceValidator.validateRecommendation(
                     validated.selectedActivityIds(),
@@ -141,6 +139,30 @@ public final class RecommendationWorker {
                 context.hardConstraints(),
                 initialCandidates
         );
+    }
+
+    private RecommendationDecision parseDecision(Msg response) {
+        if (response == null) {
+            throw new IllegalStateException("RecommendationAgent 返回为空");
+        }
+        String json = normalizeJson(response.getTextContent());
+        try {
+            return objectMapper.readValue(json, RecommendationDecision.class);
+        } catch (Exception error) {
+            throw new IllegalStateException("RecommendationAgent 最终 JSON 无法解析: " + json, error);
+        }
+    }
+
+    private String normalizeJson(String value) {
+        String text = value == null ? "" : value.trim();
+        if (text.startsWith("```")) {
+            int firstBreak = text.indexOf('\n');
+            int lastFence = text.lastIndexOf("```");
+            if (firstBreak >= 0 && lastFence > firstBreak) {
+                text = text.substring(firstBreak + 1, lastFence).trim();
+            }
+        }
+        return text;
     }
 
     private String initialRetrievalIntent(String userInput, VerifiedRequestContext context) {
