@@ -8,7 +8,6 @@ import com.city.tool.PlanningDiscoveryTool;
 import com.city.tool.TravelTimeTool;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.model.Model;
-import io.agentscope.core.tool.ToolExecutionContext;
 import io.agentscope.core.tool.Toolkit;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -59,10 +58,6 @@ public class PlanningAgentBuilder {
         toolkit.registerTool(discoveryTool);
         toolkit.registerTool(travelTimeTool);
 
-        ToolExecutionContext toolContext = ToolExecutionContext.builder()
-                .register(planningContext)
-                .build();
-
         AgentBusinessGuardMiddleware guardMiddleware = new AgentBusinessGuardMiddleware(
                 "city_planning_agent",
                 Set.of("discover_plan_candidates", "get_travel_time"),
@@ -77,7 +72,6 @@ public class PlanningAgentBuilder {
                 .model(mainModel)
                 .sysPrompt(promptLoader.load("city-prompts/planning-decision.txt"))
                 .toolkit(toolkit)
-                .toolExecutionContext(toolContext)
                 .middleware(guardMiddleware)
                 .maxIters(8)
                 .build();
