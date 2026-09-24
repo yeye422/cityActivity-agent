@@ -8,7 +8,6 @@ import com.city.tool.PlanValidationTool;
 import com.city.tool.PlanningDiscoveryTool;
 import com.city.tool.TravelTimeTool;
 import io.agentscope.core.ReActAgent;
-import io.agentscope.core.memory.InMemoryMemory;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.tool.ToolExecutionContext;
 import io.agentscope.core.tool.Toolkit;
@@ -85,8 +84,7 @@ public class PlanningAgentBuilder {
                 .sysPrompt(promptLoader.load("city-prompts/planning-decision.txt"))
                 .toolkit(toolkit)
                 .toolExecutionContext(toolContext)
-                .memory(new InMemoryMemory())
-                .hook(guardHook)
+                .middleware(guardMiddleware)
                 .maxIters(8)
                 .build();
     }
