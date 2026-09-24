@@ -1,5 +1,7 @@
 package com.city.model.agent;
 
+import com.city.model.context.PlanningHorizon;
+
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -8,8 +10,7 @@ import java.util.Set;
 /**
  * 单次 PlanningAgent Run 的显式计划状态。
  *
- * <p>Notebook 不判断业务合法性，合法性由 Java validate_plan 决定；
- * 它只记录 Discovery、Travel、Validate、Repair 状态，使同一个 PlanningAgent 的迭代修复循环可观测、可测试。</p>
+ * <p>Notebook 不判断业务合法性；它只记录候选发现范围、路线查询、校验和修复状态。</p>
  */
 public final class PlanNotebook {
 
@@ -21,8 +22,8 @@ public final class PlanNotebook {
         VALIDATED
     }
 
-    private final List<String> windows;
-    private final Set<String> discoveredPeriods = new LinkedHashSet<>();
+    private final PlanningHorizon horizon;
+    private final Set<PlanningHorizon.Range> discoveredRanges = new LinkedHashSet<>();
     private Status status = Status.DISCOVERY_PENDING;
     private PlanProposal latestProposal;
     private List<PlanValidationResult.Violation> latestViolations = List.of();
@@ -30,16 +31,15 @@ public final class PlanNotebook {
     private int validationAttempts;
     private int repairAttempts;
 
-    public PlanNotebook(List<String> windows) {
-        this.windows = windows == null ? List.of() : List.copyOf(windows);
+    public PlanNotebook(PlanningHorizon horizon) {
+        this.horizon = horizon == null ? PlanningHorizon.empty() : horizon;
     }
 
-    public synchronized void recordDiscovery(Collection<String> periods) {
-        discoveredPeriods.clear();
-        if (periods != null) {
-            periods.stream()
-                    .filter(value -> value != null && !value.isBlank())
-                    .forEach(discoveredPeriods::add);
+    public synchronized void recordDiscovery(Collection<PlanningHorizon.Range> ranges) {
+        if (ranges != null) {
+            ranges.stream()
+                    .filter(java.util.Objects::nonNull)
+                    .forEach(discoveredRanges::add);
         }
         status = Status.READY_TO_PROPOSE;
     }
@@ -48,9 +48,6 @@ public final class PlanNotebook {
         travelLookups++;
     }
 
-    /**
-     * 开始一次 validate_plan。返回 true 表示当前提案来自此前 invalid 后的修复循环。
-     */
     public synchronized boolean beginValidation(PlanProposal proposal) {
         boolean repairing = status == Status.REPAIR_REQUIRED;
         if (repairing) repairAttempts++;
@@ -83,8 +80,8 @@ public final class PlanNotebook {
 
     public synchronized Snapshot snapshot() {
         return new Snapshot(
-                windows,
-                List.copyOf(discoveredPeriods),
+                horizon,
+                List.copyOf(discoveredRanges),
                 status,
                 latestProposal,
                 latestViolations,
@@ -95,8 +92,8 @@ public final class PlanNotebook {
     }
 
     public record Snapshot(
-            List<String> windows,
-            List<String> discoveredPeriods,
+            PlanningHorizon horizon,
+            List<PlanningHorizon.Range> discoveredRanges,
             Status status,
             PlanProposal latestProposal,
             List<PlanValidationResult.Violation> latestViolations,
