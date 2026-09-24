@@ -33,9 +33,9 @@ city:
   rule:
     version: v11
   llm:
-    main-model: qwen3.8-flash
-    light-model: qwen3.8-flash
-    response-model: qwen3.8-flash
+    main-model: qwen3.8-max
+    light-model: qwen3.8-max
+    response-model: qwen3.8-max
   session:
     max-history-turns: 10
     max-history-chars: 1200
