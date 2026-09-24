@@ -13,6 +13,7 @@ import com.city.service.trace.AgentTraceService;
 import com.city.tool.RetrievalTool;
 import com.city.model.tool.RetrievalToolResult;
 import io.agentscope.core.ReActAgent;
+import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import org.springframework.stereotype.Component;
@@ -63,7 +64,13 @@ public final class RecommendationWorker {
                 verifiedContext,
                 evidenceRegistry
         );
-        ReActAgent agent = agentBuilder.build(verifiedContext, evidenceRegistry);
+        ReActAgent agent = agentBuilder.build(verifiedContext);
+        RuntimeContext runtimeContext = RuntimeContext.builder()
+                .userId(String.valueOf(verifiedContext.userId()))
+                .sessionId(verifiedContext.sessionId())
+                .put(VerifiedRequestContext.class, verifiedContext)
+                .put(CandidateEvidenceRegistry.class, evidenceRegistry)
+                .build();
         String prompt = buildUserPrompt(userInput, verifiedContext, initialCandidates);
 
         traceService.recordEvent(
@@ -74,11 +81,14 @@ public final class RecommendationWorker {
         );
         try {
             Msg response = agent.call(
-                    Msg.builder()
-                            .role(MsgRole.USER)
-                            .textContent(prompt)
-                            .build(),
-                    RecommendationDecision.class
+                    List.of(
+                            Msg.builder()
+                                    .role(MsgRole.USER)
+                                    .textContent(prompt)
+                                    .build()
+                    ),
+                    RecommendationDecision.class,
+                    runtimeContext
             ).block();
             RecommendationDecision decision = structuredDecision(response);
             RecommendationDecision validated = decisionValidator.validate(decision, evidenceRegistry);
