@@ -116,7 +116,7 @@ public class CityFlowWorkflowExecutor {
         traceService.recordEvent("PLAN_WEATHER_CONTEXT_RESOLVED", "RANK", workingState, weather);
         try {
             DecisionResponseResult result = planningDecisionFacade.plan(
-                    userInput, traceId, workingState, preparation.windows(), weather, List.of());
+                    userInput, traceId, workingState, preparation.horizon(), weather, List.of());
             traceService.recordEvent("PLAN_RESULT_BUILT", "PLAN", workingState, result.recommend());
             return commitService.commitDecision(
                     userInput, traceId, workingState, result, publicFallbackUsed);
