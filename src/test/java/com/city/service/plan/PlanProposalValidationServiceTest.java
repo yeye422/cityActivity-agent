@@ -45,24 +45,21 @@ class PlanProposalValidationServiceTest {
     }
 
     @Test
-    void shouldLetSolverBindSessionsWhenAgentOnlyChoosesActivities() {
+    void shouldRequireAgentToChooseExactSessionWhenSessionsAreExposed() {
         PlanningEvidenceRegistry registry = registry(false);
         PlanProposal proposal = new PlanProposal(List.of(
-                new PlanProposal.Item("14:00-16:00", 101L, null),
-                new PlanProposal.Item("18:00-20:00", 202L, null)
+                new PlanProposal.Item("14:00-16:00", 101L, null)
         ));
 
         PlanValidationResult result = service.validate(
                 proposal,
                 registry,
                 BigDecimal.valueOf(300),
-                List.of(new TravelTimeEvidence(101L, 202L, 30, "TEST"))
+                List.of()
         );
 
-        assertTrue(result.valid());
-        assertNotNull(result.acceptedPlan());
-        assertEquals(1001L, result.acceptedPlan().items().get(0).session().sessionId());
-        assertEquals(2002L, result.acceptedPlan().items().get(1).session().sessionId());
+        assertFalse(result.valid());
+        assertEquals("SESSION_REQUIRED", result.violations().getFirst().code());
     }
 
     @Test
