@@ -9,6 +9,7 @@ import com.city.model.agent.PlanningAgentExecutionResult;
 import com.city.model.agent.PlanningDecision;
 import com.city.model.agent.PlanValidationResult;
 import com.city.model.context.AgentDecisionToolContext;
+import com.city.model.context.PlanningHorizon;
 import com.city.model.context.PlanningToolContext;
 import com.city.model.context.VerifiedRequestContext;
 import com.city.model.tool.PlanningDiscoveryToolResult;
@@ -32,17 +33,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-/**
- * PlanningAgent 的单 Agent 执行边界。
- *
- * <p>同一个 Agent 负责按需调用探索 Tool、选择 activity/session、提交 PlanningDecision，
- * 并根据 Java validate_plan 返回的 violations 持续修复。路线时长作为受控 Tool 由 Agent 按需查询；
- * Java 负责硬约束校验和 Evidence Gate，不替 Agent 枚举或选择活动/场次。</p>
- */
+/** PlanningAgent 的单 Agent 执行边界。 */
 @Component
 public final class PlanningAgentWorker {
 
-    /** 只用于防失控，不代表业务固定修复轮数。 */
     private static final int MAX_AGENT_RESPONSE_ATTEMPTS = 8;
     private static final int REPEATED_INVALID_PROPOSAL_THRESHOLD = 3;
 
@@ -70,29 +64,29 @@ public final class PlanningAgentWorker {
     public PlanningAgentExecutionResult execute(
             String userInput,
             VerifiedRequestContext verifiedContext,
-            List<String> windows,
+            PlanningHorizon horizon,
             List<TravelTimeEvidence> travelTimeEvidence
     ) {
         Objects.requireNonNull(verifiedContext, "verifiedContext");
-        List<String> safeWindows = windows == null ? List.of() : List.copyOf(windows);
+        PlanningHorizon safeHorizon = horizon == null ? PlanningHorizon.empty() : horizon;
         List<TravelTimeEvidence> safeTravel =
                 travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
 
         RunEvidenceStore evidenceStore = new RunEvidenceStore(verifiedContext.traceId());
         safeTravel.forEach(evidenceStore::recordTravelEvidence);
         PlanningEvidenceRegistry evidenceRegistry = new PlanningEvidenceRegistry(evidenceStore);
-        PlanNotebook notebook = new PlanNotebook(safeWindows);
+        PlanNotebook notebook = new PlanNotebook(safeHorizon);
         BigDecimal maxBudget = constraintParser.explicitMaxBudget(verifiedContext.effectiveSlots());
         PlanningToolContext planningContext = new PlanningToolContext(
                 verifiedContext,
-                safeWindows,
+                safeHorizon,
                 evidenceRegistry,
                 notebook,
                 maxBudget,
                 safeTravel
         );
 
-        // 首次候选发现是事实边界，PlanningAgent 不能跳过。
+        // Java 强制首次候选发现；Agent 不能跳过真实 Evidence 获取。
         PlanningDiscoveryToolResult initialCandidates = discoveryTool.discover(planningContext);
 
         AgentDecisionToolContext decisionToolContext =
@@ -111,14 +105,14 @@ public final class PlanningAgentWorker {
                 "PLANNING_AGENT_STARTED",
                 "AGENT",
                 verifiedContext.userGoal(),
-                Map.of("windows", safeWindows)
+                Map.of("horizon", safeHorizon)
         );
 
         try {
             String nextPrompt = buildInitialPrompt(
                     userInput,
                     verifiedContext,
-                    safeWindows,
+                    safeHorizon,
                     initialCandidates
             );
 
@@ -134,9 +128,8 @@ public final class PlanningAgentWorker {
                 try {
                     decision = callDecision(agent, nextPrompt, runtimeContext);
                 } catch (RuntimeException responseError) {
-                    if (!isRecoverableResponseError(responseError)) {
-                        throw responseError;
-                    }
+                    if (!isRecoverableResponseError(responseError)) throw responseError;
+
                     traceService.recordEvent(
                             "PLANNING_AGENT_RESPONSE_REPAIR_REQUESTED",
                             "AGENT",
@@ -148,7 +141,7 @@ public final class PlanningAgentWorker {
                     );
                     nextPrompt = buildResponseRepairPrompt(
                             verifiedContext,
-                            PlanningDiscoveryToolResult.from(evidenceRegistry.windows()),
+                            currentCandidates(evidenceRegistry),
                             safeErrorMessage(responseError)
                     );
                     continue;
@@ -169,7 +162,7 @@ public final class PlanningAgentWorker {
                             "AGENT",
                             Map.of(
                                     "responseAttempts", responseAttempt,
-                                    "periods", evidenceRegistry.periods(),
+                                    "searchedRanges", evidenceRegistry.searchedRanges(),
                                     "travelEvidence", planningContext.allTravelTimeEvidence(),
                                     "evidence", evidenceStore.snapshot(),
                                     "notebook", planningContext.notebook().snapshot()
@@ -188,8 +181,7 @@ public final class PlanningAgentWorker {
                     );
                 }
 
-                PlanningDiscoveryToolResult currentCandidates =
-                        PlanningDiscoveryToolResult.from(evidenceRegistry.windows());
+                PlanningDiscoveryToolResult candidates = currentCandidates(evidenceRegistry);
                 traceService.recordEvent(
                         "PLANNING_AGENT_REPAIR_REQUESTED",
                         "AGENT",
@@ -203,7 +195,7 @@ public final class PlanningAgentWorker {
 
                 nextPrompt = buildRepairPrompt(
                         verifiedContext,
-                        currentCandidates,
+                        candidates,
                         planningContext.notebook().snapshot(),
                         repeated
                 );
@@ -213,7 +205,8 @@ public final class PlanningAgentWorker {
                     "PLANNING_AGENT_FAILED",
                     "AGENT",
                     Map.of(
-                            "windows", safeWindows,
+                            "horizon", safeHorizon,
+                            "searchedRanges", evidenceRegistry.searchedRanges(),
                             "exposedActivityIds", evidenceRegistry.exposedActivityIds(),
                             "travelEvidence", planningContext.allTravelTimeEvidence(),
                             "evidence", evidenceStore.snapshot(),
@@ -225,25 +218,27 @@ public final class PlanningAgentWorker {
         }
     }
 
+    private PlanningDiscoveryToolResult currentCandidates(PlanningEvidenceRegistry evidenceRegistry) {
+        return PlanningDiscoveryToolResult.from(
+                evidenceRegistry.searchedRanges(),
+                evidenceRegistry.activities(),
+                evidenceRegistry.sessionsByActivityId()
+        );
+    }
+
     private PlanningDecision callDecision(
             ReActAgent agent,
             String prompt,
             RuntimeContext runtimeContext
     ) {
         Msg response = agent.call(
-                List.of(
-                        Msg.builder()
-                                .role(MsgRole.USER)
-                                .textContent(prompt)
-                                .build()
-                ),
+                List.of(Msg.builder().role(MsgRole.USER).textContent(prompt).build()),
                 PlanningDecision.class,
                 runtimeContext
         ).block();
         return structuredDecision(response);
     }
 
-    /** package-private：回归测试 Java 强制 validate_plan 边界。 */
     void ensureToolValidated(PlanningDecision decision, PlanningToolContext planningContext) {
         Objects.requireNonNull(decision, "decision");
         Objects.requireNonNull(planningContext, "planningContext");
@@ -277,26 +272,28 @@ public final class PlanningAgentWorker {
     private String buildInitialPrompt(
             String userInput,
             VerifiedRequestContext context,
-            List<String> windows,
+            PlanningHorizon horizon,
             PlanningDiscoveryToolResult initialCandidates
     ) {
         return """
                 用户原话：%s
                 UserGoal：%s
-                规划窗口：%s
+                PlanningHorizon：%s
                 当前已生效槽位：%s
                 服务器硬约束摘要：%s
-                首轮已验证候选：%s
+                首轮已验证候选与真实 sessions：%s
 
-                这是本轮规划的首次提案。
-                你可以按需调用已注册 Tool 补充候选、活动详情、长期偏好、近期推荐历史或查询已选场次之间的路线时间。
+                服务器已经按完整日期/时间限制执行首次候选发现。
+                你负责用真实 session 时间组合行程，不需要把行程填满整个 horizon。
+                如果你选定的某个时间缺口没有合适候选，可调用 search_plan_candidates(startAt,endAt,retrievalIntent) 局部补充。
+                需要判断两个真实场次之间的交通时可调用 get_travel_time。
+                对有 sessions 的 activity 必须明确选择真实 OPEN sessionId。
+                对没有具体 sessions 的 activity，必须给出 horizon 内的 plannedStartAt/plannedEndAt。
                 信息足够后直接提交完整 PlanningDecision。
-                每个 item 必须引用当前 Run 已暴露的真实 period/activityId/sessionId。
-                如果 activity 暴露了具体 sessions，必须由你明确选择一个真实 OPEN sessionId。
                 """.formatted(
                 userInput == null ? "" : userInput.trim(),
                 context.userGoal(),
-                windows,
+                horizon,
                 context.effectiveSlots(),
                 context.hardConstraints(),
                 initialCandidates
@@ -315,9 +312,7 @@ public final class PlanningAgentWorker {
     private String safeErrorMessage(Throwable error) {
         if (error == null) return "unknown response error";
         String message = error.getMessage();
-        if (message == null || message.isBlank()) {
-            return error.getClass().getSimpleName();
-        }
+        if (message == null || message.isBlank()) return error.getClass().getSimpleName();
         return message.length() <= 500 ? message : message.substring(0, 500);
     }
 
@@ -333,9 +328,9 @@ public final class PlanningAgentWorker {
                 当前完整已验证候选：%s
                 响应问题：%s
 
-                你仍然可以按需调用已注册 Tool，但最终必须提交完整 PlanningDecision。
-                plan 不能为空；每个 item 必须使用真实 period/activityId，
-                对暴露了具体 sessions 的 activity 必须明确选择真实 OPEN sessionId。
+                你仍然可以调用 search_plan_candidates、get_travel_time 等已注册 Tool。
+                最终 plan 不能为空；activityId/sessionId 必须引用当前 Run 真实 Evidence。
+                无固定 session 的 activity 必须提供 plannedStartAt/plannedEndAt。
                 """.formatted(
                 context.userGoal(),
                 currentCandidates,
@@ -357,23 +352,21 @@ public final class PlanningAgentWorker {
                 上一个 PlanningDecision 没有通过服务器校验，需要继续修复。
 
                 UserGoal：%s
+                PlanningHorizon：%s
                 当前完整已验证候选：%s
-                校验状态：%s
                 上一方案：%s
                 violations：%s
                 停滞提示：%s
 
-                请逐条处理 violations 中的 message 和 repairHint。
-                你仍然可以按需调用已注册 Tool 获取补充信息、扩展候选或查询路线时间。
-                如果 violation 是 MISSING_TRAVEL_EVIDENCE，repairHint 已包含完整 get_travel_time(...) 参数；
-                必须先按该参数调用 Tool 获取路线证据，再重新提交。
-                如果 violation 指向 activity/session，则必须由你重新选择真实候选；Java 不会替你枚举或选择。
-                修复后重新提交完整 PlanningDecision。
-                不要原样重复上一份无效方案。
+                请逐条处理 violations 的 message 和 repairHint。
+                候选时间覆盖不足时，调用 search_plan_candidates(startAt,endAt,retrievalIntent) 搜索缺口。
+                如果是 MISSING_TRAVEL_EVIDENCE，repairHint 已包含完整 get_travel_time(...) 参数，先调用路线 Tool。
+                Java 不会替你枚举或选择 activity/session。
+                修复后重新提交完整 PlanningDecision，不要原样重复无效方案。
                 """.formatted(
                 context.userGoal(),
+                notebook.horizon(),
                 currentCandidates,
-                notebook.status(),
                 notebook.latestProposal(),
                 notebook.latestViolations(),
                 stagnationHint
@@ -384,9 +377,10 @@ public final class PlanningAgentWorker {
         if (proposal == null || proposal.items() == null) return "<null>";
         return proposal.items().stream()
                 .filter(Objects::nonNull)
-                .map(item -> String.valueOf(item.period())
-                        + ":" + item.activityId()
-                        + ":" + item.sessionId())
+                .map(item -> item.activityId()
+                        + ":" + item.sessionId()
+                        + ":" + item.plannedStartAt()
+                        + ":" + item.plannedEndAt())
                 .sorted()
                 .reduce((left, right) -> left + "|" + right)
                 .orElse("<empty>");
@@ -397,5 +391,4 @@ public final class PlanningAgentWorker {
             super(message);
         }
     }
-
 }
