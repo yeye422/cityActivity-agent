@@ -82,6 +82,32 @@ class ActivityPlanServiceTest {
                 .stream().map(ActivitySessionResponse::sessionId).toList());
     }
 
+    @Test
+    void shouldDropSessionBackedActivityWhenNoSessionFitsRequestedRange() {
+        RetrievalPipeline pipeline = mock(RetrievalPipeline.class);
+        ActivitySessionService sessionService = mock(ActivitySessionService.class);
+        ActivityPlanService service = new ActivityPlanService(pipeline, sessionService);
+
+        ActivityItem activity = activity(31L, "晚间演出");
+        when(pipeline.retrieve(any())).thenReturn(new RetrievalResult(
+                List.of(activity), List.of(activity), List.of(activity), List.of(), List.of()));
+        when(sessionService.findAvailable(31L, LocalDate.of(2026, 9, 27)))
+                .thenReturn(List.of(session(
+                        910L, 31L,
+                        LocalDateTime.of(2026, 9, 27, 19, 0),
+                        LocalDateTime.of(2026, 9, 27, 21, 0))));
+
+        PlanningHorizon.Range afternoon = new PlanningHorizon.Range(
+                LocalDateTime.of(2026, 9, 27, 14, 0),
+                LocalDateTime.of(2026, 9, 27, 18, 0));
+        ActivityPlanService.CandidateBatch result = service.discoverRange(
+                SourceMode.PUBLIC, 1L, activity.slots(), SlotBundle.empty(),
+                afternoon, WeatherRecommendationContext.inactive(), "", List.of());
+
+        assertTrue(result.candidates().isEmpty());
+        assertTrue(result.sessionsByActivityId().isEmpty());
+    }
+
     private RetrievalResult emptyResult() {
         return new RetrievalResult(List.of(), List.of(), List.of(), List.of(), List.of());
     }
