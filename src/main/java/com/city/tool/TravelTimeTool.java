@@ -6,12 +6,14 @@ import com.city.model.TravelTimeEvidence;
 import com.city.model.context.PlanningToolContext;
 import com.city.service.location.AmapTravelTimeService;
 import com.city.service.trace.AgentTraceService;
+import io.agentscope.core.tool.Tool;
+import io.agentscope.core.tool.ToolParam;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
 import java.util.Objects;
 
-/** Planning 的受控路线时长 Java 边界，只允许查询本轮已暴露的真实场次。 */
+/** PlanningAgent 的受控路线时长 Tool，只允许查询当前 Run 已暴露的真实场次。 */
 @Component
 public class TravelTimeTool {
 
@@ -24,13 +26,17 @@ public class TravelTimeTool {
         this.traceService = traceService;
     }
 
+    @Tool(
+            name = "get_travel_time",
+            description = "Get verified travel duration between two sessions already exposed in the current planning run."
+    )
     public TravelTimeEvidence getTravelTime(
-            String fromPeriod,
-            Long fromActivityId,
-            Long fromSessionId,
-            String toPeriod,
-            Long toActivityId,
-            Long toSessionId,
+            @ToolParam(name = "fromPeriod", description = "Source planning period") String fromPeriod,
+            @ToolParam(name = "fromActivityId", description = "Source activityId from current candidates") Long fromActivityId,
+            @ToolParam(name = "fromSessionId", description = "Source sessionId from current candidates") Long fromSessionId,
+            @ToolParam(name = "toPeriod", description = "Destination planning period") String toPeriod,
+            @ToolParam(name = "toActivityId", description = "Destination activityId from current candidates") Long toActivityId,
+            @ToolParam(name = "toSessionId", description = "Destination sessionId from current candidates") Long toSessionId,
             PlanningToolContext planningContext
     ) {
         Objects.requireNonNull(planningContext, "planningContext");
