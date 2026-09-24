@@ -87,7 +87,8 @@ public final class PlanningEvidenceRegistry {
         if (plannedActivities == null) return;
         for (ActivityPlanService.PlannedActivity window : plannedActivities) {
             if (window == null || window.period() == null || window.period().isBlank()) continue;
-            windows.put(window.period(), window);
+            ActivityPlanService.PlannedActivity existing = windows.get(window.period());
+            windows.put(window.period(), existing == null ? window : mergeWindow(existing, window));
             evidenceStore.recordActivities(window.candidates());
             if (window.sessionsByActivityId() != null) {
                 window.sessionsByActivityId().values().stream()
@@ -95,6 +96,45 @@ public final class PlanningEvidenceRegistry {
                         .forEach(evidenceStore::recordSession);
             }
         }
+    }
+
+    private ActivityPlanService.PlannedActivity mergeWindow(
+            ActivityPlanService.PlannedActivity existing,
+            ActivityPlanService.PlannedActivity added
+    ) {
+        Map<Long, ActivityItem> candidates = new LinkedHashMap<>();
+        for (ActivityItem item : existing.candidates()) {
+            if (item != null && item.id() != null) candidates.putIfAbsent(item.id(), item);
+        }
+        for (ActivityItem item : added.candidates()) {
+            if (item != null && item.id() != null) candidates.putIfAbsent(item.id(), item);
+        }
+
+        Map<Long, List<ActivitySessionResponse>> sessions = new LinkedHashMap<>();
+        existing.sessionsByActivityId().forEach((activityId, values) ->
+                sessions.put(activityId, values == null ? List.of() : List.copyOf(values)));
+        added.sessionsByActivityId().forEach((activityId, values) -> {
+            List<ActivitySessionResponse> merged = new ArrayList<>(
+                    sessions.getOrDefault(activityId, List.of()));
+            if (values != null) {
+                for (ActivitySessionResponse session : values) {
+                    if (session == null || session.sessionId() == null) continue;
+                    boolean exists = merged.stream().anyMatch(current ->
+                            current != null && session.sessionId().equals(current.sessionId()));
+                    if (!exists) merged.add(session);
+                }
+            }
+            sessions.put(activityId, List.copyOf(merged));
+        });
+
+        return new ActivityPlanService.PlannedActivity(
+                existing.period(),
+                existing.activity(),
+                existing.querySlots(),
+                List.copyOf(candidates.values()),
+                Map.copyOf(sessions),
+                existing.selectedSession()
+        );
     }
 
     public synchronized void recordTravelEvidence(TravelTimeEvidence evidence) {
