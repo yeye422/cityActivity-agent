@@ -185,6 +185,17 @@ public final class PlanningEvidenceRegistry {
         return List.copyOf(result);
     }
 
+    public synchronized List<String> periodsForActivity(Long activityId) {
+        if (activityId == null) return List.of();
+        List<String> result = new ArrayList<>();
+        windows.forEach((period, window) -> {
+            boolean present = window != null && window.candidates().stream()
+                    .anyMatch(item -> item != null && activityId.equals(item.id()));
+            if (present) result.add(period);
+        });
+        return List.copyOf(result);
+    }
+
     public synchronized List<TravelTimeEvidence> travelTimeEvidence() {
         return evidenceStore.travelTimeEvidence();
     }
