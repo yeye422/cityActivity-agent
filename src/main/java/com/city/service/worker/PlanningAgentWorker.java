@@ -18,6 +18,7 @@ import com.city.service.trace.AgentTraceService;
 import com.city.tool.PlanValidationTool;
 import com.city.tool.PlanningDiscoveryTool;
 import io.agentscope.core.ReActAgent;
+import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -116,6 +117,11 @@ public final class PlanningAgentWorker {
                 ? null
                 : discoveryTool.discover(planningContext);
         ReActAgent agent = agentBuilder.build(planningContext);
+        RuntimeContext runtimeContext = RuntimeContext.builder()
+                .userId(String.valueOf(verifiedContext.userId()))
+                .sessionId(verifiedContext.sessionId())
+                .put(PlanningToolContext.class, planningContext)
+                .build();
 
         traceService.recordEvent(
                 "PLANNING_AGENT_STARTED",
@@ -126,11 +132,14 @@ public final class PlanningAgentWorker {
 
         try {
             Msg response = agent.call(
-                    Msg.builder()
-                            .role(MsgRole.USER)
-                            .textContent(buildPrompt(userInput, verifiedContext, safeWindows, preloadedCandidates))
-                            .build(),
-                    PlanningDecision.class
+                    List.of(
+                            Msg.builder()
+                                    .role(MsgRole.USER)
+                                    .textContent(buildPrompt(userInput, verifiedContext, safeWindows, preloadedCandidates))
+                                    .build()
+                    ),
+                    PlanningDecision.class,
+                    runtimeContext
             ).block();
             PlanningDecision decision = structuredDecision(response);
 
@@ -152,11 +161,14 @@ public final class PlanningAgentWorker {
                         java.util.Map.of("reason", firstValidationError.getMessage())
                 );
                 Msg repairedResponse = agent.call(
-                        Msg.builder()
-                                .role(MsgRole.USER)
-                                .textContent(buildRepairPrompt(planningContext))
-                                .build(),
-                        PlanningDecision.class
+                        List.of(
+                                Msg.builder()
+                                        .role(MsgRole.USER)
+                                        .textContent(buildRepairPrompt(planningContext))
+                                        .build()
+                        ),
+                        PlanningDecision.class,
+                        runtimeContext
                 ).block();
                 decision = structuredDecision(repairedResponse);
                 ensureToolValidated(decision, planningContext);
