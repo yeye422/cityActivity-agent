@@ -18,6 +18,7 @@ import io.agentscope.core.message.MsgRole;
 import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -145,24 +146,81 @@ public final class RecommendationWorker {
         if (response == null) {
             throw new IllegalStateException("RecommendationAgent 返回为空");
         }
-        String json = normalizeJson(response.getTextContent());
-        try {
-            return objectMapper.readValue(json, RecommendationDecision.class);
-        } catch (Exception error) {
-            throw new IllegalStateException("RecommendationAgent 最终 JSON 无法解析: " + json, error);
-        }
-    }
-
-    private String normalizeJson(String value) {
-        String text = value == null ? "" : value.trim();
-        if (text.startsWith("```")) {
-            int firstBreak = text.indexOf('\n');
-            int lastFence = text.lastIndexOf("```");
-            if (firstBreak >= 0 && lastFence > firstBreak) {
-                text = text.substring(firstBreak + 1, lastFence).trim();
+        String raw = response.getTextContent();
+        Exception lastError = null;
+        for (String json : jsonCandidates(raw)) {
+            try {
+                return objectMapper.readValue(json, RecommendationDecision.class);
+            } catch (Exception error) {
+                lastError = error;
             }
         }
-        return text;
+        throw new IllegalStateException(
+                "RecommendationAgent 最终输出无法解析为 RecommendationDecision: " + safePreview(raw),
+                lastError
+        );
+    }
+
+    private List<String> jsonCandidates(String value) {
+        String text = value == null ? "" : value.trim();
+        List<String> candidates = new ArrayList<>();
+        if (!text.isBlank()) {
+            candidates.add(text);
+        }
+
+        int fenceStart = text.indexOf("```");
+        while (fenceStart >= 0) {
+            int contentStart = text.indexOf('\n', fenceStart + 3);
+            if (contentStart < 0) break;
+            int fenceEnd = text.indexOf("```", contentStart + 1);
+            if (fenceEnd < 0) break;
+            String fenced = text.substring(contentStart + 1, fenceEnd).trim();
+            if (!fenced.isBlank() && !candidates.contains(fenced)) {
+                candidates.add(fenced);
+            }
+            fenceStart = text.indexOf("```", fenceEnd + 3);
+        }
+
+        boolean inString = false;
+        boolean escaping = false;
+        int depth = 0;
+        int start = -1;
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (inString) {
+                if (escaping) {
+                    escaping = false;
+                } else if (ch == '\\') {
+                    escaping = true;
+                } else if (ch == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (ch == '"') {
+                inString = true;
+                continue;
+            }
+            if (ch == '{') {
+                if (depth == 0) start = i;
+                depth++;
+            } else if (ch == '}' && depth > 0) {
+                depth--;
+                if (depth == 0 && start >= 0) {
+                    String object = text.substring(start, i + 1).trim();
+                    if (!object.isBlank() && !candidates.contains(object)) {
+                        candidates.add(object);
+                    }
+                    start = -1;
+                }
+            }
+        }
+        return candidates;
+    }
+
+    private String safePreview(String value) {
+        String text = value == null ? "" : value.trim();
+        return text.length() <= 500 ? text : text.substring(0, 500) + "...";
     }
 
     private String initialRetrievalIntent(String userInput, VerifiedRequestContext context) {
