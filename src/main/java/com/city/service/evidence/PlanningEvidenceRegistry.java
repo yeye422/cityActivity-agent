@@ -20,7 +20,7 @@ import java.util.Objects;
 public final class PlanningEvidenceRegistry {
 
     private static final int DEFAULT_MAX_DISCOVERY_CALLS = 2;
-    private static final int DEFAULT_MAX_VALIDATION_CALLS = 3;
+    private static final int DEFAULT_MAX_VALIDATION_CALLS = 4;
     private static final int DEFAULT_MAX_TRAVEL_CALLS = 6;
 
     private final int maxDiscoveryCalls;
