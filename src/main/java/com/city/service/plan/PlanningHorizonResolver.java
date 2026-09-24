@@ -11,7 +11,7 @@ import java.util.List;
 
 /** 将已验证日期/时间约束转换成 Planning 的绝对时间范围，不再切固定 2 小时窗口。 */
 @Service
-public final class PlanningHorizonResolver {
+public class PlanningHorizonResolver {
 
     private static final LocalTime DEFAULT_START = LocalTime.of(8, 0);
     private static final LocalTime DEFAULT_END = LocalTime.of(23, 0);
