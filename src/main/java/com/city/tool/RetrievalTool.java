@@ -21,7 +21,7 @@ import java.util.Objects;
  * RecommendationAgent / PlanningAgent 共用的受控活动检索 Tool。
  *
  * <p>模型只能提供 retrievalIntent；用户、数据源、预算、时间、排除项等硬条件来自
- * AgentScope ToolExecutionContext 注入的 VerifiedRequestContext，因此不会进入 Tool JSON Schema。
+ * AgentScope RuntimeContext 注入的 VerifiedRequestContext，因此不会进入 Tool JSON Schema。
  * CandidateEvidenceRegistry 同样由框架注入，用于限制检索次数并登记真正暴露给模型的候选。</p>
  */
 @Component
