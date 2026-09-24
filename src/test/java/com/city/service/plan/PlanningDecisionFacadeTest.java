@@ -13,6 +13,7 @@ import com.city.model.agent.PlanProposal;
 import com.city.model.agent.PlanValidationResult;
 import com.city.model.agent.PlanningAgentExecutionResult;
 import com.city.model.agent.PlanningDecision;
+import com.city.model.context.PlanningHorizon;
 import com.city.model.context.VerifiedRequestContext;
 import com.city.service.context.SemanticContextBuilder;
 import com.city.service.trace.AgentTraceService;
@@ -20,6 +21,7 @@ import com.city.service.worker.PlanningAgentWorker;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -42,10 +44,10 @@ class PlanningDecisionFacadeTest {
                 101L, SourceMode.PUBLIC, null, "双人陶艺", state.slots(),
                 null, null, null, null, 120, 0.9);
         PlanProposal proposal = new PlanProposal(List.of(
-                new PlanProposal.Item("14:00-16:00", 101L, null)));
+                new PlanProposal.Item(101L, null, start(), end())));
         PlanningDecision decision = new PlanningDecision(proposal, "下午安排互动体验", 0.9);
         PlanCandidate accepted = new PlanCandidate(
-                List.of(new PlanCandidate.Item("14:00-16:00", activity, null)), BigDecimal.ZERO);
+                List.of(new PlanCandidate.Item(activity, null, start(), end())), BigDecimal.ZERO);
         PlanningAgentExecutionResult execution = new PlanningAgentExecutionResult(
                 decision, accepted, PlanValidationResult.valid(accepted));
         DecisionResponseResult generated = new DecisionResponseResult(
@@ -61,7 +63,7 @@ class PlanningDecisionFacadeTest {
 
         DecisionResponseResult result = facade.plan(
                 "下午到晚上安排约会", "trace-1", state,
-                List.of("14:00-16:00", "18:00-20:00"),
+                horizon(),
                 WeatherRecommendationContext.inactive(), List.of());
 
         assertEquals(generated, result);
@@ -76,8 +78,22 @@ class PlanningDecisionFacadeTest {
         when(worker.execute(any(), any(), any(), any())).thenThrow(new IllegalStateException("agent failed"));
 
         assertThrows(IllegalStateException.class, () -> facade.plan(
-                "下午到晚上安排约会", "trace-1", state(), List.of("14:00-16:00"),
+                "下午到晚上安排约会", "trace-1", state(), horizon(),
                 WeatherRecommendationContext.inactive(), List.of()));
+    }
+
+    private PlanningHorizon horizon() {
+        return new PlanningHorizon(List.of(new PlanningHorizon.Range(
+                LocalDateTime.of(2026, 9, 27, 12, 0),
+                LocalDateTime.of(2026, 9, 27, 23, 0))));
+    }
+
+    private LocalDateTime start() {
+        return LocalDateTime.of(2026, 9, 27, 14, 0);
+    }
+
+    private LocalDateTime end() {
+        return LocalDateTime.of(2026, 9, 27, 16, 0);
     }
 
     private SessionState state() {
