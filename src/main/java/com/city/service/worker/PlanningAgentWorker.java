@@ -204,7 +204,8 @@ public final class PlanningAgentWorker {
                 nextPrompt = buildRepairPrompt(
                         verifiedContext,
                         currentCandidates,
-                        planningContext.notebook().snapshot()
+                        planningContext.notebook().snapshot(),
+                        repeated
                 );
             }
         } catch (RuntimeException error) {
