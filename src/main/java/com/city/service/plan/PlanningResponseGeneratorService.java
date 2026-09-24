@@ -92,12 +92,6 @@ public class PlanningResponseGeneratorService {
 
     private void appendSessionFact(StringBuilder builder, ActivitySessionResponse session) {
         if (session == null) return;
-        if (session.startAt() != null) {
-            builder.append("，场次 ").append(DATE_TIME.format(session.startAt()));
-            if (session.endAt() != null) {
-                builder.append("-").append(session.endAt().toLocalTime());
-            }
-        }
         if (session.venueName() != null && !session.venueName().isBlank()) {
             builder.append("，地点 ").append(session.venueName().trim());
         }
