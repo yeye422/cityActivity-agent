@@ -65,15 +65,18 @@ public final class DecisionEvidenceValidator {
 
     private void validateTravelEvidence(PlanCandidate plan,
                                         RunEvidenceStore evidenceStore) {
-        List<PlanCandidate.Item> concrete = plan.items().stream()
+        List<PlanCandidate.Item> ordered = plan.items().stream()
                 .filter(Objects::nonNull)
-                .filter(item -> item.session() != null && item.startAt() != null)
+                .filter(item -> item.startAt() != null)
                 .sorted(Comparator.comparing(PlanCandidate.Item::startAt))
                 .toList();
 
-        for (int i = 1; i < concrete.size(); i++) {
-            ActivitySessionResponse previous = concrete.get(i - 1).session();
-            ActivitySessionResponse next = concrete.get(i).session();
+        for (int i = 1; i < ordered.size(); i++) {
+            ActivitySessionResponse previous = ordered.get(i - 1).session();
+            ActivitySessionResponse next = ordered.get(i).session();
+            if (previous == null || next == null) {
+                continue;
+            }
             if (previous.venueId() == null || next.venueId() == null
                     || previous.venueId().equals(next.venueId())) {
                 continue;
