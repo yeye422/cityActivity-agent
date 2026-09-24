@@ -74,6 +74,14 @@ class PlanProposalValidationServiceTest {
 
         assertFalse(result.valid());
         assertEquals("MISSING_TRAVEL_EVIDENCE", result.violations().getFirst().code());
+        String repairHint = result.violations().getFirst().repairHint();
+        assertTrue(repairHint.contains("get_travel_time("));
+        assertTrue(repairHint.contains("fromPeriod=\"14:00-16:00\""));
+        assertTrue(repairHint.contains("fromActivityId=101"));
+        assertTrue(repairHint.contains("fromSessionId=1001"));
+        assertTrue(repairHint.contains("toPeriod=\"18:00-20:00\""));
+        assertTrue(repairHint.contains("toActivityId=202"));
+        assertTrue(repairHint.contains("toSessionId=2002"));
     }
 
     @Test
