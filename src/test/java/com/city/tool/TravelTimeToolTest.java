@@ -41,7 +41,7 @@ class TravelTimeToolTest {
         TravelTimeEvidence expected = new TravelTimeEvidence(11L, 22L, 35, "AMAP_DRIVING");
         when(service.resolve(from, to)).thenReturn(expected);
 
-        TravelTimeEvidence actual = new TravelTimeTool(service).getTravelTime(
+        TravelTimeEvidence actual = new TravelTimeTool(service, null).getTravelTime(
                 "AFTERNOON", 101L, 1001L,
                 "EVENING", 202L, 2002L,
                 context
@@ -59,7 +59,7 @@ class TravelTimeToolTest {
         PlanningEvidenceRegistry registry = registryWithTwoWindows();
         PlanningToolContext context = context(registry);
 
-        assertThrows(CityException.class, () -> new TravelTimeTool(service).getTravelTime(
+        assertThrows(CityException.class, () -> new TravelTimeTool(service, null).getTravelTime(
                 "AFTERNOON", 101L, 9999L,
                 "EVENING", 202L, 2002L,
                 context
