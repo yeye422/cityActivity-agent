@@ -18,6 +18,13 @@ class TimeExpressionParserTest {
     }
 
     @Test
+    void parsesAfternoonToEveningAsFullRange() {
+        var result = parser.parse("周日下午到晚上");
+        assertEquals(12, result.startTime().getHour());
+        assertEquals(23, result.endTime().getHour());
+    }
+
+    @Test
     void recognizesClearTimeRequest() {
         assertTrue(parser.clearRequested("不限时间"));
         assertFalse(parser.clearRequested("明天下午"));
