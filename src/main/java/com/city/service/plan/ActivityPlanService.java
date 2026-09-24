@@ -168,13 +168,44 @@ public class ActivityPlanService {
                                            String activityTime,
                                            TimeConstraint timeConstraint,
                                            WeatherRecommendationContext weather) {
+        return discoverWindow(
+                sourceMode, userId, baseSlots, excludedSlots,
+                activityTime, timeConstraint, weather, "", List.of());
+    }
+
+    /** PlanningAgent 的受控单窗口扩展检索；硬约束仍由服务器固定。 */
+    public PlannedActivity expandWindow(SourceMode sourceMode,
+                                        Long userId,
+                                        SlotBundle baseSlots,
+                                        SlotBundle excludedSlots,
+                                        String activityTime,
+                                        TimeConstraint timeConstraint,
+                                        WeatherRecommendationContext weather,
+                                        String retrievalIntent,
+                                        List<Long> excludeActivityIds) {
+        return discoverWindow(
+                sourceMode, userId, baseSlots, excludedSlots,
+                activityTime, timeConstraint, weather,
+                retrievalIntent == null ? "" : retrievalIntent.trim(),
+                excludeActivityIds == null ? List.of() : List.copyOf(excludeActivityIds));
+    }
+
+    private PlannedActivity discoverWindow(SourceMode sourceMode,
+                                           Long userId,
+                                           SlotBundle baseSlots,
+                                           SlotBundle excludedSlots,
+                                           String activityTime,
+                                           TimeConstraint timeConstraint,
+                                           WeatherRecommendationContext weather,
+                                           String retrievalIntent,
+                                           List<Long> excludeActivityIds) {
         SlotBundle querySlots = slotsForActivityTime(baseSlots, activityTime);
         TimeConstraint targetTimeConstraint = timeConstraintForActivityTime(timeConstraint, activityTime);
         ActivitySearchRequest request = new ActivitySearchRequest(
-                sourceMode, userId, querySlots, List.of(), targetTimeConstraint, excludedSlots);
+                sourceMode, userId, querySlots, excludeActivityIds, targetTimeConstraint, excludedSlots);
         RetrievalResult retrieval = retrievalPipeline.retrieve(new RetrievalRequest(
                 request,
-                "",
+                retrievalIntent,
                 weather,
                 PLAN_CANDIDATE_LIMIT));
         List<ActivityItem> topCandidates = retrieval.finalCandidates();
