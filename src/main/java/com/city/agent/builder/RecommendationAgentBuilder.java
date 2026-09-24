@@ -2,13 +2,11 @@ package com.city.agent.builder;
 
 import com.city.agent.loader.PromptLoader;
 import com.city.model.context.VerifiedRequestContext;
-import com.city.service.evidence.CandidateEvidenceRegistry;
 import com.city.service.harness.AgentBusinessGuardMiddleware;
 import com.city.service.trace.AgentTraceService;
 import com.city.tool.RetrievalTool;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.model.Model;
-import io.agentscope.core.tool.ToolExecutionContext;
 import io.agentscope.core.tool.Toolkit;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -47,18 +45,11 @@ public class RecommendationAgentBuilder {
         this.traceService = traceService;
     }
 
-    public ReActAgent build(VerifiedRequestContext verifiedContext,
-                            CandidateEvidenceRegistry evidenceRegistry) {
+    public ReActAgent build(VerifiedRequestContext verifiedContext) {
         Objects.requireNonNull(verifiedContext, "verifiedContext");
-        Objects.requireNonNull(evidenceRegistry, "evidenceRegistry");
 
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(retrievalTool);
-
-        ToolExecutionContext toolContext = ToolExecutionContext.builder()
-                .register(verifiedContext)
-                .register(evidenceRegistry)
-                .build();
 
         AgentBusinessGuardMiddleware guardMiddleware = new AgentBusinessGuardMiddleware(
                 "city_recommendation_agent",
@@ -74,7 +65,6 @@ public class RecommendationAgentBuilder {
                 .model(mainModel)
                 .sysPrompt(promptLoader.load("city-prompts/recommendation-decision.txt"))
                 .toolkit(toolkit)
-                .toolExecutionContext(toolContext)
                 .middleware(guardMiddleware)
                 .maxIters(4)
                 .build();
