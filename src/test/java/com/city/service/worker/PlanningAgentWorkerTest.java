@@ -7,7 +7,6 @@ import com.city.model.agent.PlanProposal;
 import com.city.model.agent.PlanValidationResult;
 import com.city.model.agent.PlanningDecision;
 import com.city.model.context.PlanningToolContext;
-import com.city.service.plan.PlanProposalValidationService;
 import com.city.service.plan.PlanningConstraintParser;
 import com.city.service.trace.AgentTraceService;
 import com.city.tool.PlanValidationTool;
@@ -90,7 +89,6 @@ class PlanningAgentWorkerTest {
         return new PlanningAgentWorker(
                 mock(PlanningAgentBuilder.class),
                 mock(PlanningConstraintParser.class),
-                mock(PlanProposalValidationService.class),
                 validationTool,
                 mock(PlanningDiscoveryTool.class),
                 mock(TravelTimeTool.class),
