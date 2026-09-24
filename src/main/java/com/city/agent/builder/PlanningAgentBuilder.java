@@ -8,6 +8,7 @@ import com.city.tool.ActivityDetailsTool;
 import com.city.tool.PlanningCandidateExpansionTool;
 import com.city.tool.RecentActivityHistoryTool;
 import com.city.tool.UserPreferenceLookupTool;
+import com.city.tool.TravelTimeTool;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.tool.Toolkit;
@@ -32,6 +33,7 @@ public class PlanningAgentBuilder {
     private final ActivityDetailsTool activityDetailsTool;
     private final UserPreferenceLookupTool preferenceLookupTool;
     private final RecentActivityHistoryTool recentHistoryTool;
+    private final TravelTimeTool travelTimeTool;
     private final AgentTraceService traceService;
 
     public PlanningAgentBuilder(
@@ -41,6 +43,7 @@ public class PlanningAgentBuilder {
             ActivityDetailsTool activityDetailsTool,
             UserPreferenceLookupTool preferenceLookupTool,
             RecentActivityHistoryTool recentHistoryTool,
+            TravelTimeTool travelTimeTool,
             AgentTraceService traceService
     ) {
         this.mainModel = Objects.requireNonNull(mainModel, "mainModel");
@@ -49,6 +52,7 @@ public class PlanningAgentBuilder {
         this.activityDetailsTool = Objects.requireNonNull(activityDetailsTool, "activityDetailsTool");
         this.preferenceLookupTool = Objects.requireNonNull(preferenceLookupTool, "preferenceLookupTool");
         this.recentHistoryTool = Objects.requireNonNull(recentHistoryTool, "recentHistoryTool");
+        this.travelTimeTool = Objects.requireNonNull(travelTimeTool, "travelTimeTool");
         this.traceService = traceService;
     }
 
@@ -60,6 +64,7 @@ public class PlanningAgentBuilder {
         toolkit.registerTool(activityDetailsTool);
         toolkit.registerTool(preferenceLookupTool);
         toolkit.registerTool(recentHistoryTool);
+        toolkit.registerTool(travelTimeTool);
 
         AgentBusinessGuardMiddleware guard = new AgentBusinessGuardMiddleware(
                 "city_planning_agent",
@@ -67,7 +72,8 @@ public class PlanningAgentBuilder {
                         "expand_plan_candidates",
                         "inspect_activity_details",
                         "lookup_user_preferences",
-                        "lookup_recent_activity_history"
+                        "lookup_recent_activity_history",
+                        "get_travel_time"
                 ),
                 8,
                 3,
