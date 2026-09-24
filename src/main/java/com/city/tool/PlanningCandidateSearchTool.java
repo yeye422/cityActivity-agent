@@ -15,7 +15,6 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -60,9 +59,8 @@ public class PlanningCandidateSearchTool {
         planning.evidenceRegistry().beginDiscovery();
         VerifiedRequestContext verified = planning.verifiedRequestContext();
 
-        LinkedHashSet<Long> exclusions = new LinkedHashSet<>(
+        List<Long> exclusions = new ArrayList<>(
                 verified.hardConstraints().excludedActivityIds());
-        exclusions.addAll(planning.evidenceRegistry().exposedActivityIds());
 
         ActivityPlanService.CandidateBatch batch = activityPlanService.discoverRange(
                 verified.sourceMode(),
@@ -72,7 +70,7 @@ public class PlanningCandidateSearchTool {
                 requested,
                 verified.weather(),
                 retrievalIntent,
-                new ArrayList<>(exclusions)
+                exclusions
         );
 
         planning.evidenceRegistry().record(List.of(batch));
