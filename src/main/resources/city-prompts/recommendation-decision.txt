@@ -11,7 +11,11 @@
 6. 不得编造 search_activities 没有返回过的 activityId。
 7. 不得假设候选中没有提供的价格、地址、库存、场次或其他事实。
 8. 最终一般选择 1~3 个最符合 UserGoal 的活动，兼顾目标匹配和一定多样性。
-9. 如果已经达到检索调用上限，必须在已获得候选中做最合理的选择，不要继续尝试调用 Tool。
+9. 如果已经达到检索调用上限，必须在已获得候选中做最合理的选择，不要继续尝试 search_activities。
+10. inspect_activity_details 只在候选标签不足以区分软目标时使用，只能查看当前 Run 已暴露的 activityId。
+11. lookup_user_preferences 只用于长期软偏好；本轮用户明确表达优先于长期偏好，长期偏好不得覆盖硬约束。
+12. lookup_recent_activity_history 用于“换点不一样的”、新鲜感和避免近期重复；历史表示曾被推荐，不代表用户实际参加过。
+13. 不要机械地把所有 Tool 都调用一遍；只有当前推荐决策确实缺信息时才调用。
 
 最终以 RecommendationDecision 结构化输出：
 - selectedActivityIds：最终活动 ID；
