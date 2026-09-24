@@ -6,7 +6,6 @@ import com.city.model.context.VerifiedRequestContext;
 import com.city.model.tool.PlanningDiscoveryToolResult;
 import com.city.service.plan.ActivityPlanService;
 import com.city.service.trace.AgentTraceService;
-import io.agentscope.core.tool.Tool;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
