@@ -8,6 +8,7 @@ import com.city.model.agent.PlanningDecision;
 import com.city.model.agent.PlanValidationResult;
 import com.city.model.context.PlanningToolContext;
 import com.city.model.context.VerifiedRequestContext;
+import com.city.model.tool.PlanningDiscoveryToolResult;
 import com.city.service.evidence.DecisionEvidenceValidator;
 import com.city.service.evidence.PlanningEvidenceRegistry;
 import com.city.service.evidence.RunEvidenceStore;
@@ -15,6 +16,7 @@ import com.city.service.plan.PlanProposalValidationService;
 import com.city.service.plan.PlanningConstraintParser;
 import com.city.service.trace.AgentTraceService;
 import com.city.tool.PlanValidationTool;
+import com.city.tool.PlanningDiscoveryTool;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
@@ -35,6 +37,7 @@ public final class PlanningAgentWorker {
     private final PlanningConstraintParser constraintParser;
     private final PlanProposalValidationService validationService;
     private final PlanValidationTool validationTool;
+    private final PlanningDiscoveryTool discoveryTool;
     private final DecisionEvidenceValidator evidenceValidator = new DecisionEvidenceValidator();
     private final AgentTraceService traceService;
 
@@ -50,8 +53,20 @@ public final class PlanningAgentWorker {
                 constraintParser,
                 validationService,
                 new PlanValidationTool(validationService, traceService),
+                null,
                 traceService
         );
+    }
+
+    /** 保留测试/旧构造入口；生产环境由包含 discoveryTool 的构造器注入。 */
+    public PlanningAgentWorker(
+            PlanningAgentBuilder agentBuilder,
+            PlanningConstraintParser constraintParser,
+            PlanProposalValidationService validationService,
+            PlanValidationTool validationTool,
+            AgentTraceService traceService
+    ) {
+        this(agentBuilder, constraintParser, validationService, validationTool, null, traceService);
     }
 
     @Autowired
@@ -60,12 +75,14 @@ public final class PlanningAgentWorker {
             PlanningConstraintParser constraintParser,
             PlanProposalValidationService validationService,
             PlanValidationTool validationTool,
+            PlanningDiscoveryTool discoveryTool,
             AgentTraceService traceService
     ) {
         this.agentBuilder = Objects.requireNonNull(agentBuilder, "agentBuilder");
         this.constraintParser = Objects.requireNonNull(constraintParser, "constraintParser");
         this.validationService = Objects.requireNonNull(validationService, "validationService");
         this.validationTool = Objects.requireNonNull(validationTool, "validationTool");
+        this.discoveryTool = discoveryTool;
         this.traceService = Objects.requireNonNull(traceService, "traceService");
     }
 
@@ -91,6 +108,14 @@ public final class PlanningAgentWorker {
                 maxBudget,
                 safeTravel
         );
+        /*
+         * 先由服务器确定性执行一次 discovery，把候选与 Evidence/Notebook 绑定到当前 Run。
+         * 这不是旧 Worker fallback：PlanningAgent 仍负责选择/组合，Solver 仍负责最终合法性。
+         * 预加载只消除“模型第一步 discovery 后上下文丢失/直接 structured response”的不稳定性。
+         */
+        PlanningDiscoveryToolResult preloadedCandidates = discoveryTool == null
+                ? null
+                : discoveryTool.discover(planningContext);
         ReActAgent agent = agentBuilder.build(planningContext);
 
         traceService.recordEvent(
@@ -104,22 +129,40 @@ public final class PlanningAgentWorker {
             Msg response = agent.call(
                     Msg.builder()
                             .role(MsgRole.USER)
-                            .textContent(buildPrompt(userInput, verifiedContext, safeWindows))
+                            .textContent(buildPrompt(userInput, verifiedContext, safeWindows, preloadedCandidates))
                             .build(),
                     PlanningDecision.class
             ).block();
-            if (response == null) {
-                throw new IllegalStateException("PlanningAgent 返回为空");
-            }
-            PlanningDecision decision = response.getStructuredData(PlanningDecision.class);
+            PlanningDecision decision = structuredDecision(response);
 
             /*
-             * AgentScope 的 generate_response 是框架级结构化输出 Tool，不能在 Hook 中通过抛异常阻止，
-             * 否则会直接终止整个 ReAct。若模型提前提交最终 PlanningDecision，则在 Worker 边界使用
-             * 同一个 validate_plan Tool 对最终 proposal 做确定性补验。这样无论模型是否显式执行最后
-             * 一次 Tool 调用，进入业务响应的方案都必须经过同一套 Evidence/Solver/Trace 路径。
+             * AgentScope 的 generate_response 是框架级结构化输出 Tool，不能在 Hook 中通过抛异常阻止。
+             * 若模型提前提交 proposal，则在 Worker 边界使用同一个 validate_plan Tool 补验。
+             * 第一次补验为 invalid 时，把 violations/notebook 显式反馈给同一个 Agent，再允许一次
+             * repair -> revalidate；只有最终 validated 的 proposal 才能进入业务响应。
              */
-            ensureToolValidated(decision, planningContext);
+            try {
+                ensureToolValidated(decision, planningContext);
+            } catch (IllegalStateException firstValidationError) {
+                if (planningContext.notebook().status() != PlanNotebook.Status.REPAIR_REQUIRED) {
+                    throw firstValidationError;
+                }
+                traceService.recordEvent(
+                        "PLANNING_AGENT_REPAIR_REQUESTED",
+                        "AGENT",
+                        planningContext.notebook().snapshot(),
+                        java.util.Map.of("reason", firstValidationError.getMessage())
+                );
+                Msg repairedResponse = agent.call(
+                        Msg.builder()
+                                .role(MsgRole.USER)
+                                .textContent(buildRepairPrompt(planningContext))
+                                .build(),
+                        PlanningDecision.class
+                ).block();
+                decision = structuredDecision(repairedResponse);
+                ensureToolValidated(decision, planningContext);
+            }
 
             PlanValidationResult finalValidation = validationService.validate(
                     decision.plan(),
@@ -181,25 +224,52 @@ public final class PlanningAgentWorker {
         }
     }
 
+    private PlanningDecision structuredDecision(Msg response) {
+        if (response == null) {
+            throw new IllegalStateException("PlanningAgent 返回为空");
+        }
+        PlanningDecision decision = response.getStructuredData(PlanningDecision.class);
+        if (decision == null) {
+            throw new IllegalStateException("PlanningAgent 未返回结构化 PlanningDecision");
+        }
+        return decision;
+    }
+
     private String buildPrompt(String userInput,
                                VerifiedRequestContext verifiedContext,
-                               List<String> windows) {
+                               List<String> windows,
+                               PlanningDiscoveryToolResult preloadedCandidates) {
         return """
                 用户原话：%s
                 UserGoal：%s
                 规划窗口：%s
                 当前已生效槽位：%s
                 服务器硬约束摘要：%s
+                服务器已预加载候选快照：%s
 
-                请先调用 discover_plan_candidates 获取真实活动和 OPEN 场次。
-                当方案包含不同 venueId 的连续场次时，先调用 get_travel_time 获取对应场次间的真实路线时长证据，
-                再调用 validate_plan。若校验失败，根据 violations 定向修改冲突窗口；只有 valid 后才能输出最终 PlanningDecision。
+                候选已经由服务器通过 discover_plan_candidates 绑定到当前 Run Evidence。
+                只从上面的真实 activityId/sessionId 中选择；如确有必要可再次调用 discover_plan_candidates 刷新。
+                当方案包含不同 venueId 的连续场次时，必须先调用 get_travel_time 获取对应场次间的真实路线时长证据。
+                然后必须调用 validate_plan；若返回 invalid，依据 violations/repairHint 修改冲突窗口并再次 validate_plan。
+                只有最近一次 validate_plan 为 valid 时才能输出最终 PlanningDecision，最终 plan 必须与该 valid proposal 一致。
                 """.formatted(
                 userInput == null ? "" : userInput.trim(),
                 verifiedContext.userGoal(),
                 windows,
                 verifiedContext.effectiveSlots(),
-                verifiedContext.hardConstraints()
+                verifiedContext.hardConstraints(),
+                preloadedCandidates == null ? "未预加载，请先调用 discover_plan_candidates" : preloadedCandidates
         );
+    }
+
+    private String buildRepairPrompt(PlanningToolContext planningContext) {
+        return """
+                上一个 proposal 没有通过服务器 validate_plan。
+                当前 Notebook：%s
+
+                请严格根据 latestViolations/repairHint 只修改冲突窗口。
+                如新的连续场次跨 venueId，先调用 get_travel_time 补齐路线证据。
+                修改后必须再次调用 validate_plan；只有 valid 后才能输出新的 PlanningDecision。
+                """.formatted(planningContext.notebook().snapshot());
     }
 }
