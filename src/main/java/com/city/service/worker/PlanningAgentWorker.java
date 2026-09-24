@@ -1,6 +1,7 @@
 package com.city.service.worker;
 
 import com.city.agent.builder.PlanningAgentBuilder;
+import com.city.enums.DegradationReason;
 import com.city.model.ActivitySessionResponse;
 import com.city.model.TravelTimeEvidence;
 import com.city.model.agent.PlanNotebook;
@@ -15,6 +16,7 @@ import com.city.model.tool.PlanningDiscoveryToolResult;
 import com.city.service.evidence.DecisionEvidenceValidator;
 import com.city.service.evidence.PlanningEvidenceRegistry;
 import com.city.service.evidence.RunEvidenceStore;
+import com.city.service.harness.AgentExecutionHarness;
 import com.city.service.plan.PlanningConstraintParser;
 import com.city.service.trace.AgentTraceService;
 import com.city.tool.PlanValidationTool;
@@ -29,15 +31,24 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
- * PlanningAgent 的执行边界。不写 SessionState；Agent 负责活动与具体场次选择，
- * Java 强制执行候选事实、路线事实、validate_plan 与 Evidence Gate。
+ * PlanningAgent 的单 Agent 执行边界。
+ *
+ * <p>同一个 Agent 负责按需调用探索 Tool、选择 activity/session、提交 PlanningDecision，
+ * 并根据 Java validate_plan 返回的 violations 持续修复。Java 只负责事实补齐、硬约束校验和
+ * Evidence Gate，不替 Agent 枚举或选择活动/场次。</p>
  */
 @Component
 public final class PlanningAgentWorker {
+
+    /** 只用于防失控，不代表业务固定修复轮数。 */
+    private static final int MAX_AGENT_RESPONSE_ATTEMPTS = 8;
+    private static final int REPEATED_INVALID_PROPOSAL_THRESHOLD = 3;
 
     private final PlanningAgentBuilder agentBuilder;
     private final PlanningConstraintParser constraintParser;
@@ -71,7 +82,8 @@ public final class PlanningAgentWorker {
     ) {
         Objects.requireNonNull(verifiedContext, "verifiedContext");
         List<String> safeWindows = windows == null ? List.of() : List.copyOf(windows);
-        List<TravelTimeEvidence> safeTravel = travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
+        List<TravelTimeEvidence> safeTravel =
+                travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
 
         RunEvidenceStore evidenceStore = new RunEvidenceStore(verifiedContext.traceId());
         safeTravel.forEach(evidenceStore::recordTravelEvidence);
@@ -87,95 +99,106 @@ public final class PlanningAgentWorker {
                 safeTravel
         );
 
-        // 候选发现是事实获取边界，必须在 Agent 决策前发生。
-        PlanningDiscoveryToolResult preloadedCandidates = discoveryTool.discover(planningContext);
+        // 首次候选发现是事实边界，PlanningAgent 不能跳过。
+        PlanningDiscoveryToolResult initialCandidates = discoveryTool.discover(planningContext);
 
-        AgentDecisionToolContext decisionToolContext = AgentDecisionToolContext.planning(planningContext);
-        RuntimeContext explorerRuntime = RuntimeContext.builder()
+        AgentDecisionToolContext decisionToolContext =
+                AgentDecisionToolContext.planning(planningContext);
+        RuntimeContext runtimeContext = RuntimeContext.builder()
                 .userId(String.valueOf(verifiedContext.userId()))
                 .sessionId(verifiedContext.sessionId())
                 .put(AgentDecisionToolContext.class, decisionToolContext)
                 .build();
-        RuntimeContext finalizerRuntime = RuntimeContext.builder()
-                .userId(String.valueOf(verifiedContext.userId()))
-                .sessionId(verifiedContext.sessionId())
-                .build();
+
+        ReActAgent agent = agentBuilder.build(planningContext);
+        Map<String, Integer> invalidProposalSignatures = new HashMap<>();
 
         traceService.recordEvent(
                 "PLANNING_AGENT_STARTED",
                 "AGENT",
                 verifiedContext.userGoal(),
-                java.util.Map.of("windows", safeWindows)
+                Map.of("windows", safeWindows)
         );
 
         try {
-            String explorationNotes = explore(
-                    agentBuilder.buildExplorer(planningContext),
-                    buildExplorationPrompt(userInput, verifiedContext, safeWindows, preloadedCandidates),
-                    explorerRuntime,
-                    verifiedContext
-            );
-            PlanningDiscoveryToolResult enrichedCandidates =
-                    PlanningDiscoveryToolResult.from(evidenceRegistry.windows());
-
-            ReActAgent finalizer = agentBuilder.buildFinalizer();
-            PlanningDecision decision = callDecision(
-                    finalizer,
-                    buildPrompt(
-                            userInput,
-                            verifiedContext,
-                            safeWindows,
-                            enrichedCandidates,
-                            explorationNotes
-                    ),
-                    finalizerRuntime
+            String nextPrompt = buildInitialPrompt(
+                    userInput,
+                    verifiedContext,
+                    safeWindows,
+                    initialCandidates
             );
 
-            PlanValidationResult finalValidation;
-            try {
-                finalValidation = validateWithServerFacts(decision, planningContext);
-            } catch (IllegalStateException firstValidationError) {
-                if (planningContext.notebook().status() != PlanNotebook.Status.REPAIR_REQUIRED) {
-                    throw firstValidationError;
+            for (int responseAttempt = 1; ; responseAttempt++) {
+                if (responseAttempt > MAX_AGENT_RESPONSE_ATTEMPTS) {
+                    throw new AgentExecutionHarness.AgentHarnessException(
+                            "PlanningAgent 已达到单轮响应安全预算上限",
+                            DegradationReason.CALL_BUDGET_EXCEEDED
+                    );
                 }
+
+                PlanningDecision decision = callDecision(agent, nextPrompt, runtimeContext);
+
+                // Agent 已选择精确 session；Java 只根据这些引用补齐真实路线事实。
+                ensureTravelEvidence(decision.plan(), planningContext);
+
+                PlanValidationResult validation =
+                        validationTool.validate(decision.plan(), planningContext);
+
+                if (validation.valid() && validation.acceptedPlan() != null) {
+                    evidenceValidator.validatePlan(validation.acceptedPlan(), evidenceStore);
+                    PlanningAgentExecutionResult result = new PlanningAgentExecutionResult(
+                            decision,
+                            validation.acceptedPlan(),
+                            validation
+                    );
+                    traceService.recordEvent(
+                            "PLANNING_AGENT_DECIDED",
+                            "AGENT",
+                            Map.of(
+                                    "responseAttempts", responseAttempt,
+                                    "periods", evidenceRegistry.periods(),
+                                    "travelEvidence", planningContext.allTravelTimeEvidence(),
+                                    "evidence", evidenceStore.snapshot(),
+                                    "notebook", planningContext.notebook().snapshot()
+                            ),
+                            result
+                    );
+                    return result;
+                }
+
+                String signature = proposalSignature(decision.plan());
+                int repeated = invalidProposalSignatures.merge(signature, 1, Integer::sum);
+                if (repeated >= REPEATED_INVALID_PROPOSAL_THRESHOLD) {
+                    throw new AgentExecutionHarness.AgentHarnessException(
+                            "PlanningAgent 连续提交重复的无效方案，已停止修复循环",
+                            DegradationReason.LOOP_DETECTED
+                    );
+                }
+
+                PlanningDiscoveryToolResult currentCandidates =
+                        PlanningDiscoveryToolResult.from(evidenceRegistry.windows());
                 traceService.recordEvent(
                         "PLANNING_AGENT_REPAIR_REQUESTED",
                         "AGENT",
-                        planningContext.notebook().snapshot(),
-                        java.util.Map.of("reason", firstValidationError.getMessage())
+                        Map.of(
+                                "responseAttempt", responseAttempt,
+                                "violations", validation.violations(),
+                                "notebook", planningContext.notebook().snapshot()
+                        ),
+                        decision
                 );
 
-                decision = callDecision(
-                        finalizer,
-                        buildRepairPrompt(planningContext, enrichedCandidates, explorationNotes),
-                        finalizerRuntime
+                nextPrompt = buildRepairPrompt(
+                        verifiedContext,
+                        currentCandidates,
+                        planningContext.notebook().snapshot()
                 );
-                finalValidation = validateWithServerFacts(decision, planningContext);
             }
-
-            evidenceValidator.validatePlan(finalValidation.acceptedPlan(), evidenceStore);
-            PlanningAgentExecutionResult result = new PlanningAgentExecutionResult(
-                    decision,
-                    finalValidation.acceptedPlan(),
-                    finalValidation
-            );
-            traceService.recordEvent(
-                    "PLANNING_AGENT_DECIDED",
-                    "AGENT",
-                    java.util.Map.of(
-                            "periods", evidenceRegistry.periods(),
-                            "travelEvidence", planningContext.allTravelTimeEvidence(),
-                            "evidence", evidenceStore.snapshot(),
-                            "notebook", planningContext.notebook().snapshot()
-                    ),
-                    result
-            );
-            return result;
         } catch (RuntimeException error) {
             traceService.recordError(
                     "PLANNING_AGENT_FAILED",
                     "AGENT",
-                    java.util.Map.of(
+                    Map.of(
                             "windows", safeWindows,
                             "exposedActivityIds", evidenceRegistry.exposedActivityIds(),
                             "travelEvidence", planningContext.allTravelTimeEvidence(),
@@ -188,9 +211,11 @@ public final class PlanningAgentWorker {
         }
     }
 
-    private PlanningDecision callDecision(ReActAgent agent,
-                                          String prompt,
-                                          RuntimeContext runtimeContext) {
+    private PlanningDecision callDecision(
+            ReActAgent agent,
+            String prompt,
+            RuntimeContext runtimeContext
+    ) {
         Msg response = agent.call(
                 List.of(
                         Msg.builder()
@@ -206,7 +231,7 @@ public final class PlanningAgentWorker {
 
     /**
      * 根据 Agent 已选场次确定性补齐相邻跨场地路线证据。
-     * Agent 不决定是否查询路线；Java 根据 proposal 的真实 venueId 自动执行。
+     * Java 不选择 session，只查询 Agent 已选择 session 之间的真实路线。
      */
     void ensureTravelEvidence(PlanProposal proposal, PlanningToolContext planningContext) {
         Objects.requireNonNull(proposal, "proposal");
@@ -221,25 +246,25 @@ public final class PlanningAgentWorker {
             selected.add(new SelectedSession(item.period(), item.activityId(), session));
         }
         selected.sort(Comparator.comparing(item -> item.session().startAt()));
-        ensureTravelEvidence(selected, planningContext);
-    }
 
-    private PlanValidationResult validateWithServerFacts(
-            PlanningDecision decision,
-            PlanningToolContext planningContext
-    ) {
-        Objects.requireNonNull(decision, "decision");
-        Objects.requireNonNull(planningContext, "planningContext");
+        for (int i = 1; i < selected.size(); i++) {
+            SelectedSession from = selected.get(i - 1);
+            SelectedSession to = selected.get(i);
+            Long fromVenue = from.session().venueId();
+            Long toVenue = to.session().venueId();
+            if (fromVenue == null || toVenue == null || fromVenue.equals(toVenue)) continue;
+            if (hasTravelEvidence(fromVenue, toVenue, planningContext.allTravelTimeEvidence())) continue;
 
-        // Agent 已经明确选择真实 session；Java 只根据这些精确引用补齐路线事实。
-        ensureTravelEvidence(decision.plan(), planningContext);
-
-        PlanValidationResult result = validationTool.validate(decision.plan(), planningContext);
-        if (!result.valid() || result.acceptedPlan() == null) {
-            throw new IllegalStateException(
-                    "PlanningAgent 精确方案校验失败: " + result.violations());
+            travelTimeTool.getTravelTime(
+                    from.period(),
+                    from.activityId(),
+                    from.session().sessionId(),
+                    to.period(),
+                    to.activityId(),
+                    to.session().sessionId(),
+                    planningContext
+            );
         }
-        return result;
     }
 
     /** package-private：回归测试 Java 强制 validate_plan 边界。 */
@@ -255,9 +280,11 @@ public final class PlanningAgentWorker {
         }
     }
 
-    private boolean hasTravelEvidence(Long fromVenueId,
-                                      Long toVenueId,
-                                      List<TravelTimeEvidence> evidence) {
+    private boolean hasTravelEvidence(
+            Long fromVenueId,
+            Long toVenueId,
+            List<TravelTimeEvidence> evidence
+    ) {
         return evidence.stream().anyMatch(item -> item != null
                 && fromVenueId.equals(item.fromVenueId())
                 && toVenueId.equals(item.toVenueId()));
@@ -274,105 +301,73 @@ public final class PlanningAgentWorker {
         return decision;
     }
 
-    private String buildExplorationPrompt(String userInput,
-                                          VerifiedRequestContext verifiedContext,
-                                          List<String> windows,
-                                          PlanningDiscoveryToolResult preloadedCandidates) {
-        return """
-                用户原话：%s
-                UserGoal：%s
-                规划窗口：%s
-                当前已生效槽位：%s
-                首轮已验证候选：%s
-
-                判断这些候选是否足以支持 UserGoal。
-                只有确有信息缺口时才调用 Tool；完成后给 Finalizer 一段简短探索摘要。
-                """.formatted(
-                userInput == null ? "" : userInput.trim(),
-                verifiedContext.userGoal(),
-                windows,
-                verifiedContext.effectiveSlots(),
-                preloadedCandidates
-        );
-    }
-
-    private String explore(ReActAgent explorer,
-                           String prompt,
-                           RuntimeContext runtimeContext,
-                           VerifiedRequestContext verifiedContext) {
-        try {
-            Msg response = explorer.call(
-                    List.of(
-                            Msg.builder()
-                                    .role(MsgRole.USER)
-                                    .textContent(prompt)
-                                    .build()
-                    ),
-                    runtimeContext
-            ).block();
-            String notes = response == null ? "" : response.getTextContent();
-            return notes == null ? "" : notes.trim();
-        } catch (RuntimeException error) {
-            traceService.recordError(
-                    "PLANNING_EXPLORATION_DEGRADED",
-                    "AGENT",
-                    java.util.Map.of("userGoal", verifiedContext.userGoal()),
-                    error
-            );
-            return "";
-        }
-    }
-
-    private String buildPrompt(String userInput,
-                               VerifiedRequestContext verifiedContext,
-                               List<String> windows,
-                               PlanningDiscoveryToolResult candidates,
-                               String explorationNotes) {
+    private String buildInitialPrompt(
+            String userInput,
+            VerifiedRequestContext context,
+            List<String> windows,
+            PlanningDiscoveryToolResult initialCandidates
+    ) {
         return """
                 用户原话：%s
                 UserGoal：%s
                 规划窗口：%s
                 当前已生效槽位：%s
                 服务器硬约束摘要：%s
-                Explorer 后的完整已验证候选快照：%s
-                Explorer 摘要：%s
+                首轮已验证候选：%s
 
-                你只负责在上述真实候选中做软目标组合。
-                Explorer 摘要只提供软决策参考，事实以候选快照为准。
-                每个 PlanProposal.Item 只能引用候选快照中已经存在的 period/activityId/sessionId。
-                某 activity 只要暴露了具体 sessions，就必须由你明确选择其中一个真实 OPEN sessionId。
-                Java 不会替你枚举或选择 session，只会补齐必要路线证据并强制执行 validate_plan。
-                请直接提交完整 PlanningDecision，不要输出空 plan。
+                这是本轮规划的首次提案。
+                你可以按需调用已注册的探索 Tool 补充候选、活动详情、长期偏好或近期推荐历史。
+                信息足够后直接提交完整 PlanningDecision。
+                每个 item 必须引用当前 Run 已暴露的真实 period/activityId/sessionId。
+                如果 activity 暴露了具体 sessions，必须由你明确选择一个真实 OPEN sessionId。
                 """.formatted(
                 userInput == null ? "" : userInput.trim(),
-                verifiedContext.userGoal(),
+                context.userGoal(),
                 windows,
-                verifiedContext.effectiveSlots(),
-                verifiedContext.hardConstraints(),
-                candidates,
-                explorationNotes == null ? "" : explorationNotes
+                context.effectiveSlots(),
+                context.hardConstraints(),
+                initialCandidates
         );
     }
 
-    private String buildRepairPrompt(PlanningToolContext planningContext,
-                                     PlanningDiscoveryToolResult candidates,
-                                     String explorationNotes) {
+    private String buildRepairPrompt(
+            VerifiedRequestContext context,
+            PlanningDiscoveryToolResult currentCandidates,
+            PlanNotebook.Snapshot notebook
+    ) {
         return """
-                上一个 proposal 没有通过服务器 validate_plan。
-                当前 Notebook：%s
-                当前完整候选快照：%s
-                Explorer 摘要：%s
+                上一个 PlanningDecision 没有通过服务器校验，需要继续修复。
 
-                请严格根据 latestViolations/repairHint 修改冲突窗口，并重新提交完整 PlanningDecision。
-                只能引用当前已验证候选中的 period/activityId/sessionId。
-                如果 violation 指向 session，必须由你改选另一个真实 sessionId；Java 不替你选择。
-                路线证据和 validate_plan 均由服务器自动执行。
-                不要返回空 plan，也不要原样重复上一个已拒绝 proposal。
+                UserGoal：%s
+                当前完整已验证候选：%s
+                校验状态：%s
+                上一方案：%s
+                violations：%s
+
+                请逐条处理 violations 中的 message 和 repairHint。
+                你仍然可以按需调用已注册 Tool 获取补充信息或扩展候选。
+                必须由你重新选择 activity/session；Java 不会替你枚举或选择。
+                修复后重新提交完整 PlanningDecision。
+                不要原样重复上一份无效方案。
                 """.formatted(
-                planningContext.notebook().snapshot(),
-                candidates,
-                explorationNotes == null ? "" : explorationNotes
+                context.userGoal(),
+                currentCandidates,
+                notebook.status(),
+                notebook.latestProposal(),
+                notebook.latestViolations()
         );
+    }
+
+    private String proposalSignature(PlanProposal proposal) {
+        if (proposal == null || proposal.items() == null) return "<null>";
+        return proposal.items().stream()
+                .filter(Objects::nonNull)
+                .map(item -> String.valueOf(item.period())
+                        + ":" + item.activityId()
+                        + ":" + item.sessionId())
+                .sorted()
+                .reduce((left, right) -> left + "|" + right)
+                .orElse("<empty>");
     }
 
     private record SelectedSession(
