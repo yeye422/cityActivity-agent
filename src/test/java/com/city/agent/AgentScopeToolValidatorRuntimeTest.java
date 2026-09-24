@@ -13,6 +13,7 @@ import io.agentscope.core.util.JsonUtils;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -62,7 +63,11 @@ class AgentScopeToolValidatorRuntimeTest {
                 0.9
         );
         PlanValidationResult result = PlanValidationResult.valid(new PlanCandidate(
-                List.of(new PlanCandidate.Item("morning", activity, null)),
+                List.of(new PlanCandidate.Item(
+                        activity,
+                        null,
+                        LocalDateTime.of(2026, 9, 27, 9, 0),
+                        LocalDateTime.of(2026, 9, 27, 10, 30))),
                 BigDecimal.ZERO
         ));
 
@@ -81,7 +86,6 @@ class AgentScopeToolValidatorRuntimeTest {
         Map<String, Object> raw = Map.of(
                 "plan", Map.of(
                         "items", List.of(Map.of(
-                                "period", "AFTERNOON",
                                 "activityId", 101L,
                                 "sessionId", 1001L
                         ))
