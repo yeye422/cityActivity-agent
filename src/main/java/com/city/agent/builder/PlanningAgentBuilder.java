@@ -63,7 +63,6 @@ public class PlanningAgentBuilder {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(discoveryTool);
         toolkit.registerTool(travelTimeTool);
-        toolkit.registerTool(validationTool);
 
         ToolExecutionContext toolContext = ToolExecutionContext.builder()
                 .register(planningContext)
@@ -71,7 +70,7 @@ public class PlanningAgentBuilder {
 
         AgentBusinessGuardMiddleware guardMiddleware = new AgentBusinessGuardMiddleware(
                 "city_planning_agent",
-                Set.of("discover_plan_candidates", "get_travel_time", "validate_plan"),
+                Set.of("discover_plan_candidates", "get_travel_time"),
                 10,
                 3,
                 traceService,
