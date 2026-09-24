@@ -4,8 +4,8 @@ import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * 经过 Java PlanningSolver 校验后的可执行规划候选。
- * Response Agent 只能从此类候选中选择和解释，不能自行创建活动或场次。
+ * 对 PlanningAgent 提交的精确 activity/session 引用完成 Java 硬约束校验后形成的可执行计划。
+ * Java 不通过枚举替 Agent 选择活动或场次。
  */
 public record PlanCandidate(
         List<Item> items,
