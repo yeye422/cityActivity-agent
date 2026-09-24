@@ -79,29 +79,35 @@ public class PlanProposalValidationService {
                     .filter(window -> proposed.period().equals(window.period()))
                     .findFirst()
                     .orElseThrow();
-            boolean concreteSessionRequired = !sourceWindow.sessionsByActivityId().isEmpty();
+            boolean windowHasConcreteSessions = !sourceWindow.sessionsByActivityId().isEmpty();
+            List<ActivitySessionResponse> exposedSessions =
+                    sourceWindow.sessionsByActivityId().getOrDefault(activity.id(), List.of());
             ActivitySessionResponse session = null;
+            Map<Long, List<ActivitySessionResponse>> sessions;
             if (proposed.sessionId() != null) {
                 session = evidenceRegistry.session(
                         proposed.period(), proposed.activityId(), proposed.sessionId());
                 if (session == null) {
                     violations.add(violation(
                             "SESSION_NOT_EXPOSED", proposed.period(), proposed.activityId(), proposed.sessionId(),
-                            "sessionId 不属于该活动在该时段的已验证场次", "改选 Tool 返回的 OPEN 场次"
+                            "sessionId 不属于该活动在该时段的已验证场次", "移除该 sessionId 或改选已暴露 OPEN 场次"
                     ));
                     continue;
                 }
-            } else if (concreteSessionRequired) {
-                violations.add(violation(
-                        "SESSION_REQUIRED", proposed.period(), proposed.activityId(), null,
-                        "该规划请求已有具体日期，必须选择真实可参加场次", "为该活动选择一个 Tool 返回的 sessionId"
-                ));
-                continue;
+                sessions = Map.of(activity.id(), List.of(session));
+            } else if (windowHasConcreteSessions) {
+                if (exposedSessions.isEmpty()) {
+                    violations.add(violation(
+                            "ACTIVITY_HAS_NO_AVAILABLE_SESSION", proposed.period(), proposed.activityId(), null,
+                            "该活动在目标日期/时段没有已验证可参加场次", "改选该时段具有 OPEN 场次的 activityId"
+                    ));
+                    continue;
+                }
+                // sessionId 为空表示把具体场次绑定交给确定性 Solver。
+                sessions = Map.of(activity.id(), exposedSessions);
+            } else {
+                sessions = Map.of();
             }
-
-            Map<Long, List<ActivitySessionResponse>> sessions = session == null
-                    ? Map.of()
-                    : Map.of(activity.id(), List.of(session));
             restrictedWindows.add(new ActivityPlanService.PlannedActivity(
                     proposed.period(),
                     activity,
@@ -264,7 +270,8 @@ public class PlanProposalValidationService {
             boolean matched = candidate.items().stream().anyMatch(item ->
                     proposed.period().equals(item.period())
                             && proposed.activityId().equals(item.activity().id())
-                            && sameSession(proposed.sessionId(), item.session()));
+                            && (proposed.sessionId() == null
+                                || sameSession(proposed.sessionId(), item.session())));
             if (!matched) return false;
         }
         return true;
