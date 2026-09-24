@@ -11,6 +11,8 @@ import com.city.service.plan.PlanProposalValidationService;
 import com.city.service.plan.PlanningConstraintParser;
 import com.city.service.trace.AgentTraceService;
 import com.city.tool.PlanValidationTool;
+import com.city.tool.PlanningDiscoveryTool;
+import com.city.tool.TravelTimeTool;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -90,6 +92,8 @@ class PlanningAgentWorkerTest {
                 mock(PlanningConstraintParser.class),
                 mock(PlanProposalValidationService.class),
                 validationTool,
+                mock(PlanningDiscoveryTool.class),
+                mock(TravelTimeTool.class),
                 mock(AgentTraceService.class)
         );
     }
