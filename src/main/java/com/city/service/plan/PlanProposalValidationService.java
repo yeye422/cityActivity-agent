@@ -181,7 +181,7 @@ public class PlanProposalValidationService {
                         next.activity().id(),
                         to.sessionId(),
                         "跨场地连续场次缺少真实路线时长证据",
-                        "服务器补齐路线证据后重新 validate_plan"
+                        "调用 get_travel_time 查询这两个真实 session 的路线时间后重新提交"
                 ));
             }
         }
