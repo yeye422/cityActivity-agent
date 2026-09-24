@@ -3,7 +3,7 @@ package com.city.agent.builder;
 import com.city.agent.loader.PromptLoader;
 import com.city.model.context.VerifiedRequestContext;
 import com.city.service.evidence.CandidateEvidenceRegistry;
-import com.city.service.harness.AgentBusinessGuardHook;
+import com.city.service.harness.AgentBusinessGuardMiddleware;
 import com.city.service.trace.AgentTraceService;
 import com.city.tool.RetrievalTool;
 import io.agentscope.core.ReActAgent;
@@ -61,7 +61,7 @@ public class RecommendationAgentBuilder {
                 .register(evidenceRegistry)
                 .build();
 
-        AgentBusinessGuardHook guardHook = new AgentBusinessGuardHook(
+        AgentBusinessGuardMiddleware guardMiddleware = new AgentBusinessGuardMiddleware(
                 "city_recommendation_agent",
                 Set.of("search_activities"),
                 2,
