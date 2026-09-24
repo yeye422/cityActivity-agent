@@ -22,6 +22,7 @@ import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -40,6 +41,7 @@ public final class PlanningAgentWorker {
     private final PlanningDiscoveryTool discoveryTool;
     private final DecisionEvidenceValidator evidenceValidator = new DecisionEvidenceValidator();
     private final AgentTraceService traceService;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** 保留现有纯单测构造入口。 */
     public PlanningAgentWorker(
@@ -130,8 +132,7 @@ public final class PlanningAgentWorker {
                     Msg.builder()
                             .role(MsgRole.USER)
                             .textContent(buildPrompt(userInput, verifiedContext, safeWindows, preloadedCandidates))
-                            .build(),
-                    PlanningDecision.class
+                            .build()
             ).block();
             PlanningDecision decision = structuredDecision(response);
 
@@ -157,8 +158,7 @@ public final class PlanningAgentWorker {
                         Msg.builder()
                                 .role(MsgRole.USER)
                                 .textContent(buildRepairPrompt(planningContext))
-                                .build(),
-                        PlanningDecision.class
+                                .build()
                 ).block();
                 decision = structuredDecision(repairedResponse);
                 ensureToolValidated(decision, planningContext);
@@ -228,11 +228,24 @@ public final class PlanningAgentWorker {
         if (response == null) {
             throw new IllegalStateException("PlanningAgent 返回为空");
         }
-        PlanningDecision decision = response.getStructuredData(PlanningDecision.class);
-        if (decision == null) {
-            throw new IllegalStateException("PlanningAgent 未返回结构化 PlanningDecision");
+        String json = normalizeJson(response.getTextContent());
+        try {
+            return objectMapper.readValue(json, PlanningDecision.class);
+        } catch (Exception error) {
+            throw new IllegalStateException("PlanningAgent 最终 JSON 无法解析: " + json, error);
         }
-        return decision;
+    }
+
+    private String normalizeJson(String value) {
+        String text = value == null ? "" : value.trim();
+        if (text.startsWith("```")) {
+            int firstBreak = text.indexOf('\n');
+            int lastFence = text.lastIndexOf("```");
+            if (firstBreak >= 0 && lastFence > firstBreak) {
+                text = text.substring(firstBreak + 1, lastFence).trim();
+            }
+        }
+        return text;
     }
 
     private String buildPrompt(String userInput,
