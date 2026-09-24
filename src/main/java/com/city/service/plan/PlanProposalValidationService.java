@@ -15,17 +15,17 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
 /**
- * 把 PlanningAgent 的 ID 引用绑定回本轮证据，再复用 PlanningSolver 做最终硬约束校验。
+ * 对 PlanningAgent 提交的精确 period/activity/session 引用执行确定性硬约束校验。
+ *
+ * <p>Java 不枚举候选组合，也不替 Agent 选择 session。Agent 对存在具体场次的活动必须明确提交
+ * 当前 Run 已暴露的 sessionId；Java 只负责 Evidence 绑定、可用性、预算、时间和路线校验。</p>
  */
 @Service
 public class PlanProposalValidationService {
-
-    private final PlanningSolver planningSolver = new PlanningSolver();
 
     public PlanValidationResult validate(
             PlanProposal proposal,
@@ -42,19 +42,21 @@ public class PlanProposalValidationService {
         if (evidenceRegistry == null) {
             return PlanValidationResult.invalid(List.of(violation(
                     "MISSING_EVIDENCE", "", null, null,
-                    "缺少本轮规划证据", "先调用规划候选检索 Tool"
+                    "缺少本轮规划证据", "先完成服务器候选发现"
             )));
         }
 
         List<PlanValidationResult.Violation> violations = new ArrayList<>();
         Set<Long> usedActivityIds = new LinkedHashSet<>();
-        List<ActivityPlanService.PlannedActivity> restrictedWindows = new ArrayList<>();
+        List<PlanCandidate.Item> exactItems = new ArrayList<>();
+        BigDecimal totalCost = BigDecimal.ZERO;
 
         for (PlanProposal.Item proposed : proposal.items()) {
+            if (proposed == null) continue;
             if (!evidenceRegistry.hasPeriod(proposed.period())) {
                 violations.add(violation(
                         "UNKNOWN_PERIOD", proposed.period(), proposed.activityId(), proposed.sessionId(),
-                        "该时段未由规划检索 Tool 暴露", "从已暴露的 period 中重新选择"
+                        "该 period 未由当前规划候选暴露", "从候选快照中的真实 period 重新选择"
                 ));
                 continue;
             }
@@ -63,14 +65,15 @@ public class PlanProposalValidationService {
             if (activity == null) {
                 violations.add(violation(
                         "ACTIVITY_NOT_EXPOSED", proposed.period(), proposed.activityId(), proposed.sessionId(),
-                        "activityId 不属于该时段已验证候选", "改选该时段 Tool 返回的 activityId"
+                        "activityId 不属于该 period 的当前 Run 候选",
+                        "改选该 period 候选快照中的真实 activityId"
                 ));
                 continue;
             }
             if (!usedActivityIds.add(proposed.activityId())) {
                 violations.add(violation(
                         "DUPLICATE_ACTIVITY", proposed.period(), proposed.activityId(), proposed.sessionId(),
-                        "同一个活动不能在一个计划中重复安排", "为该时段选择其他活动"
+                        "同一个活动不能在一个计划中重复安排", "为该 period 选择其他活动"
                 ));
                 continue;
             }
@@ -79,98 +82,95 @@ public class PlanProposalValidationService {
                     .filter(window -> proposed.period().equals(window.period()))
                     .findFirst()
                     .orElseThrow();
-            boolean windowHasConcreteSessions = !sourceWindow.sessionsByActivityId().isEmpty();
-            List<ActivitySessionResponse> exposedSessions =
-                    sourceWindow.sessionsByActivityId().getOrDefault(activity.id(), List.of());
+
+            boolean concreteSessionRequired = !sourceWindow.sessionsByActivityId().isEmpty();
             ActivitySessionResponse session = null;
-            Map<Long, List<ActivitySessionResponse>> sessions;
-            if (proposed.sessionId() != null) {
+            if (concreteSessionRequired) {
+                if (proposed.sessionId() == null) {
+                    violations.add(violation(
+                            "SESSION_REQUIRED", proposed.period(), proposed.activityId(), null,
+                            "该规划窗口已有具体真实场次，Agent 必须明确选择 sessionId",
+                            "从该 activity 的候选场次中选择一个真实 OPEN sessionId"
+                    ));
+                    continue;
+                }
                 session = evidenceRegistry.session(
                         proposed.period(), proposed.activityId(), proposed.sessionId());
                 if (session == null) {
                     violations.add(violation(
                             "SESSION_NOT_EXPOSED", proposed.period(), proposed.activityId(), proposed.sessionId(),
-                            "sessionId 不属于该活动在该时段的已验证场次", "移除该 sessionId 或改选已暴露 OPEN 场次"
+                            "sessionId 不属于该 activity 在该 period 的当前 Run 已验证场次",
+                            "改选候选快照中该 activity 对应的真实 sessionId"
                     ));
                     continue;
                 }
-                sessions = Map.of(activity.id(), List.of(session));
-            } else if (windowHasConcreteSessions) {
-                if (exposedSessions.isEmpty()) {
+                if (!validSelectedSession(session, proposed.activityId())) {
                     violations.add(violation(
-                            "ACTIVITY_HAS_NO_AVAILABLE_SESSION", proposed.period(), proposed.activityId(), null,
-                            "该活动在目标日期/时段没有已验证可参加场次", "改选该时段具有 OPEN 场次的 activityId"
+                            "SESSION_UNAVAILABLE", proposed.period(), proposed.activityId(), proposed.sessionId(),
+                            "所选场次当前不可参加",
+                            "选择状态 OPEN、仍有名额且时间有效的真实 sessionId"
                     ));
                     continue;
                 }
-                // sessionId 为空表示把具体场次绑定交给确定性 Solver。
-                sessions = Map.of(activity.id(), exposedSessions);
-            } else {
-                sessions = Map.of();
+                if (session.price() != null) {
+                    totalCost = totalCost.add(session.price());
+                }
+            } else if (proposed.sessionId() != null) {
+                violations.add(violation(
+                        "UNEXPECTED_SESSION", proposed.period(), proposed.activityId(), proposed.sessionId(),
+                        "该窗口没有暴露具体场次，不应提交 sessionId",
+                        "移除 sessionId，仅保留 period + activityId"
+                ));
+                continue;
             }
-            restrictedWindows.add(new ActivityPlanService.PlannedActivity(
-                    proposed.period(),
-                    activity,
-                    sourceWindow.querySlots(),
-                    List.of(activity),
-                    sessions,
-                    session
-            ));
+
+            exactItems.add(new PlanCandidate.Item(proposed.period(), activity, session));
         }
 
         if (!violations.isEmpty()) {
             return PlanValidationResult.invalid(violations);
         }
+        if (exactItems.isEmpty()) {
+            return PlanValidationResult.invalid(List.of(violation(
+                    "EMPTY_PLAN", "", null, null,
+                    "规划方案不能为空", "至少选择一个已检索到的活动"
+            )));
+        }
 
-        List<TravelTimeEvidence> safeTravel = travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
-        violations.addAll(missingTravelEvidence(restrictedWindows, safeTravel));
-        violations.addAll(explicitConstraintViolations(restrictedWindows, maxBudget, safeTravel));
+        List<TravelTimeEvidence> safeTravel =
+                travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
+        violations.addAll(missingTravelEvidence(exactItems, safeTravel));
+        violations.addAll(explicitConstraintViolations(exactItems, totalCost, maxBudget, safeTravel));
         if (!violations.isEmpty()) {
             return PlanValidationResult.invalid(violations);
         }
 
-        List<PlanCandidate> legal = planningSolver.solve(
-                restrictedWindows,
-                maxBudget,
-                safeTravel
-        );
-        PlanCandidate accepted = legal.stream()
-                .filter(candidate -> candidate.items().size() == proposal.items().size())
-                .filter(candidate -> matchesProposal(candidate, proposal))
-                .findFirst()
-                .orElse(null);
-        if (accepted != null) {
-            return PlanValidationResult.valid(accepted);
-        }
-
-        return PlanValidationResult.invalid(List.of(violation(
-                "HARD_CONSTRAINT_CONFLICT", "", null, null,
-                "该组合未通过时间、预算、场次或交通硬约束校验",
-                "保留更符合 UserGoal 的活动，调整冲突时段的活动或场次后重新 validate_plan"
-        )));
+        return PlanValidationResult.valid(new PlanCandidate(exactItems, totalCost));
     }
 
-    /**
-     * 对有具体场次的方案按实际开始时间排序。相邻场次位于不同场地时，必须存在 from->to 的
-     * TravelTimeEvidence；缺证据不是“默认可行”，而是要求 Agent 先调用 get_travel_time。
-     */
+    private boolean validSelectedSession(ActivitySessionResponse session, Long activityId) {
+        if (session == null || session.sessionId() == null) return false;
+        if (session.activityId() != null && !session.activityId().equals(activityId)) return false;
+        if (!"OPEN".equalsIgnoreCase(session.status())) return false;
+        if (session.remainingSeats() != null && session.remainingSeats() <= 0) return false;
+        return session.startAt() != null
+                && session.endAt() != null
+                && session.startAt().isBefore(session.endAt());
+    }
+
     private List<PlanValidationResult.Violation> missingTravelEvidence(
-            List<ActivityPlanService.PlannedActivity> windows,
+            List<PlanCandidate.Item> items,
             List<TravelTimeEvidence> travelTimeEvidence
     ) {
-        List<ActivityPlanService.PlannedActivity> concrete = windows.stream()
-                .filter(window -> window != null && window.selectedSession() != null)
-                .filter(window -> window.selectedSession().startAt() != null)
-                .sorted(Comparator.comparing(window -> window.selectedSession().startAt()))
-                .toList();
+        List<PlanCandidate.Item> concrete = concreteItems(items);
         if (concrete.size() < 2) return List.of();
 
         List<PlanValidationResult.Violation> result = new ArrayList<>();
         for (int i = 1; i < concrete.size(); i++) {
-            ActivityPlanService.PlannedActivity previous = concrete.get(i - 1);
-            ActivityPlanService.PlannedActivity next = concrete.get(i);
-            ActivitySessionResponse from = previous.selectedSession();
-            ActivitySessionResponse to = next.selectedSession();
+            PlanCandidate.Item previous = concrete.get(i - 1);
+            PlanCandidate.Item next = concrete.get(i);
+            ActivitySessionResponse from = previous.session();
+            ActivitySessionResponse to = next.session();
             if (from.venueId() == null || to.venueId() == null || from.venueId().equals(to.venueId())) {
                 continue;
             }
@@ -178,10 +178,10 @@ public class PlanProposalValidationService {
                 result.add(violation(
                         "MISSING_TRAVEL_EVIDENCE",
                         next.period(),
-                        next.activity() == null ? null : next.activity().id(),
+                        next.activity().id(),
                         to.sessionId(),
                         "跨场地连续场次缺少真实路线时长证据",
-                        "先对前后两个已暴露场次调用 get_travel_time，再重新 validate_plan"
+                        "服务器补齐路线证据后重新 validate_plan"
                 ));
             }
         }
@@ -189,44 +189,35 @@ public class PlanProposalValidationService {
     }
 
     private List<PlanValidationResult.Violation> explicitConstraintViolations(
-            List<ActivityPlanService.PlannedActivity> windows,
+            List<PlanCandidate.Item> items,
+            BigDecimal totalCost,
             BigDecimal maxBudget,
             List<TravelTimeEvidence> travelTimeEvidence
     ) {
         List<PlanValidationResult.Violation> result = new ArrayList<>();
-        List<ActivityPlanService.PlannedActivity> concrete = windows.stream()
-                .filter(window -> window != null && window.selectedSession() != null)
-                .filter(window -> window.selectedSession().startAt() != null
-                        && window.selectedSession().endAt() != null)
-                .sorted(Comparator.comparing(window -> window.selectedSession().startAt()))
-                .toList();
-
-        BigDecimal totalCost = concrete.stream()
-                .map(window -> window.selectedSession().price())
-                .filter(Objects::nonNull)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
         if (maxBudget != null && totalCost.compareTo(maxBudget) > 0) {
             result.add(violation(
                     "BUDGET_EXCEEDED", "", null, null,
                     "方案已知总价 " + totalCost + " 超过预算上限 " + maxBudget,
-                    "替换价格较高的活动或场次后重新 validate_plan"
+                    "替换价格较高的活动或场次后重新提交"
             ));
         }
 
+        List<PlanCandidate.Item> concrete = concreteItems(items);
         for (int i = 1; i < concrete.size(); i++) {
-            ActivityPlanService.PlannedActivity previous = concrete.get(i - 1);
-            ActivityPlanService.PlannedActivity next = concrete.get(i);
-            ActivitySessionResponse from = previous.selectedSession();
-            ActivitySessionResponse to = next.selectedSession();
+            PlanCandidate.Item previous = concrete.get(i - 1);
+            PlanCandidate.Item next = concrete.get(i);
+            ActivitySessionResponse from = previous.session();
+            ActivitySessionResponse to = next.session();
 
             if (from.startAt().isBefore(to.endAt()) && from.endAt().isAfter(to.startAt())) {
                 result.add(violation(
                         "TIME_CONFLICT",
                         next.period(),
-                        next.activity() == null ? null : next.activity().id(),
+                        next.activity().id(),
                         to.sessionId(),
                         "连续场次时间发生重叠",
-                        "更换冲突时段的活动或场次后重新 validate_plan"
+                        "更换冲突 period 的 activity 或 session 后重新提交"
                 ));
                 continue;
             }
@@ -246,15 +237,23 @@ public class PlanProposalValidationService {
                 result.add(violation(
                         "TRAVEL_TIME_CONFLICT",
                         next.period(),
-                        next.activity() == null ? null : next.activity().id(),
+                        next.activity().id(),
                         to.sessionId(),
                         "前后场次间隔 " + availableMinutes + " 分钟，小于真实路线时长 "
                                 + route.durationMinutes() + " 分钟",
-                        "更换下一场次、缩短跨场地距离或调整时段后重新 validate_plan"
+                        "更换下一场次、缩短跨场地距离或调整活动后重新提交"
                 ));
             }
         }
         return result;
+    }
+
+    private List<PlanCandidate.Item> concreteItems(List<PlanCandidate.Item> items) {
+        return items.stream()
+                .filter(Objects::nonNull)
+                .filter(item -> item.session() != null)
+                .sorted(Comparator.comparing(item -> item.session().startAt()))
+                .toList();
     }
 
     private boolean hasTravelEvidence(Long fromVenueId,
@@ -263,23 +262,6 @@ public class PlanProposalValidationService {
         return travelTimeEvidence.stream().anyMatch(evidence -> evidence != null
                 && fromVenueId.equals(evidence.fromVenueId())
                 && toVenueId.equals(evidence.toVenueId()));
-    }
-
-    private boolean matchesProposal(PlanCandidate candidate, PlanProposal proposal) {
-        for (PlanProposal.Item proposed : proposal.items()) {
-            boolean matched = candidate.items().stream().anyMatch(item ->
-                    proposed.period().equals(item.period())
-                            && proposed.activityId().equals(item.activity().id())
-                            && (proposed.sessionId() == null
-                                || sameSession(proposed.sessionId(), item.session())));
-            if (!matched) return false;
-        }
-        return true;
-    }
-
-    private boolean sameSession(Long expectedSessionId, ActivitySessionResponse actual) {
-        if (expectedSessionId == null) return actual == null;
-        return actual != null && expectedSessionId.equals(actual.sessionId());
     }
 
     private PlanValidationResult.Violation violation(
