@@ -98,35 +98,46 @@ public class ActivityPlanService {
                 PLAN_CANDIDATE_LIMIT
         ));
 
-        List<ActivityItem> candidates = retrieval.finalCandidates();
-        Map<Long, List<ActivitySessionResponse>> sessions = loadSessions(candidates, range);
-        return new CandidateBatch(range, candidates, sessions);
+        List<ActivityItem> retrieved = retrieval.finalCandidates();
+        SessionLoad sessions = loadSessions(retrieved, range);
+        List<ActivityItem> candidates = retrieved.stream()
+                .filter(item -> item != null && item.id() != null)
+                .filter(item -> !sessions.sessionBackedActivityIds().contains(item.id())
+                        || sessions.sessionsByActivityId().containsKey(item.id()))
+                .toList();
+        return new CandidateBatch(range, candidates, sessions.sessionsByActivityId());
     }
 
-    private Map<Long, List<ActivitySessionResponse>> loadSessions(
+    private SessionLoad loadSessions(
             List<ActivityItem> candidates,
             PlanningHorizon.Range range
     ) {
-        if (candidates == null || candidates.isEmpty()) return Map.of();
+        if (candidates == null || candidates.isEmpty()) {
+            return new SessionLoad(Map.of(), java.util.Set.of());
+        }
 
         Map<Long, List<ActivitySessionResponse>> result = new LinkedHashMap<>();
+        java.util.Set<Long> sessionBacked = new java.util.LinkedHashSet<>();
         for (ActivityItem candidate : candidates) {
             if (candidate == null || candidate.id() == null) continue;
-            List<ActivitySessionResponse> sessions;
+            List<ActivitySessionResponse> available;
             try {
-                sessions = activitySessionService
+                available = activitySessionService
                         .findAvailable(candidate.id(), range.startAt().toLocalDate())
                         .stream()
                         .filter(session -> "OPEN".equalsIgnoreCase(session.status()))
                         .filter(session -> session.remainingSeats() == null || session.remainingSeats() > 0)
-                        .filter(session -> sessionWithinRange(session, range))
                         .toList();
             } catch (RuntimeException ignored) {
-                sessions = List.of();
+                available = List.of();
             }
-            if (!sessions.isEmpty()) result.put(candidate.id(), sessions);
+            if (!available.isEmpty()) sessionBacked.add(candidate.id());
+            List<ActivitySessionResponse> inRange = available.stream()
+                    .filter(session -> sessionWithinRange(session, range))
+                    .toList();
+            if (!inRange.isEmpty()) result.put(candidate.id(), inRange);
         }
-        return Map.copyOf(result);
+        return new SessionLoad(Map.copyOf(result), java.util.Set.copyOf(sessionBacked));
     }
 
     private boolean sessionWithinRange(
@@ -140,6 +151,11 @@ public class ActivityPlanService {
                 && !end.isAfter(range.endAt())
                 && start.isBefore(end);
     }
+
+    private record SessionLoad(
+            Map<Long, List<ActivitySessionResponse>> sessionsByActivityId,
+            java.util.Set<Long> sessionBackedActivityIds
+    ) {}
 
     public record CandidateBatch(
             PlanningHorizon.Range range,
