@@ -6,14 +6,13 @@ import com.city.model.context.VerifiedRequestContext;
 import com.city.model.tool.PlanningDiscoveryToolResult;
 import com.city.service.plan.ActivityPlanService;
 import com.city.service.trace.AgentTraceService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
 import java.util.Objects;
 
 /**
- * PlanningAgent 的只读候选发现 Tool。窗口、用户、数据源和所有硬约束均来自模型不可见 PlanningToolContext。
+ * Planning 的只读候选发现 Java 边界。窗口、用户、数据源和所有硬约束均来自 PlanningToolContext。
  */
 @Component
 public class PlanningDiscoveryTool {
@@ -21,23 +20,12 @@ public class PlanningDiscoveryTool {
     private final ActivityPlanService activityPlanService;
     private final AgentTraceService traceService;
 
-    /** 保留纯单测构造入口。 */
-    public PlanningDiscoveryTool(ActivityPlanService activityPlanService) {
-        this(activityPlanService, null);
-    }
-
-    @Autowired
     public PlanningDiscoveryTool(ActivityPlanService activityPlanService,
                                  AgentTraceService traceService) {
         this.activityPlanService = Objects.requireNonNull(activityPlanService, "activityPlanService");
         this.traceService = traceService;
     }
 
-    @Tool(
-            name = "discover_plan_candidates",
-            description = "Load legal activity and session candidates for each server-defined planning window. "
-                    + "The server fixes city, time, budget-related filters and exclusions."
-    )
     public PlanningDiscoveryToolResult discover(PlanningToolContext planningContext) {
         Objects.requireNonNull(planningContext, "planningContext");
         planningContext.evidenceRegistry().beginDiscovery();
