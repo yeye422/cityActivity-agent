@@ -5,15 +5,13 @@ import com.city.model.agent.PlanValidationResult;
 import com.city.model.context.PlanningToolContext;
 import com.city.service.plan.PlanProposalValidationService;
 import com.city.service.trace.AgentTraceService;
-import io.agentscope.core.tool.Tool;
-import io.agentscope.core.tool.ToolParam;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
 import java.util.Objects;
 
-/** PlanningAgent 的确定性方案校验 Tool；所有事实均从本轮 PlanningEvidenceRegistry 绑定。 */
+/** PlanningAgent 的确定性 Java 校验边界；所有事实均从本轮 PlanningEvidenceRegistry 绑定。 */
 @Component
 public class PlanValidationTool {
 
@@ -32,15 +30,8 @@ public class PlanValidationTool {
         this.traceService = traceService;
     }
 
-    @Tool(
-            name = "validate_plan",
-            description = "Validate a proposed multi-window plan against verified activity/session evidence, budget, time and travel constraints."
-    )
     public PlanValidationResult validate(
-            @ToolParam(
-                    name = "proposal",
-                    description = "Plan containing only period, activityId and optional sessionId returned by discover_plan_candidates"
-            ) PlanProposal proposal,
+            PlanProposal proposal,
             PlanningToolContext planningContext
     ) {
         Objects.requireNonNull(planningContext, "planningContext");
