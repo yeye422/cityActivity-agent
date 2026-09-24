@@ -157,6 +157,15 @@ public class PlanProposalValidationService {
                 ));
                 continue;
             }
+            if (session == null && !activityAvailableAt(activity, startAt, endAt)) {
+                violations.add(violation(
+                        "ACTIVITY_TIME_UNAVAILABLE", rangeLabel(startAt, endAt),
+                        proposed.activityId(), null,
+                        "无固定场次活动的安排时间不在活动自身有效日期/营业时段内",
+                        "根据候选活动的有效时间重新调整 plannedStartAt/plannedEndAt"
+                ));
+                continue;
+            }
 
             exactItems.add(new PlanCandidate.Item(activity, session, startAt, endAt));
         }
@@ -182,6 +191,20 @@ public class PlanProposalValidationService {
         if (!violations.isEmpty()) return PlanValidationResult.invalid(violations);
 
         return PlanValidationResult.valid(new PlanCandidate(exactItems, totalCost));
+    }
+
+    private boolean activityAvailableAt(
+            ActivityItem activity,
+            LocalDateTime startAt,
+            LocalDateTime endAt
+    ) {
+        if (activity.validFrom() != null && startAt.toLocalDate().isBefore(activity.validFrom())) return false;
+        if (activity.validTo() != null && endAt.toLocalDate().isAfter(activity.validTo())) return false;
+        if (activity.validStartTime() != null
+                && startAt.toLocalTime().isBefore(activity.validStartTime())) return false;
+        if (activity.validEndTime() != null
+                && endAt.toLocalTime().isAfter(activity.validEndTime())) return false;
+        return true;
     }
 
     private boolean validSelectedSession(ActivitySessionResponse session, Long activityId) {
