@@ -16,7 +16,6 @@ import com.city.model.tool.PlanningDiscoveryToolResult;
 import com.city.service.evidence.DecisionEvidenceValidator;
 import com.city.service.evidence.PlanningEvidenceRegistry;
 import com.city.service.evidence.RunEvidenceStore;
-import com.city.service.plan.PlanProposalValidationService;
 import com.city.service.plan.PlanningConstraintParser;
 import com.city.service.trace.AgentTraceService;
 import com.city.tool.PlanValidationTool;
@@ -43,7 +42,6 @@ public final class PlanningAgentWorker {
 
     private final PlanningAgentBuilder agentBuilder;
     private final PlanningConstraintParser constraintParser;
-    private final PlanProposalValidationService validationService;
     private final PlanValidationTool validationTool;
     private final PlanningDiscoveryTool discoveryTool;
     private final TravelTimeTool travelTimeTool;
@@ -53,7 +51,6 @@ public final class PlanningAgentWorker {
     public PlanningAgentWorker(
             PlanningAgentBuilder agentBuilder,
             PlanningConstraintParser constraintParser,
-            PlanProposalValidationService validationService,
             PlanValidationTool validationTool,
             PlanningDiscoveryTool discoveryTool,
             TravelTimeTool travelTimeTool,
@@ -61,7 +58,6 @@ public final class PlanningAgentWorker {
     ) {
         this.agentBuilder = Objects.requireNonNull(agentBuilder, "agentBuilder");
         this.constraintParser = Objects.requireNonNull(constraintParser, "constraintParser");
-        this.validationService = Objects.requireNonNull(validationService, "validationService");
         this.validationTool = Objects.requireNonNull(validationTool, "validationTool");
         this.discoveryTool = Objects.requireNonNull(discoveryTool, "discoveryTool");
         this.travelTimeTool = Objects.requireNonNull(travelTimeTool, "travelTimeTool");
@@ -139,9 +135,9 @@ public final class PlanningAgentWorker {
                     planningContext
             );
 
+            PlanValidationResult finalValidation;
             try {
-                ensureTravelEvidence(decision.plan(), planningContext);
-                ensureToolValidated(decision, planningContext);
+                finalValidation = validateWithServerFacts(decision, planningContext);
             } catch (IllegalStateException firstValidationError) {
                 if (planningContext.notebook().status() != PlanNotebook.Status.REPAIR_REQUIRED) {
                     throw firstValidationError;
@@ -161,35 +157,7 @@ public final class PlanningAgentWorker {
                         ),
                         planningContext
                 );
-                ensureTravelEvidence(decision.plan(), planningContext);
-                ensureToolValidated(decision, planningContext);
-            }
-
-            PlanValidationResult finalValidation = validationService.validate(
-                    decision.plan(),
-                    evidenceRegistry,
-                    maxBudget,
-                    planningContext.allTravelTimeEvidence()
-            );
-            if (!finalValidation.valid() || finalValidation.acceptedPlan() == null) {
-                throw new IllegalStateException(
-                        "PlanningAgent 最终方案未通过 Java Solver 复核: " + finalValidation.violations());
-            }
-
-            int travelCallsBefore = evidenceRegistry.travelCalls();
-            ensureTravelEvidence(finalValidation.acceptedPlan(), planningContext);
-            if (evidenceRegistry.travelCalls() > travelCallsBefore) {
-                finalValidation = validationService.validate(
-                        proposalFromAcceptedPlan(finalValidation.acceptedPlan()),
-                        evidenceRegistry,
-                        maxBudget,
-                        planningContext.allTravelTimeEvidence()
-                );
-                if (!finalValidation.valid() || finalValidation.acceptedPlan() == null) {
-                    throw new IllegalStateException(
-                            "PlanningAgent 路线补证后方案未通过 Java Solver 复核: "
-                                    + finalValidation.violations());
-                }
+                finalValidation = validateWithServerFacts(decision, planningContext);
             }
 
             evidenceValidator.validatePlan(finalValidation.acceptedPlan(), evidenceStore);
@@ -358,19 +326,38 @@ public final class PlanningAgentWorker {
                 .toList());
     }
 
-    /** package-private：回归测试 Java 强制 validate_plan 边界。 */
-    void ensureToolValidated(PlanningDecision decision, PlanningToolContext planningContext) {
+    private PlanValidationResult validateWithServerFacts(
+            PlanningDecision decision,
+            PlanningToolContext planningContext
+    ) {
         Objects.requireNonNull(decision, "decision");
         Objects.requireNonNull(planningContext, "planningContext");
-        if (planningContext.notebook().validated()) {
-            return;
+
+        PlanValidationResult result = validationTool.validate(decision.plan(), planningContext);
+        if (!result.valid() || result.acceptedPlan() == null) {
+            throw new IllegalStateException(
+                    "PlanningAgent 最终方案补验失败: " + result.violations());
         }
 
-        PlanValidationResult lateValidation = validationTool.validate(decision.plan(), planningContext);
-        if (!lateValidation.valid()) {
-            throw new IllegalStateException(
-                    "PlanningAgent 最终方案补验失败: " + lateValidation.violations());
+        int travelCallsBefore = planningContext.evidenceRegistry().travelCalls();
+        ensureTravelEvidence(result.acceptedPlan(), planningContext);
+        if (planningContext.evidenceRegistry().travelCalls() > travelCallsBefore) {
+            result = validationTool.validate(
+                    proposalFromAcceptedPlan(result.acceptedPlan()),
+                    planningContext
+            );
+            if (!result.valid() || result.acceptedPlan() == null) {
+                throw new IllegalStateException(
+                        "PlanningAgent 路线补证后方案校验失败: " + result.violations());
+            }
         }
+        return result;
+    }
+
+    /** package-private：回归测试 Java 强制 validate_plan 边界。 */
+    void ensureToolValidated(PlanningDecision decision, PlanningToolContext planningContext) {
+        if (planningContext.notebook().validated()) return;
+        validateWithServerFacts(decision, planningContext);
     }
 
     private boolean hasTravelEvidence(Long fromVenueId,
