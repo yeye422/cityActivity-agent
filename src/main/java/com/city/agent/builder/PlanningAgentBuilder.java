@@ -2,7 +2,7 @@ package com.city.agent.builder;
 
 import com.city.agent.loader.PromptLoader;
 import com.city.model.context.PlanningToolContext;
-import com.city.service.harness.AgentBusinessGuardHook;
+import com.city.service.harness.AgentBusinessGuardMiddleware;
 import com.city.service.trace.AgentTraceService;
 import com.city.tool.PlanValidationTool;
 import com.city.tool.PlanningDiscoveryTool;
@@ -70,7 +70,7 @@ public class PlanningAgentBuilder {
                 .register(planningContext)
                 .build();
 
-        AgentBusinessGuardHook guardHook = new AgentBusinessGuardHook(
+        AgentBusinessGuardMiddleware guardMiddleware = new AgentBusinessGuardMiddleware(
                 "city_planning_agent",
                 Set.of("discover_plan_candidates", "get_travel_time", "validate_plan"),
                 10,
