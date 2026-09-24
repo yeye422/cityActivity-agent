@@ -139,20 +139,23 @@ public final class PlanningAgentWorker {
                 PlanningDecision decision;
                 try {
                     decision = callDecision(agent, nextPrompt, runtimeContext);
-                } catch (InvalidPlanningResponseException invalidResponse) {
+                } catch (RuntimeException responseError) {
+                    if (!isRecoverableResponseError(responseError)) {
+                        throw responseError;
+                    }
                     traceService.recordEvent(
                             "PLANNING_AGENT_RESPONSE_REPAIR_REQUESTED",
                             "AGENT",
                             Map.of(
                                     "responseAttempt", responseAttempt,
-                                    "reason", invalidResponse.getMessage()
+                                    "reason", safeErrorMessage(responseError)
                             ),
                             planningContext.notebook().snapshot()
                     );
                     nextPrompt = buildResponseRepairPrompt(
                             verifiedContext,
                             PlanningDiscoveryToolResult.from(evidenceRegistry.windows()),
-                            invalidResponse.getMessage()
+                            safeErrorMessage(responseError)
                     );
                     continue;
                 }
@@ -354,6 +357,24 @@ public final class PlanningAgentWorker {
                 context.hardConstraints(),
                 initialCandidates
         );
+    }
+
+    private boolean isRecoverableResponseError(RuntimeException error) {
+        if (error instanceof InvalidPlanningResponseException) return true;
+        String message = safeErrorMessage(error).toLowerCase(java.util.Locale.ROOT);
+        return message.contains("structured")
+                || message.contains("deserialize")
+                || message.contains("json")
+                || message.contains("planningdecision");
+    }
+
+    private String safeErrorMessage(Throwable error) {
+        if (error == null) return "unknown response error";
+        String message = error.getMessage();
+        if (message == null || message.isBlank()) {
+            return error.getClass().getSimpleName();
+        }
+        return message.length() <= 500 ? message : message.substring(0, 500);
     }
 
     private String buildResponseRepairPrompt(
