@@ -17,15 +17,15 @@ public class CityAgentScopeConfig {
     private String apiKey;
 
     /** 主模型保留给需要更强推理能力的任务。 */
-    @Value("${city.llm.main-model:qwen3.8-flash}")
+    @Value("${city.llm.main-model:qwen3.8-max}")
     private String mainModelName;
 
     /** 轻量模型用于意图识别和澄清追问。 */
-    @Value("${city.llm.light-model:qwen3.8-flash}")
+    @Value("${city.llm.light-model:qwen3.8-max}")
     private String lightModelName;
 
     /** 推荐理由与最终口语包装使用的轻量响应模型。 */
-    @Value("${city.llm.response-model:qwen3.8-flash}")
+    @Value("${city.llm.response-model:qwen3.8-max}")
     private String responseModelName;
 
     @Bean("CityMainChatModel")
