@@ -163,10 +163,12 @@ public class AgentTraceService {
             throw error;
         }
         try {
-            Msg response = agent.call(Msg.builder()
-                    .role(MsgRole.USER)
-                    .textContent(inputText)
-                    .build()).block();
+            Msg response = agent.call(List.of(
+                    Msg.builder()
+                            .role(MsgRole.USER)
+                            .textContent(inputText)
+                            .build()
+            )).block();
             executionHarness.recordSuccess(permit);
             recordAgentCall(sessionId, agentName, modelName, inputText,
                     response, elapsedMs(startedAt), null);
