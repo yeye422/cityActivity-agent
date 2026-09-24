@@ -25,7 +25,7 @@ class PlanProposalValidationServiceTest {
     private final PlanProposalValidationService service = new PlanProposalValidationService();
 
     @Test
-    void shouldAcceptProposalBackedByEvidenceAndSolver() {
+    void shouldAcceptExactAgentSelectedProposalBackedByEvidence() {
         PlanningEvidenceRegistry registry = registry(false);
         PlanProposal proposal = new PlanProposal(List.of(
                 new PlanProposal.Item("14:00-16:00", 101L, 1001L),
