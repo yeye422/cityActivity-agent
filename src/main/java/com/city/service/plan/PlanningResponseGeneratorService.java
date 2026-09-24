@@ -47,7 +47,7 @@ public class PlanningResponseGeneratorService {
                         item.activity().id(),
                         item.activity().sourceType(),
                         item.activity().name(),
-                        "安排在" + item.period() + "，并已通过当前规划硬约束校验。",
+                        "安排在" + formatRange(item) + "，并已通过当前规划硬约束校验。",
                         item.activity().matchScore(),
                         item.activity().slots()
                 ))
@@ -74,7 +74,7 @@ public class PlanningResponseGeneratorService {
         for (int i = 0; i < acceptedPlan.items().size(); i++) {
             PlanCandidate.Item item = acceptedPlan.items().get(i);
             builder.append("\n").append(i + 1).append(". ")
-                    .append(item.period()).append("：")
+                    .append(formatRange(item)).append("：")
                     .append(item.activity().name());
             appendSessionFact(builder, item.session());
         }
@@ -82,6 +82,12 @@ public class PlanningResponseGeneratorService {
             builder.append("\n天气参考：").append(weather.summary().trim());
         }
         return builder.toString();
+    }
+
+
+    private String formatRange(PlanCandidate.Item item) {
+        if (item == null || item.startAt() == null || item.endAt() == null) return "时间待定";
+        return DATE_TIME.format(item.startAt()) + "-" + item.endAt().toLocalTime();
     }
 
     private void appendSessionFact(StringBuilder builder, ActivitySessionResponse session) {
