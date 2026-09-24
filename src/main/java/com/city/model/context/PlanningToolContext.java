@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-/** AgentScope ToolExecutionContext 注入的模型不可见规划上下文。 */
+/** Planning Java 边界共享的模型不可见规划上下文。 */
 public record PlanningToolContext(
         VerifiedRequestContext verifiedRequestContext,
         List<String> windows,
@@ -28,7 +28,7 @@ public record PlanningToolContext(
         travelTimeEvidence = travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
     }
 
-    /** 合并调用方已有路线证据和 Agent 本轮通过 get_travel_time 获取的证据。 */
+    /** 合并调用方已有路线证据和 Java 本轮补充的路线证据。 */
     public List<TravelTimeEvidence> allTravelTimeEvidence() {
         Map<RouteKey, TravelTimeEvidence> merged = new LinkedHashMap<>();
         for (TravelTimeEvidence evidence : travelTimeEvidence) {
