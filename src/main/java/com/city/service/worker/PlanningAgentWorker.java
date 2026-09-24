@@ -3,7 +3,6 @@ package com.city.service.worker;
 import com.city.agent.builder.PlanningAgentBuilder;
 import com.city.model.ActivitySessionResponse;
 import com.city.model.TravelTimeEvidence;
-import com.city.model.PlanCandidate;
 import com.city.model.agent.PlanNotebook;
 import com.city.model.agent.PlanProposal;
 import com.city.model.agent.PlanningAgentExecutionResult;
@@ -34,8 +33,8 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * PlanningAgent 的执行边界。不写 SessionState；Agent 只负责软目标组合，
- * discovery、路线证据、validate_plan、Solver 与 Evidence 均由 Java 强制执行。
+ * PlanningAgent 的执行边界。不写 SessionState；Agent 负责活动与具体场次选择，
+ * Java 强制执行候选事实、路线事实、validate_plan 与 Evidence Gate。
  */
 @Component
 public final class PlanningAgentWorker {
@@ -120,19 +119,16 @@ public final class PlanningAgentWorker {
                     PlanningDiscoveryToolResult.from(evidenceRegistry.windows());
 
             ReActAgent finalizer = agentBuilder.buildFinalizer();
-            PlanningDecision decision = normalizeDecisionReferences(
-                    callDecision(
-                            finalizer,
-                            buildPrompt(
-                                    userInput,
-                                    verifiedContext,
-                                    safeWindows,
-                                    enrichedCandidates,
-                                    explorationNotes
-                            ),
-                            finalizerRuntime
+            PlanningDecision decision = callDecision(
+                    finalizer,
+                    buildPrompt(
+                            userInput,
+                            verifiedContext,
+                            safeWindows,
+                            enrichedCandidates,
+                            explorationNotes
                     ),
-                    planningContext
+                    finalizerRuntime
             );
 
             PlanValidationResult finalValidation;
@@ -149,13 +145,10 @@ public final class PlanningAgentWorker {
                         java.util.Map.of("reason", firstValidationError.getMessage())
                 );
 
-                decision = normalizeDecisionReferences(
-                        callDecision(
-                                finalizer,
-                                buildRepairPrompt(planningContext, enrichedCandidates, explorationNotes),
-                                finalizerRuntime
-                        ),
-                        planningContext
+                decision = callDecision(
+                        finalizer,
+                        buildRepairPrompt(planningContext, enrichedCandidates, explorationNotes),
+                        finalizerRuntime
                 );
                 finalValidation = validateWithServerFacts(decision, planningContext);
             }
@@ -231,101 +224,6 @@ public final class PlanningAgentWorker {
         ensureTravelEvidence(selected, planningContext);
     }
 
-    void ensureTravelEvidence(PlanCandidate plan, PlanningToolContext planningContext) {
-        Objects.requireNonNull(plan, "plan");
-        Objects.requireNonNull(planningContext, "planningContext");
-
-        List<SelectedSession> selected = plan.items().stream()
-                .filter(Objects::nonNull)
-                .filter(item -> item.activity() != null && item.activity().id() != null)
-                .filter(item -> item.session() != null && item.session().startAt() != null)
-                .map(item -> new SelectedSession(item.period(), item.activity().id(), item.session()))
-                .sorted(Comparator.comparing(item -> item.session().startAt()))
-                .toList();
-        ensureTravelEvidence(selected, planningContext);
-    }
-
-    private void ensureTravelEvidence(List<SelectedSession> selected,
-                                      PlanningToolContext planningContext) {
-        for (int i = 1; i < selected.size(); i++) {
-            SelectedSession from = selected.get(i - 1);
-            SelectedSession to = selected.get(i);
-            Long fromVenue = from.session().venueId();
-            Long toVenue = to.session().venueId();
-            if (fromVenue == null || toVenue == null || fromVenue.equals(toVenue)) continue;
-            if (hasTravelEvidence(fromVenue, toVenue, planningContext.allTravelTimeEvidence())) continue;
-
-            travelTimeTool.getTravelTime(
-                    from.period(),
-                    from.activityId(),
-                    from.session().sessionId(),
-                    to.period(),
-                    to.activityId(),
-                    to.session().sessionId(),
-                    planningContext
-            );
-        }
-    }
-
-    private PlanningDecision normalizeDecisionReferences(
-            PlanningDecision decision,
-            PlanningToolContext planningContext
-    ) {
-        Objects.requireNonNull(decision, "decision");
-        Objects.requireNonNull(planningContext, "planningContext");
-        if (decision.plan() == null || decision.plan().items() == null) return decision;
-
-        List<PlanProposal.Item> normalized = new ArrayList<>();
-        int corrections = 0;
-        for (PlanProposal.Item item : decision.plan().items()) {
-            if (item == null || item.activityId() == null) continue;
-            String period = item.period();
-            if (planningContext.evidenceRegistry().activity(period, item.activityId()) == null) {
-                List<String> periods = planningContext.evidenceRegistry()
-                        .periodsForActivity(item.activityId());
-                if (periods.size() == 1) {
-                    period = periods.getFirst();
-                    corrections++;
-                }
-            }
-
-            Long sessionId = item.sessionId();
-            if (sessionId != null
-                    && planningContext.evidenceRegistry().session(period, item.activityId(), sessionId) == null) {
-                sessionId = null;
-                corrections++;
-            }
-            normalized.add(new PlanProposal.Item(period, item.activityId(), sessionId));
-        }
-
-        PlanningDecision result = new PlanningDecision(
-                new PlanProposal(normalized),
-                decision.decisionSummary(),
-                decision.confidence()
-        );
-        if (corrections > 0) {
-            traceService.recordEvent(
-                    "PLANNING_REFERENCES_NORMALIZED",
-                    "JAVA_BOUNDARY",
-                    decision,
-                    java.util.Map.of("corrections", corrections, "normalizedDecision", result)
-            );
-        }
-        return result;
-    }
-
-    private PlanProposal proposalFromAcceptedPlan(PlanCandidate plan) {
-        return new PlanProposal(plan.items().stream()
-                .filter(Objects::nonNull)
-                .filter(item -> item.activity() != null && item.activity().id() != null)
-                .map(item -> new PlanProposal.Item(
-                        item.period(),
-                        item.activity().id(),
-                        item.session() == null ? null : item.session().sessionId()
-                ))
-                .toList());
-    }
-
     private PlanValidationResult validateWithServerFacts(
             PlanningDecision decision,
             PlanningToolContext planningContext
@@ -333,23 +231,13 @@ public final class PlanningAgentWorker {
         Objects.requireNonNull(decision, "decision");
         Objects.requireNonNull(planningContext, "planningContext");
 
+        // Agent 已经明确选择真实 session；Java 只根据这些精确引用补齐路线事实。
+        ensureTravelEvidence(decision.plan(), planningContext);
+
         PlanValidationResult result = validationTool.validate(decision.plan(), planningContext);
         if (!result.valid() || result.acceptedPlan() == null) {
             throw new IllegalStateException(
-                    "PlanningAgent 最终方案补验失败: " + result.violations());
-        }
-
-        int travelCallsBefore = planningContext.evidenceRegistry().travelCalls();
-        ensureTravelEvidence(result.acceptedPlan(), planningContext);
-        if (planningContext.evidenceRegistry().travelCalls() > travelCallsBefore) {
-            result = validationTool.validate(
-                    proposalFromAcceptedPlan(result.acceptedPlan()),
-                    planningContext
-            );
-            if (!result.valid() || result.acceptedPlan() == null) {
-                throw new IllegalStateException(
-                        "PlanningAgent 路线补证后方案校验失败: " + result.violations());
-            }
+                    "PlanningAgent 精确方案校验失败: " + result.violations());
         }
         return result;
     }
@@ -452,8 +340,8 @@ public final class PlanningAgentWorker {
                 你只负责在上述真实候选中做软目标组合。
                 Explorer 摘要只提供软决策参考，事实以候选快照为准。
                 每个 PlanProposal.Item 只能引用候选快照中已经存在的 period/activityId/sessionId。
-                有具体 session 时必须引用真实 sessionId；不要编造候选外事实。
-                服务器会根据你提交的 proposal 自动补齐必要路线证据，并强制执行 validate_plan。
+                某 activity 只要暴露了具体 sessions，就必须由你明确选择其中一个真实 OPEN sessionId。
+                Java 不会替你枚举或选择 session，只会补齐必要路线证据并强制执行 validate_plan。
                 请直接提交完整 PlanningDecision，不要输出空 plan。
                 """.formatted(
                 userInput == null ? "" : userInput.trim(),
@@ -477,6 +365,7 @@ public final class PlanningAgentWorker {
 
                 请严格根据 latestViolations/repairHint 修改冲突窗口，并重新提交完整 PlanningDecision。
                 只能引用当前已验证候选中的 period/activityId/sessionId。
+                如果 violation 指向 session，必须由你改选另一个真实 sessionId；Java 不替你选择。
                 路线证据和 validate_plan 均由服务器自动执行。
                 不要返回空 plan，也不要原样重复上一个已拒绝 proposal。
                 """.formatted(
