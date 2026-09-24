@@ -27,24 +27,42 @@ public class PlanProposal {
     public static class Item {
         private Long activityId;
         private Long sessionId;
-        private LocalDateTime plannedStartAt;
-        private LocalDateTime plannedEndAt;
+        /** 无固定 session 时使用 ISO-8601 local date-time。 */
+        private String plannedStartAt;
+        /** 无固定 session 时使用 ISO-8601 local date-time。 */
+        private String plannedEndAt;
 
         public Item(Long activityId,
                     Long sessionId,
-                    LocalDateTime plannedStartAt,
-                    LocalDateTime plannedEndAt) {
+                    String plannedStartAt,
+                    String plannedEndAt) {
             if (activityId == null) {
                 throw new IllegalArgumentException("activityId 不能为空");
             }
             this.activityId = activityId;
             this.sessionId = sessionId;
-            this.plannedStartAt = plannedStartAt;
-            this.plannedEndAt = plannedEndAt;
+            this.plannedStartAt = normalize(plannedStartAt);
+            this.plannedEndAt = normalize(plannedEndAt);
+        }
+
+        public Item(Long activityId,
+                    Long sessionId,
+                    LocalDateTime plannedStartAt,
+                    LocalDateTime plannedEndAt) {
+            this(
+                    activityId,
+                    sessionId,
+                    plannedStartAt == null ? null : plannedStartAt.toString(),
+                    plannedEndAt == null ? null : plannedEndAt.toString()
+            );
         }
 
         public Item(Long activityId, Long sessionId) {
-            this(activityId, sessionId, null, null);
+            this(activityId, sessionId, (String) null, null);
+        }
+
+        private String normalize(String value) {
+            return value == null ? "" : value.trim();
         }
     }
 }
