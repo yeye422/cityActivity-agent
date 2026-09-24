@@ -25,7 +25,7 @@ public record PlanValidationResult(
 
     public record Violation(
             String code,
-            String period,
+            String timeRange,
             Long activityId,
             Long sessionId,
             String message,
@@ -33,7 +33,7 @@ public record PlanValidationResult(
     ) {
         public Violation {
             code = code == null ? "UNKNOWN" : code.trim();
-            period = period == null ? "" : period.trim();
+            timeRange = timeRange == null ? "" : timeRange.trim();
             message = message == null ? "" : message.trim();
             repairHint = repairHint == null ? "" : repairHint.trim();
         }
