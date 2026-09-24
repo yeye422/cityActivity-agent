@@ -11,7 +11,7 @@ import java.util.Objects;
  * AgentScope Tool 的模型不可见业务上下文。
  *
  * <p>LLM 只提供诸如 retrievalIntent 这样的软决策参数；用户身份、数据源、硬约束、
- * 历史排除和已验证会话状态由 AgentScope v1 ToolExecutionContext 按类型注入 Tool，
+ * 历史排除和已验证会话状态由 AgentScope 2 RuntimeContext 按类型注入 Tool，
  * 避免模型自行改写预算、时间、数据源等确定性条件。</p>
  */
 public record VerifiedRequestContext(
