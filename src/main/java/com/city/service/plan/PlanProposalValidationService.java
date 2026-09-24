@@ -175,13 +175,23 @@ public class PlanProposalValidationService {
                 continue;
             }
             if (!hasTravelEvidence(from.venueId(), to.venueId(), travelTimeEvidence)) {
+                String routeCall = "get_travel_time("
+                        + "fromPeriod=\"" + previous.period() + "\", "
+                        + "fromActivityId=" + previous.activity().id() + ", "
+                        + "fromSessionId=" + from.sessionId() + ", "
+                        + "toPeriod=\"" + next.period() + "\", "
+                        + "toActivityId=" + next.activity().id() + ", "
+                        + "toSessionId=" + to.sessionId() + ")";
                 result.add(violation(
                         "MISSING_TRAVEL_EVIDENCE",
                         next.period(),
                         next.activity().id(),
                         to.sessionId(),
-                        "跨场地连续场次缺少真实路线时长证据",
-                        "调用 get_travel_time 查询这两个真实 session 的路线时间后重新提交"
+                        "跨场地连续场次缺少真实路线时长证据："
+                                + previous.period() + "/" + previous.activity().id() + "/" + from.sessionId()
+                                + " -> "
+                                + next.period() + "/" + next.activity().id() + "/" + to.sessionId(),
+                        "调用 " + routeCall + " 获取路线证据后重新提交"
                 ));
             }
         }
