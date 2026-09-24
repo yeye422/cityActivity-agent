@@ -92,19 +92,19 @@ class AgentBusinessGuardMiddlewareTest {
     void shouldStopRepeatedToolSignature() {
         AgentBusinessGuardMiddleware middleware = new AgentBusinessGuardMiddleware(
                 "planning",
-                Set.of("validate_plan"),
+                Set.of("get_travel_time"),
                 10,
                 3,
                 null
         );
         Map<String, Object> sameProposal = Map.of("activityId", 101L);
 
-        middleware.beforeToolCall("validate_plan", sameProposal);
-        middleware.beforeToolCall("validate_plan", sameProposal);
+        middleware.beforeToolCall("get_travel_time", sameProposal);
+        middleware.beforeToolCall("get_travel_time", sameProposal);
 
         AgentExecutionHarness.AgentHarnessException error = assertThrows(
                 AgentExecutionHarness.AgentHarnessException.class,
-                () -> middleware.beforeToolCall("validate_plan", sameProposal)
+                () -> middleware.beforeToolCall("get_travel_time", sameProposal)
         );
         assertEquals(DegradationReason.LOOP_DETECTED, error.degradationReason());
     }
