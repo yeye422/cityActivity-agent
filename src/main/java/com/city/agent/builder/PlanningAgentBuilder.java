@@ -1,79 +1,34 @@
 package com.city.agent.builder;
 
 import com.city.agent.loader.PromptLoader;
-import com.city.model.context.PlanningToolContext;
-import com.city.service.harness.AgentBusinessGuardMiddleware;
-import com.city.service.trace.AgentTraceService;
-import com.city.tool.PlanningDiscoveryTool;
-import com.city.tool.TravelTimeTool;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.model.Model;
-import io.agentscope.core.tool.Toolkit;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.Objects;
-import java.util.Set;
 
-/** 构建单次执行使用的 PlanningAgent。 */
+/** 构建单次执行使用的 PlanningAgent；候选、路线和校验均由 Java 边界提供。 */
 @Component
 public class PlanningAgentBuilder {
 
     private final Model mainModel;
     private final PromptLoader promptLoader;
-    private final PlanningDiscoveryTool discoveryTool;
-    private final TravelTimeTool travelTimeTool;
-    private final AgentTraceService traceService;
 
-    /** 保留现有纯单测构造方式。 */
-    public PlanningAgentBuilder(
-            Model mainModel,
-            PromptLoader promptLoader,
-            PlanningDiscoveryTool discoveryTool,
-            TravelTimeTool travelTimeTool
-    ) {
-        this(mainModel, promptLoader, discoveryTool, travelTimeTool, null);
-    }
-
-    @Autowired
     public PlanningAgentBuilder(
             @Qualifier("CityMainChatModel") Model mainModel,
-            PromptLoader promptLoader,
-            PlanningDiscoveryTool discoveryTool,
-            TravelTimeTool travelTimeTool,
-            AgentTraceService traceService
+            PromptLoader promptLoader
     ) {
-        this.mainModel = mainModel;
-        this.promptLoader = promptLoader;
-        this.discoveryTool = discoveryTool;
-        this.travelTimeTool = travelTimeTool;
-        this.traceService = traceService;
+        this.mainModel = Objects.requireNonNull(mainModel, "mainModel");
+        this.promptLoader = Objects.requireNonNull(promptLoader, "promptLoader");
     }
 
-    public ReActAgent build(PlanningToolContext planningContext) {
-        Objects.requireNonNull(planningContext, "planningContext");
-
-        Toolkit toolkit = new Toolkit();
-        toolkit.registerTool(discoveryTool);
-        toolkit.registerTool(travelTimeTool);
-
-        AgentBusinessGuardMiddleware guardMiddleware = new AgentBusinessGuardMiddleware(
-                "city_planning_agent",
-                Set.of("discover_plan_candidates", "get_travel_time"),
-                10,
-                3,
-                traceService,
-                planningContext.verifiedRequestContext().traceId()
-        );
-
+    public ReActAgent build() {
         return ReActAgent.builder()
                 .name("city_planning_agent")
                 .model(mainModel)
                 .sysPrompt(promptLoader.load("city-prompts/planning-decision.txt"))
-                .toolkit(toolkit)
-                .middleware(guardMiddleware)
-                .maxIters(8)
+                .maxIters(4)
                 .build();
     }
 }
