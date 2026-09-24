@@ -42,7 +42,6 @@ public class EvaluationJudgeService {
     public EvaluationJudgeResult judge(String traceId, String sessionId, Map<String, Object> judgeInput) {
         try {
             ReActAgent agent = agentBuilder.build();
-            agent.getMemory().clear();
             Msg response = agentTraceService.callAgent(
                     sessionId,
                     "EvaluationJudgeAgent",
