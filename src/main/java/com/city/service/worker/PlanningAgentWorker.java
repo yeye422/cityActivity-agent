@@ -136,7 +136,26 @@ public final class PlanningAgentWorker {
                     );
                 }
 
-                PlanningDecision decision = callDecision(agent, nextPrompt, runtimeContext);
+                PlanningDecision decision;
+                try {
+                    decision = callDecision(agent, nextPrompt, runtimeContext);
+                } catch (InvalidPlanningResponseException invalidResponse) {
+                    traceService.recordEvent(
+                            "PLANNING_AGENT_RESPONSE_REPAIR_REQUESTED",
+                            "AGENT",
+                            Map.of(
+                                    "responseAttempt", responseAttempt,
+                                    "reason", invalidResponse.getMessage()
+                            ),
+                            planningContext.notebook().snapshot()
+                    );
+                    nextPrompt = buildResponseRepairPrompt(
+                            verifiedContext,
+                            PlanningDiscoveryToolResult.from(evidenceRegistry.windows()),
+                            invalidResponse.getMessage()
+                    );
+                    continue;
+                }
 
                 // Agent 已选择精确 session；Java 只根据这些引用补齐真实路线事实。
                 ensureTravelEvidence(decision.plan(), planningContext);
@@ -292,11 +311,18 @@ public final class PlanningAgentWorker {
 
     private PlanningDecision structuredDecision(Msg response) {
         if (response == null) {
-            throw new IllegalStateException("PlanningAgent 返回为空");
+            throw new InvalidPlanningResponseException("PlanningAgent 返回为空");
         }
         PlanningDecision decision = response.getStructuredData(PlanningDecision.class);
         if (decision == null) {
-            throw new IllegalStateException("PlanningAgent 未返回结构化 PlanningDecision");
+            throw new InvalidPlanningResponseException(
+                    "PlanningAgent 未返回结构化 PlanningDecision");
+        }
+        if (decision.plan() == null
+                || decision.plan().items() == null
+                || decision.plan().items().isEmpty()) {
+            throw new InvalidPlanningResponseException(
+                    "PlanningDecision.plan 不能为空");
         }
         return decision;
     }
@@ -327,6 +353,28 @@ public final class PlanningAgentWorker {
                 context.effectiveSlots(),
                 context.hardConstraints(),
                 initialCandidates
+        );
+    }
+
+    private String buildResponseRepairPrompt(
+            VerifiedRequestContext context,
+            PlanningDiscoveryToolResult currentCandidates,
+            String reason
+    ) {
+        return """
+                上一个响应没有形成可校验的 PlanningDecision，需要重新提交。
+
+                UserGoal：%s
+                当前完整已验证候选：%s
+                响应问题：%s
+
+                你仍然可以按需调用已注册 Tool，但最终必须提交完整 PlanningDecision。
+                plan 不能为空；每个 item 必须使用真实 period/activityId，
+                对暴露了具体 sessions 的 activity 必须明确选择真实 OPEN sessionId。
+                """.formatted(
+                context.userGoal(),
+                currentCandidates,
+                reason == null ? "" : reason
         );
     }
 
@@ -375,4 +423,10 @@ public final class PlanningAgentWorker {
             Long activityId,
             ActivitySessionResponse session
     ) {}
+    private static final class InvalidPlanningResponseException extends RuntimeException {
+        private InvalidPlanningResponseException(String message) {
+            super(message);
+        }
+    }
+
 }
