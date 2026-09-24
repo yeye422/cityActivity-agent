@@ -346,8 +346,13 @@ public final class PlanningAgentWorker {
     private String buildRepairPrompt(
             VerifiedRequestContext context,
             PlanningDiscoveryToolResult currentCandidates,
-            PlanNotebook.Snapshot notebook
+            PlanNotebook.Snapshot notebook,
+            int repeatedSameProposal
     ) {
+        String stagnationHint = repeatedSameProposal > 1
+                ? "同一无效 proposal 已重复 " + repeatedSameProposal
+                        + " 次；本轮必须采取不同动作，不能只修改解释文案。"
+                : "";
         return """
                 上一个 PlanningDecision 没有通过服务器校验，需要继续修复。
 
@@ -356,11 +361,13 @@ public final class PlanningAgentWorker {
                 校验状态：%s
                 上一方案：%s
                 violations：%s
+                停滞提示：%s
 
                 请逐条处理 violations 中的 message 和 repairHint。
                 你仍然可以按需调用已注册 Tool 获取补充信息、扩展候选或查询路线时间。
-                如果 violation 是 MISSING_TRAVEL_EVIDENCE，应调用 get_travel_time 查询对应两个真实 session 的路线时间后再提交。
-                必须由你重新选择 activity/session；Java 不会替你枚举或选择。
+                如果 violation 是 MISSING_TRAVEL_EVIDENCE，repairHint 已包含完整 get_travel_time(...) 参数；
+                必须先按该参数调用 Tool 获取路线证据，再重新提交。
+                如果 violation 指向 activity/session，则必须由你重新选择真实候选；Java 不会替你枚举或选择。
                 修复后重新提交完整 PlanningDecision。
                 不要原样重复上一份无效方案。
                 """.formatted(
@@ -368,7 +375,8 @@ public final class PlanningAgentWorker {
                 currentCandidates,
                 notebook.status(),
                 notebook.latestProposal(),
-                notebook.latestViolations()
+                notebook.latestViolations(),
+                stagnationHint
         );
     }
 
