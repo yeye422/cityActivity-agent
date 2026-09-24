@@ -69,7 +69,7 @@ public class ActivityPlanService {
             throw new IllegalArgumentException("单次 planning candidate search 必须位于同一自然日");
         }
 
-        SlotBundle safeSlots = baseSlots == null ? SlotBundle.empty() : baseSlots;
+        SlotBundle safeSlots = planningSearchSlots(baseSlots);
         SlotBundle safeExcluded = excludedSlots == null ? SlotBundle.empty() : excludedSlots;
         WeatherRecommendationContext safeWeather = weather == null
                 ? WeatherRecommendationContext.inactive()
