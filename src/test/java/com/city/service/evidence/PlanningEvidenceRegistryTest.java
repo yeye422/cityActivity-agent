@@ -32,6 +32,18 @@ class PlanningEvidenceRegistryTest {
     }
 
     @Test
+    void defaultValidationSafetyBudgetShouldAllowRepeatedRepairsBeyondTwoRounds() {
+        PlanningEvidenceRegistry registry = new PlanningEvidenceRegistry();
+
+        registry.beginValidation();
+        registry.beginValidation();
+        registry.beginValidation();
+        registry.beginValidation();
+
+        assertEquals(4, registry.validationCalls());
+    }
+
+    @Test
     void shouldMergeExpandedCandidatesIntoExistingPeriod() {
         PlanningEvidenceRegistry registry = new PlanningEvidenceRegistry();
         ActivityItem first = activity(101L, "陶艺");
