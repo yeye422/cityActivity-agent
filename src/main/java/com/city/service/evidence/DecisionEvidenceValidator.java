@@ -67,8 +67,8 @@ public final class DecisionEvidenceValidator {
                                         RunEvidenceStore evidenceStore) {
         List<PlanCandidate.Item> concrete = plan.items().stream()
                 .filter(Objects::nonNull)
-                .filter(item -> item.session() != null && item.session().startAt() != null)
-                .sorted(Comparator.comparing(item -> item.session().startAt()))
+                .filter(item -> item.session() != null && item.startAt() != null)
+                .sorted(Comparator.comparing(PlanCandidate.Item::startAt))
                 .toList();
 
         for (int i = 1; i < concrete.size(); i++) {
