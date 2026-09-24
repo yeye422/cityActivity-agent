@@ -4,7 +4,6 @@ import com.city.agent.loader.PromptLoader;
 import com.city.model.context.PlanningToolContext;
 import com.city.service.harness.AgentBusinessGuardMiddleware;
 import com.city.service.trace.AgentTraceService;
-import com.city.tool.PlanValidationTool;
 import com.city.tool.PlanningDiscoveryTool;
 import com.city.tool.TravelTimeTool;
 import io.agentscope.core.ReActAgent;
@@ -26,7 +25,6 @@ public class PlanningAgentBuilder {
     private final PromptLoader promptLoader;
     private final PlanningDiscoveryTool discoveryTool;
     private final TravelTimeTool travelTimeTool;
-    private final PlanValidationTool validationTool;
     private final AgentTraceService traceService;
 
     /** 保留现有纯单测构造方式。 */
@@ -34,10 +32,9 @@ public class PlanningAgentBuilder {
             Model mainModel,
             PromptLoader promptLoader,
             PlanningDiscoveryTool discoveryTool,
-            TravelTimeTool travelTimeTool,
-            PlanValidationTool validationTool
+            TravelTimeTool travelTimeTool
     ) {
-        this(mainModel, promptLoader, discoveryTool, travelTimeTool, validationTool, null);
+        this(mainModel, promptLoader, discoveryTool, travelTimeTool, null);
     }
 
     @Autowired
@@ -46,14 +43,12 @@ public class PlanningAgentBuilder {
             PromptLoader promptLoader,
             PlanningDiscoveryTool discoveryTool,
             TravelTimeTool travelTimeTool,
-            PlanValidationTool validationTool,
             AgentTraceService traceService
     ) {
         this.mainModel = mainModel;
         this.promptLoader = promptLoader;
         this.discoveryTool = discoveryTool;
         this.travelTimeTool = travelTimeTool;
-        this.validationTool = validationTool;
         this.traceService = traceService;
     }
 
