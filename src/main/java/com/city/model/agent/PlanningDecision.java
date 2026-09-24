@@ -1,16 +1,26 @@
 package com.city.model.agent;
 
-/** PlanningAgent 的最终强类型输出；最终 plan 仍需由 Java 再执行一次 validate_plan 等价校验。 */
-public record PlanningDecision(
-        PlanProposal plan,
-        String decisionSummary,
-        double confidence
-) {
-    public PlanningDecision {
-        if (plan == null || plan.items().isEmpty()) {
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
+
+/** PlanningAgent 的最终强类型输出；最终 plan 仍由 Java 强制执行 validate_plan 等价校验。 */
+@Data
+@Accessors(fluent = true)
+@NoArgsConstructor
+@JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY)
+public class PlanningDecision {
+    private PlanProposal plan;
+    private String decisionSummary;
+    private double confidence;
+
+    public PlanningDecision(PlanProposal plan, String decisionSummary, double confidence) {
+        if (plan == null || plan.items() == null || plan.items().isEmpty()) {
             throw new IllegalArgumentException("plan 不能为空");
         }
-        decisionSummary = decisionSummary == null ? "" : decisionSummary.trim();
-        confidence = Math.max(0.0, Math.min(1.0, confidence));
+        this.plan = plan;
+        this.decisionSummary = decisionSummary == null ? "" : decisionSummary.trim();
+        this.confidence = Math.max(0.0, Math.min(1.0, confidence));
     }
 }
