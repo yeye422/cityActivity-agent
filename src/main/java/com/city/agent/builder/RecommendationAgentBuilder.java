@@ -7,7 +7,6 @@ import com.city.service.harness.AgentBusinessGuardMiddleware;
 import com.city.service.trace.AgentTraceService;
 import com.city.tool.RetrievalTool;
 import io.agentscope.core.ReActAgent;
-import io.agentscope.core.memory.InMemoryMemory;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.tool.ToolExecutionContext;
 import io.agentscope.core.tool.Toolkit;
@@ -76,8 +75,7 @@ public class RecommendationAgentBuilder {
                 .sysPrompt(promptLoader.load("city-prompts/recommendation-decision.txt"))
                 .toolkit(toolkit)
                 .toolExecutionContext(toolContext)
-                .memory(new InMemoryMemory())
-                .hook(guardHook)
+                .middleware(guardMiddleware)
                 .maxIters(4)
                 .build();
     }
