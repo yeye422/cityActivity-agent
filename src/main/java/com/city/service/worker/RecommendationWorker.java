@@ -10,6 +10,8 @@ import com.city.service.evidence.DecisionEvidenceValidator;
 import com.city.service.evidence.RunEvidenceStore;
 import com.city.service.recommend.RecommendationDecisionValidator;
 import com.city.service.trace.AgentTraceService;
+import com.city.tool.RetrievalTool;
+import com.city.model.tool.RetrievalToolResult;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
@@ -30,14 +32,17 @@ public final class RecommendationWorker {
 
     private final RecommendationAgentBuilder agentBuilder;
     private final RecommendationDecisionValidator decisionValidator;
+    private final RetrievalTool retrievalTool;
     private final DecisionEvidenceValidator evidenceValidator = new DecisionEvidenceValidator();
     private final AgentTraceService traceService;
 
     public RecommendationWorker(RecommendationAgentBuilder agentBuilder,
                                 RecommendationDecisionValidator decisionValidator,
+                                RetrievalTool retrievalTool,
                                 AgentTraceService traceService) {
         this.agentBuilder = Objects.requireNonNull(agentBuilder, "agentBuilder");
         this.decisionValidator = Objects.requireNonNull(decisionValidator, "decisionValidator");
+        this.retrievalTool = Objects.requireNonNull(retrievalTool, "retrievalTool");
         this.traceService = Objects.requireNonNull(traceService, "traceService");
     }
 
@@ -49,8 +54,18 @@ public final class RecommendationWorker {
                 MAX_RETRIEVAL_CALLS,
                 evidenceStore
         );
+        /*
+         * 首次检索是 Recommendation 的事实获取边界，不能由模型决定是否跳过。
+         * Java 只固定“必须先有真实候选”；候选排序、选择以及是否二次检索仍由 Agent 决定。
+         */
+        String initialIntent = initialRetrievalIntent(userInput, verifiedContext);
+        RetrievalToolResult initialCandidates = retrievalTool.searchActivities(
+                initialIntent,
+                verifiedContext,
+                evidenceRegistry
+        );
         ReActAgent agent = agentBuilder.build(verifiedContext, evidenceRegistry);
-        String prompt = buildUserPrompt(userInput, verifiedContext);
+        String prompt = buildUserPrompt(userInput, verifiedContext, initialCandidates);
 
         traceService.recordEvent(
                 "RECOMMENDATION_AGENT_STARTED",
@@ -105,22 +120,34 @@ public final class RecommendationWorker {
         }
     }
 
-    String buildUserPrompt(String userInput, VerifiedRequestContext context) {
+    String buildUserPrompt(String userInput,
+                           VerifiedRequestContext context,
+                           RetrievalToolResult initialCandidates) {
         String safeInput = userInput == null ? "" : userInput.trim();
         return """
                 用户原话：%s
                 UserGoal：%s
                 当前已生效槽位：%s
                 服务器硬约束摘要：%s
+                服务器已执行首次 search_activities，真实候选快照：%s
 
-                请自主决定检索意图并调用 search_activities。
-                如果第一批候选整体无法覆盖核心 UserGoal，可以调整软检索意图再检索一次；
-                硬约束由服务器固定，不要尝试修改。最终只从 Tool 曾返回的 activityId 中选择。
+                首次候选已经绑定到当前 Run Evidence，请直接基于这些 activityId 做软目标权衡。
+                如果第一批候选整体无法覆盖核心 UserGoal，可以调用 search_activities 再检索一次；
+                硬约束由服务器固定，不要尝试修改。最终只能从本轮 Tool 已返回的 activityId 中选择。
                 """.formatted(
                 safeInput,
                 context.userGoal(),
                 context.effectiveSlots(),
-                context.hardConstraints()
+                context.hardConstraints(),
+                initialCandidates
         );
+    }
+
+    private String initialRetrievalIntent(String userInput, VerifiedRequestContext context) {
+        String safeInput = userInput == null ? "" : userInput.trim();
+        if (!context.userGoal().isEmpty()) {
+            return context.userGoal().toString();
+        }
+        return safeInput;
     }
 }
