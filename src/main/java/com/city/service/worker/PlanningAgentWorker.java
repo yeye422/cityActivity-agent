@@ -356,8 +356,15 @@ public final class PlanningAgentWorker {
 
     /** package-private：回归测试 Java 强制 validate_plan 边界。 */
     void ensureToolValidated(PlanningDecision decision, PlanningToolContext planningContext) {
+        Objects.requireNonNull(decision, "decision");
+        Objects.requireNonNull(planningContext, "planningContext");
         if (planningContext.notebook().validated()) return;
-        validateWithServerFacts(decision, planningContext);
+
+        PlanValidationResult result = validationTool.validate(decision.plan(), planningContext);
+        if (!result.valid()) {
+            throw new IllegalStateException(
+                    "PlanningAgent 最终方案补验失败: " + result.violations());
+        }
     }
 
     private boolean hasTravelEvidence(Long fromVenueId,
