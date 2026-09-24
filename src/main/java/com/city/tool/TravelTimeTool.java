@@ -45,7 +45,10 @@ public class TravelTimeTool {
         ActivitySessionResponse to = planningContext.evidenceRegistry()
                 .session(toActivityId, toSessionId);
         if (from == null || to == null) {
-            throw new CityException("路线查询只能引用 discover_plan_candidates 已暴露的真实场次");
+            throw new CityException("路线查询只能引用当前 Run 已暴露的真实场次");
+        }
+        if (from.venueId() == null || to.venueId() == null) {
+            throw new CityException("所选场次缺少 venueId，无法查询路线时间");
         }
 
         if (traceService != null) {
