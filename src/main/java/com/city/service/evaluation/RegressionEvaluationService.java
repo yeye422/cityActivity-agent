@@ -61,7 +61,7 @@ public class RegressionEvaluationService {
                                        BuildVersionService buildVersionService,
                                        @Value("${city.prompt.version:v1}") String promptVersion,
                                        @Value("${city.rule.version:v1}") String ruleVersion,
-                                       @Value("${city.llm.main-model:qwen3.8-flash}") String modelVersion) {
+                                       @Value("${city.llm.main-model:qwen3.8-max}") String modelVersion) {
         this.objectMapper = objectMapper;
         this.supervisor = supervisor;
         this.traceService = traceService;
