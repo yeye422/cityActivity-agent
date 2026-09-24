@@ -68,6 +68,7 @@ public class PlanValidationTool {
         PlanValidationResult result = validationService.validate(
                 proposal,
                 planningContext.evidenceRegistry(),
+                planningContext.horizon(),
                 planningContext.maxBudget(),
                 planningContext.allTravelTimeEvidence()
         );
