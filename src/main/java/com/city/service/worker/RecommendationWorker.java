@@ -80,17 +80,28 @@ public final class RecommendationWorker {
                 null
         );
         try {
-            Msg response = agent.call(
-                    List.of(
-                            Msg.builder()
-                                    .role(MsgRole.USER)
-                                    .textContent(prompt)
-                                    .build()
-                    ),
-                    RecommendationDecision.class,
-                    runtimeContext
-            ).block();
-            RecommendationDecision decision = structuredDecision(response);
+            RecommendationDecision decision = callDecision(agent, prompt, runtimeContext);
+            if (needsServerRetry(decision) && evidenceRegistry.retrievalCalls() < MAX_RETRIEVAL_CALLS) {
+                RetrievalToolResult retryCandidates = retrievalTool.searchActivities(
+                        retryRetrievalIntent(userInput, verifiedContext),
+                        verifiedContext,
+                        evidenceRegistry
+                );
+                traceService.recordEvent(
+                        "RECOMMENDATION_AGENT_RETRY_REQUESTED",
+                        "AGENT",
+                        decision,
+                        java.util.Map.of(
+                                "retrievalCalls", evidenceRegistry.retrievalCalls(),
+                                "retryCandidates", retryCandidates
+                        )
+                );
+                decision = callDecision(
+                        agent,
+                        buildRetryPrompt(verifiedContext, retryCandidates),
+                        runtimeContext
+                );
+            }
             RecommendationDecision validated = decisionValidator.validate(decision, evidenceRegistry);
             List<ActivityItem> selected = evidenceValidator.validateRecommendation(
                     validated.selectedActivityIds(),
@@ -149,6 +160,48 @@ public final class RecommendationWorker {
         );
     }
 
+    private RecommendationDecision callDecision(ReActAgent agent,
+                                                  String prompt,
+                                                  RuntimeContext runtimeContext) {
+        Msg response = agent.call(
+                List.of(
+                        Msg.builder()
+                                .role(MsgRole.USER)
+                                .textContent(prompt)
+                                .build()
+                ),
+                RecommendationDecision.class,
+                runtimeContext
+        ).block();
+        return structuredDecision(response);
+    }
+
+    private boolean needsServerRetry(RecommendationDecision decision) {
+        if (decision == null) return true;
+        List<Long> selected = decision.selectedActivityIds();
+        return !decision.candidatePoolSufficient()
+                || selected == null
+                || selected.stream().filter(Objects::nonNull).findAny().isEmpty();
+    }
+
+    private String buildRetryPrompt(VerifiedRequestContext context,
+                                    RetrievalToolResult retryCandidates) {
+        return """
+                上一轮你没有形成可提交的最终推荐，因此服务器已执行本轮唯一一次补充检索。
+                UserGoal：%s
+                当前已生效槽位：%s
+                补充候选快照：%s
+
+                现在必须在本轮已经暴露的真实 activityId 中做 best-effort 最终选择。
+                只要候选池非空，就选择 1~3 个最符合核心 UserGoal 的候选，并将 candidatePoolSufficient 设为 true。
+                不要返回空 selectedActivityIds，不得引用未暴露 activityId，也不要补充未知事实。
+                """.formatted(
+                context.userGoal(),
+                context.effectiveSlots(),
+                retryCandidates
+        );
+    }
+
     private RecommendationDecision structuredDecision(Msg response) {
         if (response == null) {
             throw new IllegalStateException("RecommendationAgent 返回为空");
@@ -166,5 +219,12 @@ public final class RecommendationWorker {
             return context.userGoal().toString();
         }
         return safeInput;
+    }
+
+    private String retryRetrievalIntent(String userInput, VerifiedRequestContext context) {
+        String safeInput = userInput == null ? "" : userInput.trim();
+        return safeInput
+                + "；优先补充与核心体验目标匹配、且与首轮候选有差异的活动。UserGoal="
+                + context.userGoal();
     }
 }
