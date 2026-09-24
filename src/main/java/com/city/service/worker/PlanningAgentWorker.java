@@ -22,10 +22,7 @@ import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
 import java.math.BigDecimal;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -42,7 +39,6 @@ public final class PlanningAgentWorker {
     private final PlanningDiscoveryTool discoveryTool;
     private final DecisionEvidenceValidator evidenceValidator = new DecisionEvidenceValidator();
     private final AgentTraceService traceService;
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** 保留现有纯单测构造入口。 */
     public PlanningAgentWorker(
@@ -133,15 +129,15 @@ public final class PlanningAgentWorker {
                     Msg.builder()
                             .role(MsgRole.USER)
                             .textContent(buildPrompt(userInput, verifiedContext, safeWindows, preloadedCandidates))
-                            .build()
+                            .build(),
+                    PlanningDecision.class
             ).block();
             PlanningDecision decision = structuredDecision(response);
 
             /*
-             * AgentScope 的 generate_response 是框架级结构化输出 Tool，不能在 Hook 中通过抛异常阻止。
-             * 若模型提前提交 proposal，则在 Worker 边界使用同一个 validate_plan Tool 补验。
-             * 第一次补验为 invalid 时，把 violations/notebook 显式反馈给同一个 Agent，再允许一次
-             * repair -> revalidate；只有最终 validated 的 proposal 才能进入业务响应。
+             * AgentScope 2.x 负责把模型输出绑定为 PlanningDecision；业务合法性仍由 Java 边界
+             * 强制 validate_plan。第一次校验 invalid 时，把 violations/notebook 显式反馈给
+             * 同一个 Agent，再允许一次 repair -> revalidate。
              */
             try {
                 ensureToolValidated(decision, planningContext);
@@ -159,7 +155,8 @@ public final class PlanningAgentWorker {
                         Msg.builder()
                                 .role(MsgRole.USER)
                                 .textContent(buildRepairPrompt(planningContext))
-                                .build()
+                                .build(),
+                        PlanningDecision.class
                 ).block();
                 decision = structuredDecision(repairedResponse);
                 ensureToolValidated(decision, planningContext);
@@ -229,81 +226,11 @@ public final class PlanningAgentWorker {
         if (response == null) {
             throw new IllegalStateException("PlanningAgent 返回为空");
         }
-        String raw = response.getTextContent();
-        Exception lastError = null;
-        for (String json : jsonCandidates(raw)) {
-            try {
-                return objectMapper.readValue(json, PlanningDecision.class);
-            } catch (Exception error) {
-                lastError = error;
-            }
+        PlanningDecision decision = response.getStructuredData(PlanningDecision.class);
+        if (decision == null) {
+            throw new IllegalStateException("PlanningAgent 未返回结构化 PlanningDecision");
         }
-        throw new IllegalStateException(
-                "PlanningAgent 最终输出无法解析为 PlanningDecision: " + safePreview(raw),
-                lastError
-        );
-    }
-
-    private List<String> jsonCandidates(String value) {
-        String text = value == null ? "" : value.trim();
-        List<String> candidates = new ArrayList<>();
-        if (!text.isBlank()) {
-            candidates.add(text);
-        }
-
-        int fenceStart = text.indexOf("```");
-        while (fenceStart >= 0) {
-            int contentStart = text.indexOf('\n', fenceStart + 3);
-            if (contentStart < 0) break;
-            int fenceEnd = text.indexOf("```", contentStart + 1);
-            if (fenceEnd < 0) break;
-            String fenced = text.substring(contentStart + 1, fenceEnd).trim();
-            if (!fenced.isBlank() && !candidates.contains(fenced)) {
-                candidates.add(fenced);
-            }
-            fenceStart = text.indexOf("```", fenceEnd + 3);
-        }
-
-        boolean inString = false;
-        boolean escaping = false;
-        int depth = 0;
-        int start = -1;
-        for (int i = 0; i < text.length(); i++) {
-            char ch = text.charAt(i);
-            if (inString) {
-                if (escaping) {
-                    escaping = false;
-                } else if (ch == '\\') {
-                    escaping = true;
-                } else if (ch == '"') {
-                    inString = false;
-                }
-                continue;
-            }
-            if (ch == '"') {
-                inString = true;
-                continue;
-            }
-            if (ch == '{') {
-                if (depth == 0) start = i;
-                depth++;
-            } else if (ch == '}' && depth > 0) {
-                depth--;
-                if (depth == 0 && start >= 0) {
-                    String object = text.substring(start, i + 1).trim();
-                    if (!object.isBlank() && !candidates.contains(object)) {
-                        candidates.add(object);
-                    }
-                    start = -1;
-                }
-            }
-        }
-        return candidates;
-    }
-
-    private String safePreview(String value) {
-        String text = value == null ? "" : value.trim();
-        return text.length() <= 500 ? text : text.substring(0, 500) + "...";
+        return decision;
     }
 
     private String buildPrompt(String userInput,
