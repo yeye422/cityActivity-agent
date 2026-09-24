@@ -18,8 +18,10 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Planning 使用两阶段 Agent：
- * Explorer 按需调用语义探索 Tool；Finalizer 无 Tool，只负责结构化 PlanningDecision。
+ * 构建单次 PlanningAgent。
+ *
+ * <p>同一个 Agent 负责按需调用探索 Tool、提交 PlanningDecision，并在 Java validate_plan
+ * 返回 violations 后继续修复。Java 不替 Agent 选择 activity/session。</p>
  */
 @Component
 public class PlanningAgentBuilder {
@@ -50,7 +52,7 @@ public class PlanningAgentBuilder {
         this.traceService = traceService;
     }
 
-    public ReActAgent buildExplorer(PlanningToolContext planningContext) {
+    public ReActAgent build(PlanningToolContext planningContext) {
         Objects.requireNonNull(planningContext, "planningContext");
 
         Toolkit toolkit = new Toolkit();
@@ -60,35 +62,26 @@ public class PlanningAgentBuilder {
         toolkit.registerTool(recentHistoryTool);
 
         AgentBusinessGuardMiddleware guard = new AgentBusinessGuardMiddleware(
-                "city_planning_explorer",
+                "city_planning_agent",
                 Set.of(
                         "expand_plan_candidates",
                         "inspect_activity_details",
                         "lookup_user_preferences",
                         "lookup_recent_activity_history"
                 ),
-                4,
+                8,
                 3,
                 traceService,
                 planningContext.verifiedRequestContext().traceId()
         );
 
         return ReActAgent.builder()
-                .name("city_planning_explorer")
-                .model(mainModel)
-                .sysPrompt(promptLoader.load("city-prompts/planning-exploration.txt"))
-                .toolkit(toolkit)
-                .middleware(guard)
-                .maxIters(6)
-                .build();
-    }
-
-    public ReActAgent buildFinalizer() {
-        return ReActAgent.builder()
-                .name("city_planning_finalizer")
+                .name("city_planning_agent")
                 .model(mainModel)
                 .sysPrompt(promptLoader.load("city-prompts/planning-decision.txt"))
-                .maxIters(3)
+                .toolkit(toolkit)
+                .middleware(guard)
+                .maxIters(8)
                 .build();
     }
 }
