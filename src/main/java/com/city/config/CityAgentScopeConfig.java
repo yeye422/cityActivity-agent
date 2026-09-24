@@ -52,7 +52,7 @@ public class CityAgentScopeConfig {
                 .stream(false)
                 .enableThinking(false)
                 .nativeStructuredOutput(true)
-                .nativeStructuredOutputWithTools(true)
+                .nativeStructuredOutputWithTools(false)
                 .defaultOptions(
                         GenerateOptions.builder()
                                 .parallelToolCalls(false)
