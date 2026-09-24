@@ -16,9 +16,6 @@ import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import org.springframework.stereotype.Component;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -37,7 +34,6 @@ public final class RecommendationWorker {
     private final RetrievalTool retrievalTool;
     private final DecisionEvidenceValidator evidenceValidator = new DecisionEvidenceValidator();
     private final AgentTraceService traceService;
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public RecommendationWorker(RecommendationAgentBuilder agentBuilder,
                                 RecommendationDecisionValidator decisionValidator,
@@ -81,9 +77,10 @@ public final class RecommendationWorker {
                     Msg.builder()
                             .role(MsgRole.USER)
                             .textContent(prompt)
-                            .build()
+                            .build(),
+                    RecommendationDecision.class
             ).block();
-            RecommendationDecision decision = parseDecision(response);
+            RecommendationDecision decision = structuredDecision(response);
             RecommendationDecision validated = decisionValidator.validate(decision, evidenceRegistry);
             List<ActivityItem> selected = evidenceValidator.validateRecommendation(
                     validated.selectedActivityIds(),
@@ -142,85 +139,15 @@ public final class RecommendationWorker {
         );
     }
 
-    private RecommendationDecision parseDecision(Msg response) {
+    private RecommendationDecision structuredDecision(Msg response) {
         if (response == null) {
             throw new IllegalStateException("RecommendationAgent 返回为空");
         }
-        String raw = response.getTextContent();
-        Exception lastError = null;
-        for (String json : jsonCandidates(raw)) {
-            try {
-                return objectMapper.readValue(json, RecommendationDecision.class);
-            } catch (Exception error) {
-                lastError = error;
-            }
+        RecommendationDecision decision = response.getStructuredData(RecommendationDecision.class);
+        if (decision == null) {
+            throw new IllegalStateException("RecommendationAgent 未返回结构化 RecommendationDecision");
         }
-        throw new IllegalStateException(
-                "RecommendationAgent 最终输出无法解析为 RecommendationDecision: " + safePreview(raw),
-                lastError
-        );
-    }
-
-    private List<String> jsonCandidates(String value) {
-        String text = value == null ? "" : value.trim();
-        List<String> candidates = new ArrayList<>();
-        if (!text.isBlank()) {
-            candidates.add(text);
-        }
-
-        int fenceStart = text.indexOf("```");
-        while (fenceStart >= 0) {
-            int contentStart = text.indexOf('\n', fenceStart + 3);
-            if (contentStart < 0) break;
-            int fenceEnd = text.indexOf("```", contentStart + 1);
-            if (fenceEnd < 0) break;
-            String fenced = text.substring(contentStart + 1, fenceEnd).trim();
-            if (!fenced.isBlank() && !candidates.contains(fenced)) {
-                candidates.add(fenced);
-            }
-            fenceStart = text.indexOf("```", fenceEnd + 3);
-        }
-
-        boolean inString = false;
-        boolean escaping = false;
-        int depth = 0;
-        int start = -1;
-        for (int i = 0; i < text.length(); i++) {
-            char ch = text.charAt(i);
-            if (inString) {
-                if (escaping) {
-                    escaping = false;
-                } else if (ch == '\\') {
-                    escaping = true;
-                } else if (ch == '"') {
-                    inString = false;
-                }
-                continue;
-            }
-            if (ch == '"') {
-                inString = true;
-                continue;
-            }
-            if (ch == '{') {
-                if (depth == 0) start = i;
-                depth++;
-            } else if (ch == '}' && depth > 0) {
-                depth--;
-                if (depth == 0 && start >= 0) {
-                    String object = text.substring(start, i + 1).trim();
-                    if (!object.isBlank() && !candidates.contains(object)) {
-                        candidates.add(object);
-                    }
-                    start = -1;
-                }
-            }
-        }
-        return candidates;
-    }
-
-    private String safePreview(String value) {
-        String text = value == null ? "" : value.trim();
-        return text.length() <= 500 ? text : text.substring(0, 500) + "...";
+        return decision;
     }
 
     private String initialRetrievalIntent(String userInput, VerifiedRequestContext context) {
