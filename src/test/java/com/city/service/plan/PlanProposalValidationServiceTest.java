@@ -40,6 +40,34 @@ class PlanProposalValidationServiceTest {
     }
 
     @Test
+    void shouldAcceptFlexibleActivityWithIsoPlannedTimeInsideHorizon() {
+        ActivityItem flexible = activity(303L, "城市漫步");
+        PlanningEvidenceRegistry registry = new PlanningEvidenceRegistry();
+        registry.record(List.of(new ActivityPlanService.CandidateBatch(
+                horizon().ranges().getFirst(),
+                List.of(flexible),
+                Map.of()
+        )));
+
+        PlanValidationResult result = service.validate(
+                new PlanProposal(List.of(new PlanProposal.Item(
+                        303L,
+                        null,
+                        "2026-09-27T10:00:00",
+                        "2026-09-27T12:00:00"
+                ))),
+                registry,
+                horizon(),
+                null,
+                List.of()
+        );
+
+        assertTrue(result.valid());
+        assertEquals(LocalDateTime.of(2026, 9, 27, 10, 0),
+                result.acceptedPlan().items().getFirst().startAt());
+    }
+
+    @Test
     void shouldRequireAgentToChooseExactSessionWhenSessionsAreExposed() {
         PlanningEvidenceRegistry registry = registry(false);
         PlanValidationResult result = service.validate(
