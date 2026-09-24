@@ -2,7 +2,6 @@ package com.city.service.worker;
 
 import com.city.agent.builder.PlanningAgentBuilder;
 import com.city.enums.DegradationReason;
-import com.city.model.ActivitySessionResponse;
 import com.city.model.TravelTimeEvidence;
 import com.city.model.agent.PlanNotebook;
 import com.city.model.agent.PlanProposal;
@@ -21,7 +20,6 @@ import com.city.service.plan.PlanningConstraintParser;
 import com.city.service.trace.AgentTraceService;
 import com.city.tool.PlanValidationTool;
 import com.city.tool.PlanningDiscoveryTool;
-import com.city.tool.TravelTimeTool;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.Msg;
@@ -29,8 +27,6 @@ import io.agentscope.core.message.MsgRole;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -54,7 +50,6 @@ public final class PlanningAgentWorker {
     private final PlanningConstraintParser constraintParser;
     private final PlanValidationTool validationTool;
     private final PlanningDiscoveryTool discoveryTool;
-    private final TravelTimeTool travelTimeTool;
     private final DecisionEvidenceValidator evidenceValidator = new DecisionEvidenceValidator();
     private final AgentTraceService traceService;
 
@@ -63,14 +58,12 @@ public final class PlanningAgentWorker {
             PlanningConstraintParser constraintParser,
             PlanValidationTool validationTool,
             PlanningDiscoveryTool discoveryTool,
-            TravelTimeTool travelTimeTool,
             AgentTraceService traceService
     ) {
         this.agentBuilder = Objects.requireNonNull(agentBuilder, "agentBuilder");
         this.constraintParser = Objects.requireNonNull(constraintParser, "constraintParser");
         this.validationTool = Objects.requireNonNull(validationTool, "validationTool");
         this.discoveryTool = Objects.requireNonNull(discoveryTool, "discoveryTool");
-        this.travelTimeTool = Objects.requireNonNull(travelTimeTool, "travelTimeTool");
         this.traceService = Objects.requireNonNull(traceService, "traceService");
     }
 
@@ -249,44 +242,6 @@ public final class PlanningAgentWorker {
         return structuredDecision(response);
     }
 
-    /**
-     * 根据 Agent 已选场次确定性补齐相邻跨场地路线证据。
-     * Java 不选择 session，只查询 Agent 已选择 session 之间的真实路线。
-     */
-    void ensureTravelEvidence(PlanProposal proposal, PlanningToolContext planningContext) {
-        Objects.requireNonNull(proposal, "proposal");
-        Objects.requireNonNull(planningContext, "planningContext");
-
-        List<SelectedSession> selected = new ArrayList<>();
-        for (PlanProposal.Item item : proposal.items()) {
-            if (item == null || item.sessionId() == null) continue;
-            ActivitySessionResponse session = planningContext.evidenceRegistry().session(
-                    item.period(), item.activityId(), item.sessionId());
-            if (session == null || session.startAt() == null) continue;
-            selected.add(new SelectedSession(item.period(), item.activityId(), session));
-        }
-        selected.sort(Comparator.comparing(item -> item.session().startAt()));
-
-        for (int i = 1; i < selected.size(); i++) {
-            SelectedSession from = selected.get(i - 1);
-            SelectedSession to = selected.get(i);
-            Long fromVenue = from.session().venueId();
-            Long toVenue = to.session().venueId();
-            if (fromVenue == null || toVenue == null || fromVenue.equals(toVenue)) continue;
-            if (hasTravelEvidence(fromVenue, toVenue, planningContext.allTravelTimeEvidence())) continue;
-
-            travelTimeTool.getTravelTime(
-                    from.period(),
-                    from.activityId(),
-                    from.session().sessionId(),
-                    to.period(),
-                    to.activityId(),
-                    to.session().sessionId(),
-                    planningContext
-            );
-        }
-    }
-
     /** package-private：回归测试 Java 强制 validate_plan 边界。 */
     void ensureToolValidated(PlanningDecision decision, PlanningToolContext planningContext) {
         Objects.requireNonNull(decision, "decision");
@@ -298,16 +253,6 @@ public final class PlanningAgentWorker {
             throw new IllegalStateException(
                     "PlanningAgent 最终方案补验失败: " + result.violations());
         }
-    }
-
-    private boolean hasTravelEvidence(
-            Long fromVenueId,
-            Long toVenueId,
-            List<TravelTimeEvidence> evidence
-    ) {
-        return evidence.stream().anyMatch(item -> item != null
-                && fromVenueId.equals(item.fromVenueId())
-                && toVenueId.equals(item.toVenueId()));
     }
 
     private PlanningDecision structuredDecision(Msg response) {
@@ -438,11 +383,6 @@ public final class PlanningAgentWorker {
                 .orElse("<empty>");
     }
 
-    private record SelectedSession(
-            String period,
-            Long activityId,
-            ActivitySessionResponse session
-    ) {}
     private static final class InvalidPlanningResponseException extends RuntimeException {
         private InvalidPlanningResponseException(String message) {
             super(message);
