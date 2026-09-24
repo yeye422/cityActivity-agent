@@ -39,10 +39,16 @@
             <artifactId>mysql-connector-j</artifactId>
             <scope>runtime</scope>
         </dependency>
-        <!-- AgentScope 2.x + DashScope provider -->
+        <!-- AgentScope 2.x core + DashScope provider.
+             不使用 AgentScope Spring Boot starter，避免把其 Boot 4 自动配置带入当前 Boot 3 应用。 -->
         <dependency>
             <groupId>io.agentscope</groupId>
-            <artifactId>agentscope-dashscope-spring-boot-starter</artifactId>
+            <artifactId>agentscope-core</artifactId>
+            <version>2.0.3</version>
+        </dependency>
+        <dependency>
+            <groupId>io.agentscope</groupId>
+            <artifactId>agentscope-extensions-model-dashscope</artifactId>
             <version>2.0.3</version>
         </dependency>
         <!-- Lombok -->
