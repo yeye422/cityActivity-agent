@@ -6,7 +6,6 @@ import com.city.model.TravelTimeEvidence;
 import com.city.model.context.PlanningToolContext;
 import com.city.service.location.AmapTravelTimeService;
 import com.city.service.trace.AgentTraceService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -19,11 +18,6 @@ public class TravelTimeTool {
     private final AmapTravelTimeService travelTimeService;
     private final AgentTraceService traceService;
 
-    public TravelTimeTool(AmapTravelTimeService travelTimeService) {
-        this(travelTimeService, null);
-    }
-
-    @Autowired
     public TravelTimeTool(AmapTravelTimeService travelTimeService,
                           AgentTraceService traceService) {
         this.travelTimeService = Objects.requireNonNull(travelTimeService, "travelTimeService");
