@@ -20,9 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 /**
  * Guards the packaged AgentScope tool-validation runtime against dependency conflicts.
  *
- * <p>AgentScope 1.0.11 could compile successfully while failing only when the first tool call
- * initialized networknt JSON Schema validation. This test deliberately crosses that runtime
- * boundary so CI catches incompatible Jackson/schema-validator dependency graphs before release.</p>
+ * <p>AgentScope 2.x 与宿主 Spring Boot 共享 Jackson/Reactor 依赖图。该测试刻意跨过
+ * networknt JSON Schema 的真实运行时边界，使 CI 能在发布前发现二进制依赖冲突。</p>
  */
 class AgentScopeToolValidatorRuntimeTest {
 
