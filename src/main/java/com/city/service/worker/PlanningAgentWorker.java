@@ -288,7 +288,7 @@ public final class PlanningAgentWorker {
                 如果你选定的某个时间缺口没有合适候选，可调用 search_plan_candidates(startAt,endAt,retrievalIntent) 局部补充。
                 需要判断两个真实场次之间的交通时可调用 get_travel_time。
                 对有 sessions 的 activity 必须明确选择真实 OPEN sessionId。
-                对没有具体 sessions 的 activity，必须给出 horizon 内的 plannedStartAt/plannedEndAt。
+                对没有具体 sessions 的 activity，必须给出 horizon 内的 ISO-8601 plannedStartAt/plannedEndAt。
                 信息足够后直接提交完整 PlanningDecision。
                 """.formatted(
                 userInput == null ? "" : userInput.trim(),
@@ -330,7 +330,7 @@ public final class PlanningAgentWorker {
 
                 你仍然可以调用 search_plan_candidates、get_travel_time 等已注册 Tool。
                 最终 plan 不能为空；activityId/sessionId 必须引用当前 Run 真实 Evidence。
-                无固定 session 的 activity 必须提供 plannedStartAt/plannedEndAt。
+                无固定 session 的 activity 必须提供 ISO-8601 plannedStartAt/plannedEndAt。
                 """.formatted(
                 context.userGoal(),
                 currentCandidates,
