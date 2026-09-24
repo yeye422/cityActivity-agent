@@ -174,8 +174,10 @@ public class PlanProposalValidationService {
 
         List<TravelTimeEvidence> safeTravel =
                 travelTimeEvidence == null ? List.of() : List.copyOf(travelTimeEvidence);
-        violations.addAll(missingTravelEvidence(exactItems, safeTravel));
         violations.addAll(explicitConstraintViolations(exactItems, totalCost, maxBudget, safeTravel));
+        if (!violations.isEmpty()) return PlanValidationResult.invalid(violations);
+
+        violations.addAll(missingTravelEvidence(exactItems, safeTravel));
         if (!violations.isEmpty()) return PlanValidationResult.invalid(violations);
 
         return PlanValidationResult.valid(new PlanCandidate(exactItems, totalCost));
