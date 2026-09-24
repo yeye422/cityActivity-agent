@@ -5,7 +5,7 @@ import com.city.model.context.PlanningToolContext;
 import com.city.service.harness.AgentBusinessGuardMiddleware;
 import com.city.service.trace.AgentTraceService;
 import com.city.tool.ActivityDetailsTool;
-import com.city.tool.PlanningCandidateExpansionTool;
+import com.city.tool.PlanningCandidateSearchTool;
 import com.city.tool.RecentActivityHistoryTool;
 import com.city.tool.UserPreferenceLookupTool;
 import com.city.tool.TravelTimeTool;
@@ -29,7 +29,7 @@ public class PlanningAgentBuilder {
 
     private final Model mainModel;
     private final PromptLoader promptLoader;
-    private final PlanningCandidateExpansionTool expansionTool;
+    private final PlanningCandidateSearchTool candidateSearchTool;
     private final ActivityDetailsTool activityDetailsTool;
     private final UserPreferenceLookupTool preferenceLookupTool;
     private final RecentActivityHistoryTool recentHistoryTool;
@@ -39,7 +39,7 @@ public class PlanningAgentBuilder {
     public PlanningAgentBuilder(
             @Qualifier("CityMainChatModel") Model mainModel,
             PromptLoader promptLoader,
-            PlanningCandidateExpansionTool expansionTool,
+            PlanningCandidateSearchTool candidateSearchTool,
             ActivityDetailsTool activityDetailsTool,
             UserPreferenceLookupTool preferenceLookupTool,
             RecentActivityHistoryTool recentHistoryTool,
@@ -48,7 +48,7 @@ public class PlanningAgentBuilder {
     ) {
         this.mainModel = Objects.requireNonNull(mainModel, "mainModel");
         this.promptLoader = Objects.requireNonNull(promptLoader, "promptLoader");
-        this.expansionTool = Objects.requireNonNull(expansionTool, "expansionTool");
+        this.candidateSearchTool = Objects.requireNonNull(candidateSearchTool, "candidateSearchTool");
         this.activityDetailsTool = Objects.requireNonNull(activityDetailsTool, "activityDetailsTool");
         this.preferenceLookupTool = Objects.requireNonNull(preferenceLookupTool, "preferenceLookupTool");
         this.recentHistoryTool = Objects.requireNonNull(recentHistoryTool, "recentHistoryTool");
@@ -60,7 +60,7 @@ public class PlanningAgentBuilder {
         Objects.requireNonNull(planningContext, "planningContext");
 
         Toolkit toolkit = new Toolkit();
-        toolkit.registerTool(expansionTool);
+        toolkit.registerTool(candidateSearchTool);
         toolkit.registerTool(activityDetailsTool);
         toolkit.registerTool(preferenceLookupTool);
         toolkit.registerTool(recentHistoryTool);
@@ -69,7 +69,7 @@ public class PlanningAgentBuilder {
         AgentBusinessGuardMiddleware guard = new AgentBusinessGuardMiddleware(
                 "city_planning_agent",
                 Set.of(
-                        "expand_plan_candidates",
+                        "search_plan_candidates",
                         "inspect_activity_details",
                         "lookup_user_preferences",
                         "lookup_recent_activity_history",
