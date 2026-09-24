@@ -4,6 +4,7 @@ import com.city.agent.builder.RecommendationAgentBuilder;
 import com.city.model.ActivityItem;
 import com.city.model.agent.RecommendationDecision;
 import com.city.model.agent.RecommendationExecutionResult;
+import com.city.model.context.AgentDecisionToolContext;
 import com.city.model.context.VerifiedRequestContext;
 import com.city.service.evidence.CandidateEvidenceRegistry;
 import com.city.service.evidence.DecisionEvidenceValidator;
@@ -70,6 +71,10 @@ public final class RecommendationWorker {
                 .sessionId(verifiedContext.sessionId())
                 .put(VerifiedRequestContext.class, verifiedContext)
                 .put(CandidateEvidenceRegistry.class, evidenceRegistry)
+                .put(
+                        AgentDecisionToolContext.class,
+                        AgentDecisionToolContext.recommendation(verifiedContext, evidenceRegistry)
+                )
                 .build();
         String prompt = buildUserPrompt(userInput, verifiedContext, initialCandidates);
 
