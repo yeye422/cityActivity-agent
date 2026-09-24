@@ -342,7 +342,7 @@ public class EvaluationService {
                     operations = operationKeys(output.path("operations"));
                 // SLOT_MUTATION_APPLIED 是 operations 执行后的最终九维状态。
                 } else if ("SLOT_MUTATION_APPLIED".equals(eventType)) {
-                    slots = slots(output.path("resultSlots"));
+                    slots = slots(output.path("included"));
                 // CLARIFY_DECISION 记录澄清节点 ASK/READY 的结构化结果。
                 } else if ("CLARIFY_DECISION".equals(eventType)) {
                     // 提取 clarify action，用于和 expected_clarify_action 比较。
