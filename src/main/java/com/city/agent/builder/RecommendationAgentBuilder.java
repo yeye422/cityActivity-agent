@@ -18,8 +18,10 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Recommendation 使用两阶段 Agent：
- * Explorer 按需检索/补充信息；Finalizer 无 Tool，只负责结构化 RecommendationDecision。
+ * 构建单次 RecommendationAgent。
+ *
+ * <p>同一个 Agent 负责按需补充检索/详情/偏好/历史、提交 RecommendationDecision，
+ * 并在 Java 校验返回失败原因后继续修复。</p>
  */
 @Component
 public class RecommendationAgentBuilder {
@@ -49,7 +51,7 @@ public class RecommendationAgentBuilder {
         this.traceService = traceService;
     }
 
-    public ReActAgent buildExplorer(VerifiedRequestContext verifiedContext) {
+    public ReActAgent build(VerifiedRequestContext verifiedContext) {
         Objects.requireNonNull(verifiedContext, "verifiedContext");
 
         Toolkit toolkit = new Toolkit();
@@ -59,35 +61,26 @@ public class RecommendationAgentBuilder {
         toolkit.registerTool(recentHistoryTool);
 
         AgentBusinessGuardMiddleware guard = new AgentBusinessGuardMiddleware(
-                "city_recommendation_explorer",
+                "city_recommendation_agent",
                 Set.of(
                         "search_activities",
                         "inspect_activity_details",
                         "lookup_user_preferences",
                         "lookup_recent_activity_history"
                 ),
-                4,
+                8,
                 3,
                 traceService,
                 verifiedContext.traceId()
         );
 
         return ReActAgent.builder()
-                .name("city_recommendation_explorer")
-                .model(mainModel)
-                .sysPrompt(promptLoader.load("city-prompts/recommendation-exploration.txt"))
-                .toolkit(toolkit)
-                .middleware(guard)
-                .maxIters(6)
-                .build();
-    }
-
-    public ReActAgent buildFinalizer() {
-        return ReActAgent.builder()
-                .name("city_recommendation_finalizer")
+                .name("city_recommendation_agent")
                 .model(mainModel)
                 .sysPrompt(promptLoader.load("city-prompts/recommendation-decision.txt"))
-                .maxIters(3)
+                .toolkit(toolkit)
+                .middleware(guard)
+                .maxIters(8)
                 .build();
     }
 }
