@@ -2,49 +2,55 @@ package com.city.model.tool;
 
 import com.city.model.ActivityItem;
 import com.city.model.ActivitySessionResponse;
-import com.city.service.plan.ActivityPlanService;
+import com.city.model.context.PlanningHorizon;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
-/** PlanningAgent 可见的窗口级候选/场次视图。 */
+/** PlanningAgent 可见的 run-scoped 候选与真实 session 快照。 */
 public record PlanningDiscoveryToolResult(
-        List<Window> windows
+        List<SearchRange> searchedRanges,
+        List<Candidate> candidates
 ) {
     public PlanningDiscoveryToolResult {
-        windows = windows == null ? List.of() : List.copyOf(windows);
+        searchedRanges = searchedRanges == null ? List.of() : List.copyOf(searchedRanges);
+        candidates = candidates == null ? List.of() : List.copyOf(candidates);
     }
 
-    public static PlanningDiscoveryToolResult from(List<ActivityPlanService.PlannedActivity> planned) {
-        List<Window> windows = planned == null ? List.of() : planned.stream()
-                .filter(window -> window != null)
-                .map(Window::from)
-                .toList();
-        return new PlanningDiscoveryToolResult(windows);
-    }
-
-    public record Window(
-            String period,
-            List<Candidate> candidates
+    public static PlanningDiscoveryToolResult from(
+            List<PlanningHorizon.Range> ranges,
+            List<ActivityItem> activities,
+            Map<Long, List<ActivitySessionResponse>> sessionsByActivityId
     ) {
-        private static Window from(ActivityPlanService.PlannedActivity window) {
-            return new Window(
-                    window.period(),
-                    window.candidates().stream()
-                            .filter(item -> item != null && item.id() != null)
-                            .map(item -> Candidate.from(
-                                    item,
-                                    window.sessionsByActivityId().getOrDefault(item.id(), List.of())
-                            ))
-                            .toList()
-            );
+        List<SearchRange> safeRanges = ranges == null
+                ? List.of()
+                : ranges.stream().map(SearchRange::from).toList();
+        Map<Long, List<ActivitySessionResponse>> safeSessions =
+                sessionsByActivityId == null ? Map.of() : sessionsByActivityId;
+        List<Candidate> result = activities == null
+                ? List.of()
+                : activities.stream()
+                        .filter(item -> item != null && item.id() != null)
+                        .map(item -> Candidate.from(
+                                item,
+                                safeSessions.getOrDefault(item.id(), List.of())
+                        ))
+                        .toList();
+        return new PlanningDiscoveryToolResult(safeRanges, result);
+    }
+
+    public record SearchRange(LocalDateTime startAt, LocalDateTime endAt) {
+        private static SearchRange from(PlanningHorizon.Range range) {
+            return new SearchRange(range.startAt(), range.endAt());
         }
     }
 
     public record Candidate(
             Long activityId,
             String name,
+            Integer durationMinutes,
             double matchScore,
             List<Session> sessions
     ) {
@@ -52,6 +58,7 @@ public record PlanningDiscoveryToolResult(
             return new Candidate(
                     item.id(),
                     item.name(),
+                    item.durationMinutes(),
                     item.matchScore(),
                     sessions == null ? List.of() : sessions.stream().map(Session::from).toList()
             );
