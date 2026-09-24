@@ -20,7 +20,7 @@ import java.util.Objects;
 public final class PlanningEvidenceRegistry {
 
     private static final int DEFAULT_MAX_DISCOVERY_CALLS = 2;
-    private static final int DEFAULT_MAX_VALIDATION_CALLS = 3;
+    private static final int DEFAULT_MAX_VALIDATION_CALLS = 8;
     private static final int DEFAULT_MAX_TRAVEL_CALLS = 6;
 
     private final int maxDiscoveryCalls;
@@ -71,7 +71,7 @@ public final class PlanningEvidenceRegistry {
 
     public synchronized void beginValidation() {
         if (validationCalls >= maxValidationCalls) {
-            throw new IllegalStateException("PlanningAgent 已达到方案校验调用上限: " + maxValidationCalls);
+            throw new IllegalStateException("PlanningAgent 已达到方案校验安全预算上限: " + maxValidationCalls);
         }
         validationCalls++;
     }
