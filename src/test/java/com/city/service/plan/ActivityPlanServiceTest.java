@@ -34,8 +34,11 @@ class ActivityPlanServiceTest {
                 LocalDateTime.of(2026, 9, 27, 15, 0),
                 LocalDateTime.of(2026, 9, 27, 17, 0));
 
+        SlotBundle planningSlots = new SlotBundle(
+                List.of("西安"), List.of(), List.of("轻松"), List.of("情侣"),
+                List.of(), List.of(), List.of(), List.of("半天"), List.of());
         service.discoverRange(
-                SourceMode.PUBLIC, 1L, SlotBundle.empty(), SlotBundle.empty(),
+                SourceMode.PUBLIC, 1L, planningSlots, SlotBundle.empty(),
                 range, WeatherRecommendationContext.inactive(), "轻松约会", List.of());
 
         ArgumentCaptor<RetrievalRequest> captor = ArgumentCaptor.forClass(RetrievalRequest.class);
@@ -44,6 +47,7 @@ class ActivityPlanServiceTest {
         assertEquals(LocalDate.of(2026, 9, 27), time.dateStart());
         assertEquals(15, time.startTime().getHour());
         assertEquals(17, time.endTime().getHour());
+        assertTrue(captor.getValue().searchRequest().slots().duration().isEmpty());
     }
 
     @Test
