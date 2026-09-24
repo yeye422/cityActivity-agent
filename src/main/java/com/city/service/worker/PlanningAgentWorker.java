@@ -40,8 +40,8 @@ import java.util.Objects;
  * PlanningAgent 的单 Agent 执行边界。
  *
  * <p>同一个 Agent 负责按需调用探索 Tool、选择 activity/session、提交 PlanningDecision，
- * 并根据 Java validate_plan 返回的 violations 持续修复。Java 只负责事实补齐、硬约束校验和
- * Evidence Gate，不替 Agent 枚举或选择活动/场次。</p>
+ * 并根据 Java validate_plan 返回的 violations 持续修复。路线时长作为受控 Tool 由 Agent 按需查询；
+ * Java 负责硬约束校验和 Evidence Gate，不替 Agent 枚举或选择活动/场次。</p>
  */
 @Component
 public final class PlanningAgentWorker {
@@ -108,6 +108,7 @@ public final class PlanningAgentWorker {
                 .userId(String.valueOf(verifiedContext.userId()))
                 .sessionId(verifiedContext.sessionId())
                 .put(AgentDecisionToolContext.class, decisionToolContext)
+                .put(PlanningToolContext.class, planningContext)
                 .build();
 
         ReActAgent agent = agentBuilder.build(planningContext);
@@ -159,9 +160,6 @@ public final class PlanningAgentWorker {
                     );
                     continue;
                 }
-
-                // Agent 已选择精确 session；Java 只根据这些引用补齐真实路线事实。
-                ensureTravelEvidence(decision.plan(), planningContext);
 
                 PlanValidationResult validation =
                         validationTool.validate(decision.plan(), planningContext);
@@ -345,7 +343,7 @@ public final class PlanningAgentWorker {
                 首轮已验证候选：%s
 
                 这是本轮规划的首次提案。
-                你可以按需调用已注册的探索 Tool 补充候选、活动详情、长期偏好或近期推荐历史。
+                你可以按需调用已注册 Tool 补充候选、活动详情、长期偏好、近期推荐历史或查询已选场次之间的路线时间。
                 信息足够后直接提交完整 PlanningDecision。
                 每个 item 必须引用当前 Run 已暴露的真实 period/activityId/sessionId。
                 如果 activity 暴露了具体 sessions，必须由你明确选择一个真实 OPEN sessionId。
@@ -414,7 +412,8 @@ public final class PlanningAgentWorker {
                 violations：%s
 
                 请逐条处理 violations 中的 message 和 repairHint。
-                你仍然可以按需调用已注册 Tool 获取补充信息或扩展候选。
+                你仍然可以按需调用已注册 Tool 获取补充信息、扩展候选或查询路线时间。
+                如果 violation 是 MISSING_TRAVEL_EVIDENCE，应调用 get_travel_time 查询对应两个真实 session 的路线时间后再提交。
                 必须由你重新选择 activity/session；Java 不会替你枚举或选择。
                 修复后重新提交完整 PlanningDecision。
                 不要原样重复上一份无效方案。
