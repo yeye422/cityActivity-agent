@@ -9,6 +9,7 @@ import com.city.model.SlotBundle;
 import com.city.model.TravelTimeEvidence;
 import com.city.model.WeatherRecommendationContext;
 import com.city.model.agent.PlanNotebook;
+import com.city.model.context.PlanningHorizon;
 import com.city.model.context.PlanningToolContext;
 import com.city.model.context.SemanticContext;
 import com.city.model.context.VerifiedRequestContext;
@@ -22,30 +23,23 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 class TravelTimeToolTest {
 
     @Test
     void shouldResolveOnlyExposedSessionsAndRecordEvidence() {
         AmapTravelTimeService service = mock(AmapTravelTimeService.class);
-        PlanningEvidenceRegistry registry = registryWithTwoWindows();
+        PlanningEvidenceRegistry registry = registry();
         PlanningToolContext context = context(registry);
-        ActivitySessionResponse from = registry.session("AFTERNOON", 101L, 1001L);
-        ActivitySessionResponse to = registry.session("EVENING", 202L, 2002L);
+        ActivitySessionResponse from = registry.session(101L, 1001L);
+        ActivitySessionResponse to = registry.session(202L, 2002L);
         TravelTimeEvidence expected = new TravelTimeEvidence(11L, 22L, 35, "AMAP_DRIVING");
         when(service.resolve(from, to)).thenReturn(expected);
 
         TravelTimeEvidence actual = new TravelTimeTool(service, null).getTravelTime(
-                "AFTERNOON", 101L, 1001L,
-                "EVENING", 202L, 2002L,
-                context
-        );
+                101L, 1001L, 202L, 2002L, context);
 
         assertEquals(expected, actual);
         assertEquals(List.of(expected), registry.travelTimeEvidence());
@@ -56,33 +50,24 @@ class TravelTimeToolTest {
     @Test
     void shouldRejectSessionOutsidePlanningEvidence() {
         AmapTravelTimeService service = mock(AmapTravelTimeService.class);
-        PlanningEvidenceRegistry registry = registryWithTwoWindows();
-        PlanningToolContext context = context(registry);
+        PlanningToolContext context = context(registry());
 
         assertThrows(CityException.class, () -> new TravelTimeTool(service, null).getTravelTime(
-                "AFTERNOON", 101L, 9999L,
-                "EVENING", 202L, 2002L,
-                context
-        ));
-        verify(service, never()).resolve(
-                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+                101L, 9999L, 202L, 2002L, context));
+        verify(service, never()).resolve(any(), any());
     }
 
-    private PlanningEvidenceRegistry registryWithTwoWindows() {
-        ActivityItem afternoonActivity = activity(101L, "陶艺");
-        ActivityItem eveningActivity = activity(202L, "小剧场");
-        ActivitySessionResponse afternoonSession = session(1001L, 101L, 11L, 31.2304, 121.4737, 14, 0, 16, 0);
-        ActivitySessionResponse eveningSession = session(2002L, 202L, 22L, 31.2200, 121.5000, 17, 0, 19, 0);
+    private PlanningEvidenceRegistry registry() {
+        ActivityItem first = activity(101L, "陶艺");
+        ActivityItem second = activity(202L, "小剧场");
+        ActivitySessionResponse firstSession = session(1001L, 101L, 11L, 14, 16);
+        ActivitySessionResponse secondSession = session(2002L, 202L, 22L, 17, 19);
 
         PlanningEvidenceRegistry registry = new PlanningEvidenceRegistry();
-        registry.record(List.of(
-                new ActivityPlanService.PlannedActivity(
-                        "AFTERNOON", afternoonActivity, SlotBundle.empty(), List.of(afternoonActivity),
-                        Map.of(101L, List.of(afternoonSession)), afternoonSession),
-                new ActivityPlanService.PlannedActivity(
-                        "EVENING", eveningActivity, SlotBundle.empty(), List.of(eveningActivity),
-                        Map.of(202L, List.of(eveningSession)), eveningSession)
-        ));
+        registry.record(List.of(new ActivityPlanService.CandidateBatch(
+                range(),
+                List.of(first, second),
+                Map.of(101L, List.of(firstSession), 202L, List.of(secondSession)))));
         return registry;
     }
 
@@ -90,8 +75,15 @@ class TravelTimeToolTest {
         SessionState state = SessionState.fresh("session-plan", 9L, SourceMode.PUBLIC);
         VerifiedRequestContext verified = VerifiedRequestContext.from(
                 state, "trace-plan", SemanticContext.empty(), WeatherRecommendationContext.inactive());
-        return new PlanningToolContext(verified, List.of("AFTERNOON", "EVENING"), registry,
-                new PlanNotebook(List.of("AFTERNOON", "EVENING")), null, List.of());
+        PlanningHorizon horizon = new PlanningHorizon(List.of(range()));
+        return new PlanningToolContext(
+                verified, horizon, registry, new PlanNotebook(horizon), null, List.of());
+    }
+
+    private PlanningHorizon.Range range() {
+        return new PlanningHorizon.Range(
+                LocalDateTime.of(2026, 9, 27, 8, 0),
+                LocalDateTime.of(2026, 9, 27, 23, 0));
     }
 
     private ActivityItem activity(Long id, String name) {
@@ -102,18 +94,13 @@ class TravelTimeToolTest {
     private ActivitySessionResponse session(Long sessionId,
                                             Long activityId,
                                             Long venueId,
-                                            double latitude,
-                                            double longitude,
                                             int startHour,
-                                            int startMinute,
-                                            int endHour,
-                                            int endMinute) {
+                                            int endHour) {
         return new ActivitySessionResponse(
                 sessionId, activityId, venueId, "venue-" + venueId, "STUDIO", "上海", "浦东", "address",
-                BigDecimal.valueOf(latitude), BigDecimal.valueOf(longitude),
-                LocalDateTime.of(2026, 9, 26, startHour, startMinute),
-                LocalDateTime.of(2026, 9, 26, endHour, endMinute),
-                BigDecimal.valueOf(100), 10, "OPEN", null, null
-        );
+                BigDecimal.valueOf(31.23), BigDecimal.valueOf(121.47),
+                LocalDateTime.of(2026, 9, 27, startHour, 0),
+                LocalDateTime.of(2026, 9, 27, endHour, 0),
+                BigDecimal.valueOf(100), 10, "OPEN", null, null);
     }
 }
