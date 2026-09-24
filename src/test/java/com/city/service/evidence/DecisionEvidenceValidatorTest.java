@@ -51,7 +51,7 @@ class DecisionEvidenceValidatorTest {
         store.recordActivity(activity);
 
         PlanCandidate plan = new PlanCandidate(
-                List.of(new PlanCandidate.Item("14:00-16:00", activity, session)),
+                List.of(new PlanCandidate.Item(activity, session, session.startAt(), session.endAt())),
                 BigDecimal.valueOf(120)
         );
 
@@ -75,8 +75,8 @@ class DecisionEvidenceValidatorTest {
 
         PlanCandidate plan = new PlanCandidate(
                 List.of(
-                        new PlanCandidate.Item("14:00-16:00", first, firstSession),
-                        new PlanCandidate.Item("18:00-20:00", second, secondSession)
+                        new PlanCandidate.Item(first, firstSession, firstSession.startAt(), firstSession.endAt()),
+                        new PlanCandidate.Item(second, secondSession, secondSession.startAt(), secondSession.endAt())
                 ),
                 BigDecimal.valueOf(220)
         );
