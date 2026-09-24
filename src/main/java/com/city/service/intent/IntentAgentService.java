@@ -95,8 +95,8 @@ public class IntentAgentService {
             Map<String, List<String>> slotOptions = slotOptionService.findAllOptions();
             ReActAgent agent = agentFactory.get(sessionId).intent();
 
-            // 历史对话由后端显式放进 Prompt；清空 Agent 自身 memory，避免出现两套上下文来源。
-            agent.getMemory().clear();
+            // 历史对话由后端显式放进 Prompt；清空 AgentScope 模型可见上下文，避免出现两套上下文来源。
+            agent.clearContext((String) null, (String) null);
             Msg response = agentTraceService.callAgent(
                     sessionId,
                     "IntentAgent",
