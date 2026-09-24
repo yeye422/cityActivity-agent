@@ -8,6 +8,7 @@ import com.city.model.agent.PlanProposal;
 import com.city.model.agent.PlanningAgentExecutionResult;
 import com.city.model.agent.PlanningDecision;
 import com.city.model.agent.PlanValidationResult;
+import com.city.model.context.AgentDecisionToolContext;
 import com.city.model.context.PlanningToolContext;
 import com.city.model.context.VerifiedRequestContext;
 import com.city.model.tool.PlanningDiscoveryToolResult;
@@ -93,9 +94,13 @@ public final class PlanningAgentWorker {
         // 候选发现是事实获取边界，必须在 Agent 决策前发生。
         PlanningDiscoveryToolResult preloadedCandidates = discoveryTool.discover(planningContext);
 
-        // PlanningAgent 不持有业务 Tool，只从服务器已验证候选中做软目标组合。
-        ReActAgent agent = agentBuilder.build();
-        RuntimeContext runtimeContext = RuntimeContext.builder()
+        AgentDecisionToolContext decisionToolContext = AgentDecisionToolContext.planning(planningContext);
+        RuntimeContext explorerRuntime = RuntimeContext.builder()
+                .userId(String.valueOf(verifiedContext.userId()))
+                .sessionId(verifiedContext.sessionId())
+                .put(AgentDecisionToolContext.class, decisionToolContext)
+                .build();
+        RuntimeContext finalizerRuntime = RuntimeContext.builder()
                 .userId(String.valueOf(verifiedContext.userId()))
                 .sessionId(verifiedContext.sessionId())
                 .build();
@@ -108,10 +113,26 @@ public final class PlanningAgentWorker {
         );
 
         try {
+            String explorationNotes = explore(
+                    agentBuilder.buildExplorer(planningContext),
+                    buildExplorationPrompt(userInput, verifiedContext, safeWindows, preloadedCandidates),
+                    explorerRuntime,
+                    verifiedContext
+            );
+            PlanningDiscoveryToolResult enrichedCandidates =
+                    PlanningDiscoveryToolResult.from(evidenceRegistry.windows());
+
+            ReActAgent finalizer = agentBuilder.buildFinalizer();
             PlanningDecision decision = callDecision(
-                    agent,
-                    buildPrompt(userInput, verifiedContext, safeWindows, preloadedCandidates),
-                    runtimeContext
+                    finalizer,
+                    buildPrompt(
+                            userInput,
+                            verifiedContext,
+                            safeWindows,
+                            enrichedCandidates,
+                            explorationNotes
+                    ),
+                    finalizerRuntime
             );
 
             try {
@@ -129,9 +150,9 @@ public final class PlanningAgentWorker {
                 );
 
                 decision = callDecision(
-                        agent,
-                        buildRepairPrompt(planningContext),
-                        runtimeContext
+                        finalizer,
+                        buildRepairPrompt(planningContext, enrichedCandidates, explorationNotes),
+                        finalizerRuntime
                 );
                 ensureTravelEvidence(decision.plan(), planningContext);
                 ensureToolValidated(decision, planningContext);
@@ -271,19 +292,71 @@ public final class PlanningAgentWorker {
         return decision;
     }
 
+    private String buildExplorationPrompt(String userInput,
+                                          VerifiedRequestContext verifiedContext,
+                                          List<String> windows,
+                                          PlanningDiscoveryToolResult preloadedCandidates) {
+        return """
+                用户原话：%s
+                UserGoal：%s
+                规划窗口：%s
+                当前已生效槽位：%s
+                首轮已验证候选：%s
+
+                判断这些候选是否足以支持 UserGoal。
+                只有确有信息缺口时才调用 Tool；完成后给 Finalizer 一段简短探索摘要。
+                """.formatted(
+                userInput == null ? "" : userInput.trim(),
+                verifiedContext.userGoal(),
+                windows,
+                verifiedContext.effectiveSlots(),
+                preloadedCandidates
+        );
+    }
+
+    private String explore(ReActAgent explorer,
+                           String prompt,
+                           RuntimeContext runtimeContext,
+                           VerifiedRequestContext verifiedContext) {
+        try {
+            Msg response = explorer.call(
+                    List.of(
+                            Msg.builder()
+                                    .role(MsgRole.USER)
+                                    .textContent(prompt)
+                                    .build()
+                    ),
+                    runtimeContext
+            ).block();
+            String notes = response == null ? "" : response.getTextContent();
+            return notes == null ? "" : notes.trim();
+        } catch (RuntimeException error) {
+            traceService.recordError(
+                    "PLANNING_EXPLORATION_DEGRADED",
+                    "AGENT",
+                    java.util.Map.of("userGoal", verifiedContext.userGoal()),
+                    error
+            );
+            return "";
+        }
+    }
+
     private String buildPrompt(String userInput,
                                VerifiedRequestContext verifiedContext,
                                List<String> windows,
-                               PlanningDiscoveryToolResult preloadedCandidates) {
+                               PlanningDiscoveryToolResult candidates,
+                               String explorationNotes) {
         return """
                 用户原话：%s
                 UserGoal：%s
                 规划窗口：%s
                 当前已生效槽位：%s
                 服务器硬约束摘要：%s
-                服务器已验证候选快照：%s
+                Explorer 后的完整已验证候选快照：%s
+                Explorer 摘要：%s
 
                 你只负责在上述真实候选中做软目标组合。
+                Explorer 摘要只提供软决策参考，事实以候选快照为准。
                 每个 PlanProposal.Item 只能引用候选快照中已经存在的 period/activityId/sessionId。
                 有具体 session 时必须引用真实 sessionId；不要编造候选外事实。
                 服务器会根据你提交的 proposal 自动补齐必要路线证据，并强制执行 validate_plan。
@@ -294,20 +367,29 @@ public final class PlanningAgentWorker {
                 windows,
                 verifiedContext.effectiveSlots(),
                 verifiedContext.hardConstraints(),
-                preloadedCandidates
+                candidates,
+                explorationNotes == null ? "" : explorationNotes
         );
     }
 
-    private String buildRepairPrompt(PlanningToolContext planningContext) {
+    private String buildRepairPrompt(PlanningToolContext planningContext,
+                                     PlanningDiscoveryToolResult candidates,
+                                     String explorationNotes) {
         return """
                 上一个 proposal 没有通过服务器 validate_plan。
                 当前 Notebook：%s
+                当前完整候选快照：%s
+                Explorer 摘要：%s
 
                 请严格根据 latestViolations/repairHint 修改冲突窗口，并重新提交完整 PlanningDecision。
-                只能引用最初已验证候选中的 period/activityId/sessionId。
+                只能引用当前已验证候选中的 period/activityId/sessionId。
                 路线证据和 validate_plan 均由服务器自动执行。
                 不要返回空 plan，也不要原样重复上一个已拒绝 proposal。
-                """.formatted(planningContext.notebook().snapshot());
+                """.formatted(
+                planningContext.notebook().snapshot(),
+                candidates,
+                explorationNotes == null ? "" : explorationNotes
+        );
     }
 
     private record SelectedSession(
