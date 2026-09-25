@@ -57,4 +57,4 @@ if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
     Write-Host "Saved retrieval baseline report to: $OutputPath"
 }
 
-exit 0
+return
