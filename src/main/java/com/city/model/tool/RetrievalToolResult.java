@@ -37,6 +37,20 @@ public record RetrievalToolResult(
             Integer durationMinutes,
             double matchScore
     ) {
+        /** 兼容引入 description 前的构造方式。 */
+        public Candidate(Long activityId,
+                         String name,
+                         SlotBundle slots,
+                         LocalDate validFrom,
+                         LocalDate validTo,
+                         LocalTime validStartTime,
+                         LocalTime validEndTime,
+                         Integer durationMinutes,
+                         double matchScore) {
+            this(activityId, name, null, slots, validFrom, validTo,
+                    validStartTime, validEndTime, durationMinutes, matchScore);
+        }
+
         private static Candidate from(ActivityItem item) {
             return new Candidate(
                     item.id(),
