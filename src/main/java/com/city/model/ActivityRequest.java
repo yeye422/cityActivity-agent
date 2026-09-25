@@ -18,6 +18,8 @@ import lombok.experimental.Accessors;
 @NoArgsConstructor
 public class ActivityRequest {
     private String name;
+    /** 自然语言活动描述，用于前端详情、Agent inspect 和语义检索。 */
+    private String description;
     private List<String> city;
     private List<String> location;
     private List<String> experienceGoal;
@@ -36,6 +38,26 @@ public class ActivityRequest {
     /** 活动级可安排/有效时段；不代表实际活动耗时。 */
     private LocalTime validStartTime;
     private LocalTime validEndTime;
+
+    /** 兼容引入 description 前的构造方式。 */
+    public ActivityRequest(String name,
+                           List<String> city,
+                           List<String> location,
+                           List<String> experienceGoal,
+                           List<String> companion,
+                           List<String> budget,
+                           List<String> activityType,
+                           List<String> style,
+                           List<String> duration,
+                           List<String> feature,
+                           Integer durationMinutes,
+                           LocalDate validFrom,
+                           LocalDate validTo,
+                           LocalTime validStartTime,
+                           LocalTime validEndTime) {
+        this(name, null, city, location, experienceGoal, companion, budget, activityType,
+                style, duration, feature, durationMinutes, validFrom, validTo, validStartTime, validEndTime);
+    }
 
     public SlotBundle toSlots() {
         return new SlotBundle(city, location, experienceGoal, companion, budget, activityType, style, duration, feature);

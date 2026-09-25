@@ -12,6 +12,7 @@ public class ActivityItemRow {
     private String sourceType;
     private Long ownerUserId;
     private String name;
+    private String description;
     private String city;
     private String location;
     private String experienceGoal;

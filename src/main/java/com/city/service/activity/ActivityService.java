@@ -153,7 +153,15 @@ public class ActivityService {
         if (request.validStartTime() != null && !request.validStartTime().isBefore(request.validEndTime())) {
             throw new CityException("每日结束时间必须晚于开始时间");
         }
+        if (request.description() != null && request.description().trim().length() > 2000) {
+            throw new CityException("活动描述不能超过 2000 个字符");
+        }
         slotOptionService.validate(slots);
+    }
+
+    private String normalizeDescription(String description) {
+        if (description == null || description.isBlank()) return null;
+        return description.trim();
     }
 
     private ActivityItemRow toRow(Long id, SourceMode sourceMode, Long ownerUserId, ActivityRequest request) {
@@ -163,6 +171,7 @@ public class ActivityService {
         row.setSourceType(sourceMode.name());
         row.setOwnerUserId(ownerUserId);
         row.setName(request.name().trim());
+        row.setDescription(normalizeDescription(request.description()));
         row.setCity(jsonService.toJsonArray(slots.city()));
         row.setLocation(jsonService.toJsonArray(slots.location()));
         row.setExperienceGoal(jsonService.toJsonArray(slots.experienceGoal()));
@@ -200,6 +209,7 @@ public class ActivityService {
                 SourceMode.valueOf(row.getSourceType()),
                 row.getOwnerUserId(),
                 row.getName(),
+                row.getDescription(),
                 slots,
                 row.getValidFrom(),
                 row.getValidTo(),

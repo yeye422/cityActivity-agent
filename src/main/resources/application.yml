@@ -36,6 +36,11 @@ city:
     main-model: qwen3.8-max
     light-model: qwen3.8-max
     response-model: qwen3.8-max
+  embedding:
+    enabled: ${CITY_EMBEDDING_ENABLED:true}
+    base-url: ${DASHSCOPE_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    model: ${DASHSCOPE_EMBEDDING_MODEL:text-embedding-v4}
+    dimensions: ${DASHSCOPE_EMBEDDING_DIMENSIONS:256}
   session:
     max-history-turns: 10
     max-history-chars: 1200

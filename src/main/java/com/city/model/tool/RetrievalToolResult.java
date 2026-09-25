@@ -28,6 +28,7 @@ public record RetrievalToolResult(
     public record Candidate(
             Long activityId,
             String name,
+            String description,
             SlotBundle slots,
             LocalDate validFrom,
             LocalDate validTo,
@@ -40,6 +41,7 @@ public record RetrievalToolResult(
             return new Candidate(
                     item.id(),
                     item.name(),
+                    item.description(),
                     item.slots(),
                     item.validFrom(),
                     item.validTo(),

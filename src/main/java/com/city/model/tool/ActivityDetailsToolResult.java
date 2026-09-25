@@ -27,6 +27,7 @@ public record ActivityDetailsToolResult(
     public record ActivityDetail(
             Long activityId,
             String name,
+            String description,
             SlotBundle slots,
             LocalDate validFrom,
             LocalDate validTo,
@@ -39,6 +40,7 @@ public record ActivityDetailsToolResult(
             return new ActivityDetail(
                     item.id(),
                     item.name(),
+                    item.description(),
                     item.slots(),
                     item.validFrom(),
                     item.validTo(),

@@ -95,6 +95,7 @@ jobs:
           if [[ -f src/main/resources/db/activity_catalog_seed.sql ]]; then
             mysql -h127.0.0.1 -uroot -proot city_db < src/main/resources/db/activity_catalog_seed.sql
           fi
+          mysql -h127.0.0.1 -uroot -proot city_db < src/main/resources/db/activity_semantic_search_migration.sql
 
       - name: Verify frontend runtime contracts
         run: |
