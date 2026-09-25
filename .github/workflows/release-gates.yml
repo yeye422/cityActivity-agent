@@ -15,11 +15,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-gates-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   real-environment-gates:
     name: Real Environment Gates
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     services:
       mysql:
@@ -47,11 +51,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Require real model secret
+      - name: Require real environment configuration
         shell: bash
         run: |
-          if [[ -z "$DASHSCOPE_API_KEY" ]]; then
-            echo "Missing repository secret: DASHSCOPE_API_KEY" >&2
+          missing=0
+          for name in DASHSCOPE_API_KEY AMAP_WEB_SERVICE_KEY QWEATHER_API_HOST QWEATHER_API_KEY; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing repository secret/config: $name" >&2
+              missing=1
+            fi
+          done
+          if [[ "$missing" -ne 0 ]]; then
             exit 2
           fi
 
@@ -129,7 +139,7 @@ jobs:
           REAL_E2E_USER_ID: '999998'
         run: npm run test:e2e:real
 
-      - name: Run react-v1 and retrieval release verification
+      - name: Run complete release verification
         shell: pwsh
         run: ./scripts/run-release-verification.ps1 -BaseUrl "http://127.0.0.1:8080" -UserId 999999 -ReactLimit ${{ inputs.react_limit }} -RetrievalK ${{ inputs.retrieval_k }} -RetrievalOutputPath "artifacts/retrieval-current.json" -ReactOutputDirectory "artifacts"
 
