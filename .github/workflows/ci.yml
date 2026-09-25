@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - chore/initial-secure-import
+      - refactor/agentscope-react
   pull_request:
     branches:
       - main
