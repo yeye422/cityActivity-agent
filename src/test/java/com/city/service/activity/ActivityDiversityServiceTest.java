@@ -39,6 +39,26 @@ class ActivityDiversityServiceTest {
     }
 
     @Test
+    void internalRankingScoreShouldSurvivePublicScoreSaturation() {
+        ActivityItem semanticLeader = new ActivityItem(
+                9L, SourceMode.PUBLIC, null, "语义最相关", null,
+                new SlotBundle(List.of("西安"), List.of("小寨"), List.of(), List.of(), List.of(),
+                        List.of("展览"), List.of(), List.of(), List.of()),
+                null, null, LocalTime.of(15, 0), LocalTime.of(17, 0),
+                null, 1.0, 1.12);
+        ActivityItem weaker = new ActivityItem(
+                1L, SourceMode.PUBLIC, null, "较弱候选", null,
+                new SlotBundle(List.of("西安"), List.of("钟楼"), List.of(), List.of(), List.of(),
+                        List.of("演出"), List.of(), List.of(), List.of()),
+                null, null, LocalTime.of(19, 0), LocalTime.of(21, 0),
+                null, 1.0, 1.00);
+
+        ActivityDiversityResult result = service.rerank(List.of(semanticLeader, weaker));
+
+        assertEquals(List.of(9L, 1L), result.ranked().stream().map(ActivityItem::id).toList());
+    }
+
+    @Test
     void newTimeBucketShouldBreakTieAfterTypeAndLocationAreSame() {
         ActivityItem afternoonA = activity(1L, "下午A", "电影", "小寨", LocalTime.of(15, 0), 1.0);
         ActivityItem afternoonB = activity(2L, "下午B", "电影", "小寨", LocalTime.of(16, 0), 1.0);

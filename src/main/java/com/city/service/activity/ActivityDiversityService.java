@@ -29,7 +29,7 @@ public class ActivityDiversityService {
         List<ActivityItem> remaining = relevanceRanked.stream()
                 .filter(item -> item != null)
                 .sorted(Comparator
-                        .comparingDouble((ActivityItem item) -> item.matchScore()).reversed()
+                        .comparingDouble((ActivityItem item) -> item.rankingScore()).reversed()
                         .thenComparing((ActivityItem item) -> item.id(), Comparator.nullsLast(Long::compareTo)))
                 .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
         List<ActivityItem> selected = new ArrayList<>();
@@ -39,9 +39,9 @@ public class ActivityDiversityService {
         Set<String> seenTimeBuckets = new LinkedHashSet<>();
 
         while (!remaining.isEmpty() && selected.size() < MAX_RESULTS) {
-            double bestRemainingScore = remaining.getFirst().matchScore();
+            double bestRemainingScore = remaining.getFirst().rankingScore();
             List<ActivityItem> eligible = remaining.stream()
-                    .filter(item -> bestRemainingScore - item.matchScore() <= NEAR_TIE_THRESHOLD + 1e-9)
+                    .filter(item -> bestRemainingScore - item.rankingScore() <= NEAR_TIE_THRESHOLD + 1e-9)
                     .toList();
 
             ActivityItem chosen;
@@ -85,8 +85,8 @@ public class ActivityDiversityService {
         if (candidateNovelty.newTimeBucket() != currentNovelty.newTimeBucket()) {
             return candidateNovelty.newTimeBucket();
         }
-        if (Double.compare(candidate.matchScore(), current.matchScore()) != 0) {
-            return candidate.matchScore() > current.matchScore();
+        if (Double.compare(candidate.rankingScore(), current.rankingScore()) != 0) {
+            return candidate.rankingScore() > current.rankingScore();
         }
         return compareId(candidate.id(), current.id()) < 0;
     }
@@ -101,7 +101,7 @@ public class ActivityDiversityService {
             return List.of("RELEVANCE_LEADER");
         }
         List<String> reasons = new ArrayList<>();
-        if (item.matchScore() + 1e-9 < bestRemainingScore) {
+        if (item.rankingScore() + 1e-9 < bestRemainingScore) {
             reasons.add("NEAR_TIE_DIVERSITY");
         }
         Novelty novelty = novelty(item, seenTypes, seenLocations, seenTimeBuckets);

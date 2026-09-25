@@ -61,11 +61,12 @@ public class RetrievalPipeline {
 
         ActivityRankResult ranked;
         Map<Long, Double> hybridScores;
-        if (vectorScores.isEmpty() || rrfService == null) {
+        List<Long> vectorRank = rankIds(vectorScores);
+        if (vectorRank.isEmpty() || rrfService == null) {
             ranked = activityRankService.rank(rankRequest, request.weather());
             hybridScores = lexicalScores;
         } else {
-            hybridScores = rrfService.fuse(rankIds(lexicalScores), rankIds(vectorScores));
+            hybridScores = rrfService.fuse(rankIds(lexicalScores), vectorRank);
             ActivityRankRequest hybridRequest = new ActivityRankRequest(
                     raw, searchRequest.slots(), searchRequest.timeConstraint(),
                     searchRequest.excludeActivityIds(), searchRequest.userId(), null);

@@ -114,7 +114,7 @@ public class ActivityRankService {
         ActivityItem rankedItem = new ActivityItem(
                 item.id(), item.sourceType(), item.ownerUserId(), item.name(), item.description(), item.slots(),
                 item.validFrom(), item.validTo(), item.validStartTime(), item.validEndTime(),
-                item.durationMinutes(), finalScore);
+                item.durationMinutes(), finalScore, sortScore);
         WeatherRecommendationContext.Status weatherStatus = weather == null || weather.status() == null
                 ? WeatherRecommendationContext.Status.NOT_REQUESTED
                 : weather.status();
