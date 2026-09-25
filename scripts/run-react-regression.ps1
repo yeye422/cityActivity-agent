@@ -86,8 +86,7 @@ if (-not $result.passed) {
         Write-Warning "react-v1 did not pass the release/regression gate. Baseline will not be promoted."
         return
     }
-    Write-Error "react-v1 did not pass the release/regression gate. Baseline will not be promoted."
-    exit 2
+    throw "react-v1 did not pass the release/regression gate. Baseline will not be promoted."
 }
 
 if ($PromoteBaseline) {
@@ -117,4 +116,4 @@ if ($PromoteBaseline) {
     Write-Host "Promoted baseline: $($baseline.runId) / $($baseline.baselineName)"
 }
 
-exit 0
+return
