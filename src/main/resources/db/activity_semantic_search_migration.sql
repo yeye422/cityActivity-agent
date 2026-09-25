@@ -1,21 +1,9 @@
--- 活动自然语言描述 + 语义向量索引。
+-- 活动自然语言描述。Pinecone 负责词面/向量双通道索引。
 -- 先执行基础 activity_item 建表/迁移，再执行本脚本。
 USE city_db;
 
 ALTER TABLE activity_item
     ADD COLUMN description TEXT NULL AFTER name;
-
-CREATE TABLE IF NOT EXISTS activity_embedding (
-    activity_id BIGINT NOT NULL,
-    source_hash CHAR(64) NOT NULL,
-    model VARCHAR(128) NOT NULL,
-    dimensions INT NOT NULL,
-    embedding_json LONGTEXT NOT NULL,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (activity_id),
-    CONSTRAINT fk_activity_embedding_activity
-        FOREIGN KEY (activity_id) REFERENCES activity_item(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 UPDATE activity_item
 SET description = CASE name

@@ -124,6 +124,13 @@
         ORDER BY updated_at DESC
     </select>
 
+    <select id="findAllActiveActivities" resultMap="ActivityItemRowMap">
+        SELECT <include refid="ActivityColumns"/>
+        FROM activity_item
+        WHERE active = 1
+        ORDER BY id ASC
+    </select>
+
     <select id="countPersonalActivities" resultType="int">
         SELECT COUNT(1)
         FROM activity_item

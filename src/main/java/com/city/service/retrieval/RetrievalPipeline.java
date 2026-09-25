@@ -23,7 +23,7 @@ public class RetrievalPipeline {
     private final ActivitySearchService activitySearchService;
     private final ActivityRankService activityRankService;
     private final ActivityDiversityService activityDiversityService;
-    private final ActivityVectorRetriever activityVectorRetriever;
+    private final PineconeHybridRetriever pineconeHybridRetriever;
     private final ReciprocalRankFusionService rrfService;
 
     public RetrievalPipeline(ActivitySearchService activitySearchService,
@@ -36,12 +36,12 @@ public class RetrievalPipeline {
     public RetrievalPipeline(ActivitySearchService activitySearchService,
                              ActivityRankService activityRankService,
                              ActivityDiversityService activityDiversityService,
-                             ActivityVectorRetriever activityVectorRetriever,
+                             PineconeHybridRetriever pineconeHybridRetriever,
                              ReciprocalRankFusionService rrfService) {
         this.activitySearchService = Objects.requireNonNull(activitySearchService, "activitySearchService");
         this.activityRankService = Objects.requireNonNull(activityRankService, "activityRankService");
         this.activityDiversityService = Objects.requireNonNull(activityDiversityService, "activityDiversityService");
-        this.activityVectorRetriever = activityVectorRetriever;
+        this.pineconeHybridRetriever = pineconeHybridRetriever;
         this.rrfService = rrfService;
     }
 
@@ -50,29 +50,28 @@ public class RetrievalPipeline {
         ActivitySearchRequest searchRequest = request.searchRequest();
 
         List<ActivityItem> raw = activitySearchService.search(searchRequest);
-        Map<Long, Double> lexicalScores = activityRankService.lexicalScores(raw, request.queryText());
-        Map<Long, Double> vectorScores = activityVectorRetriever == null
+        PineconeHybridRetriever.Result retrieval = pineconeHybridRetriever == null
+                ? PineconeHybridRetriever.Result.empty()
+                : pineconeHybridRetriever.retrieve(raw, request.queryText());
+
+        Map<Long, Double> lexicalScores = retrieval.lexicalScores();
+        Map<Long, Double> vectorScores = retrieval.vectorScores();
+        Map<Long, Double> hybridScores = rrfService == null
                 ? Map.of()
-                : activityVectorRetriever.score(raw, request.queryText());
+                : rrfService.fuse(rankIds(lexicalScores), rankIds(vectorScores));
 
         ActivityRankRequest rankRequest = new ActivityRankRequest(
-                raw, searchRequest.slots(), searchRequest.timeConstraint(),
-                searchRequest.excludeActivityIds(), searchRequest.userId(), request.queryText());
+                raw,
+                searchRequest.slots(),
+                searchRequest.timeConstraint(),
+                searchRequest.excludeActivityIds(),
+                searchRequest.userId(),
+                request.queryText()
+        );
 
-        ActivityRankResult ranked;
-        Map<Long, Double> hybridScores;
-        List<Long> vectorRank = rankIds(vectorScores);
-        if (vectorRank.isEmpty() || rrfService == null) {
-            ranked = activityRankService.rank(rankRequest, request.weather());
-            hybridScores = lexicalScores;
-        } else {
-            hybridScores = rrfService.fuse(rankIds(lexicalScores), vectorRank);
-            ActivityRankRequest hybridRequest = new ActivityRankRequest(
-                    raw, searchRequest.slots(), searchRequest.timeConstraint(),
-                    searchRequest.excludeActivityIds(), searchRequest.userId(), null);
-            ranked = activityRankService.rankWithRetrievalPrior(
-                    hybridRequest, request.weather(), hybridScores);
-        }
+        ActivityRankResult ranked = hybridScores.isEmpty()
+                ? activityRankService.rank(rankRequest, request.weather())
+                : activityRankService.rankWithRetrievalPrior(rankRequest, request.weather(), hybridScores);
 
         ActivityDiversityResult diversified = activityDiversityService.rerank(ranked.ranked());
         List<ActivityItem> finalCandidates = diversified.ranked().stream()
@@ -80,8 +79,15 @@ public class RetrievalPipeline {
                 .toList();
 
         return new RetrievalResult(
-                raw, ranked.ranked(), finalCandidates, ranked.scores(), diversified.decisions(),
-                lexicalScores, vectorScores, hybridScores);
+                raw,
+                ranked.ranked(),
+                finalCandidates,
+                ranked.scores(),
+                diversified.decisions(),
+                lexicalScores,
+                vectorScores,
+                hybridScores
+        );
     }
 
     private List<Long> rankIds(Map<Long, Double> scores) {
@@ -89,8 +95,7 @@ public class RetrievalPipeline {
         return scores.entrySet().stream()
                 .filter(entry -> entry.getKey() != null
                         && entry.getValue() != null
-                        && Double.isFinite(entry.getValue())
-                        && entry.getValue() > 0.0)
+                        && Double.isFinite(entry.getValue()))
                 .sorted(Map.Entry.<Long, Double>comparingByValue(Comparator.reverseOrder())
                         .thenComparing(Map.Entry::getKey))
                 .map(Map.Entry::getKey)

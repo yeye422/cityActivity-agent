@@ -46,6 +46,9 @@ jobs:
       AMAP_WEB_SERVICE_KEY: ${{ secrets.AMAP_WEB_SERVICE_KEY }}
       QWEATHER_API_HOST: ${{ secrets.QWEATHER_API_HOST }}
       QWEATHER_API_KEY: ${{ secrets.QWEATHER_API_KEY }}
+      PINECONE_ENABLED: 'true'
+      PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+      PINECONE_INDEX_HOST: ${{ secrets.PINECONE_INDEX_HOST }}
 
     steps:
       - name: Checkout repository
@@ -55,7 +58,7 @@ jobs:
         shell: bash
         run: |
           missing=0
-          for name in DASHSCOPE_API_KEY AMAP_WEB_SERVICE_KEY QWEATHER_API_HOST QWEATHER_API_KEY; do
+          for name in DASHSCOPE_API_KEY AMAP_WEB_SERVICE_KEY QWEATHER_API_HOST QWEATHER_API_KEY PINECONE_API_KEY PINECONE_INDEX_HOST; do
             if [[ -z "${!name}" ]]; then
               echo "Missing repository secret/config: $name" >&2
               missing=1
@@ -96,6 +99,7 @@ jobs:
             mysql -h127.0.0.1 -uroot -proot city_db < src/main/resources/db/activity_catalog_seed.sql
           fi
           mysql -h127.0.0.1 -uroot -proot city_db < src/main/resources/db/activity_semantic_search_migration.sql
+          mysql -h127.0.0.1 -uroot -proot city_db < src/main/resources/db/activity_pinecone_search_migration.sql
 
       - name: Verify frontend runtime contracts
         run: |

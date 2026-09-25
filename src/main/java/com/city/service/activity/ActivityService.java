@@ -8,32 +8,42 @@ import com.city.model.ActivityItemRow;
 import com.city.model.ActivityRequest;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
+import com.city.service.retrieval.PineconeActivityIndexService;
 import com.city.service.slot.SlotOptionService;
 import com.city.util.JsonService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 
-/**
- * 活动数据服务。
- * 提供 CRUD 和基于 MySQL JSON_OVERLAPS 的标签检索；Orchestrator 推荐链路通过 {@link #search} 召回候选。
- */
 @Service
 public class ActivityService {
-
-    /** 单次检索从 DB 拉取的最大行数，初排后取 top10 交给 Rank 层。 */
     private static final int SEARCH_LIMIT = 50;
     private static final List<String> BUDGET_ORDER = List.of("免费", "100元内", "200元内", "300元内");
 
     private final ActivityMapper activityMapper;
     private final SlotOptionService slotOptionService;
     private final JsonService jsonService;
+    private final PineconeActivityIndexService pineconeIndexService;
 
-    public ActivityService(ActivityMapper activityMapper, SlotOptionService slotOptionService, JsonService jsonService) {
+    public ActivityService(ActivityMapper activityMapper,
+                           SlotOptionService slotOptionService,
+                           JsonService jsonService) {
+        this(activityMapper, slotOptionService, jsonService, null);
+    }
+
+    @Autowired
+    public ActivityService(ActivityMapper activityMapper,
+                           SlotOptionService slotOptionService,
+                           JsonService jsonService,
+                           PineconeActivityIndexService pineconeIndexService) {
         this.activityMapper = activityMapper;
         this.slotOptionService = slotOptionService;
         this.jsonService = jsonService;
+        this.pineconeIndexService = pineconeIndexService;
     }
 
     public List<ActivityItem> findPersonalActivities(Long userId) {
@@ -42,6 +52,10 @@ public class ActivityService {
 
     public List<ActivityItem> findPublicActivities() {
         return activityMapper.findPublicActivities().stream().map(this::toActivityItem).toList();
+    }
+
+    public List<ActivityItem> findAllActiveActivities() {
+        return activityMapper.findAllActiveActivities().stream().map(this::toActivityItem).toList();
     }
 
     public boolean hasPersonalActivities(Long userId) {
@@ -53,7 +67,9 @@ public class ActivityService {
         validateActivityRequest(request);
         ActivityItemRow row = toRow(null, SourceMode.PERSONAL, userId, request);
         activityMapper.insert(row);
-        return toActivityItem(row);
+        ActivityItem item = toActivityItem(row);
+        afterCommit(() -> pineconeIndexService.syncBestEffort(item));
+        return item;
     }
 
     @Transactional
@@ -61,18 +77,17 @@ public class ActivityService {
         validateActivityRequest(request);
         ActivityItemRow row = toRow(activityId, SourceMode.PERSONAL, userId, request);
         int updated = activityMapper.updatePersonal(row);
-        if (updated == 0) {
-            throw new CityException("个人活动不存在或无权限修改");
-        }
-        return toActivityItem(activityMapper.findPersonalById(activityId, userId));
+        if (updated == 0) throw new CityException("个人活动不存在或无权限修改");
+        ActivityItem item = toActivityItem(activityMapper.findPersonalById(activityId, userId));
+        afterCommit(() -> pineconeIndexService.syncBestEffort(item));
+        return item;
     }
 
     @Transactional
     public void deletePersonalActivity(Long userId, Long activityId) {
         int deleted = activityMapper.deletePersonal(activityId, userId);
-        if (deleted == 0) {
-            throw new CityException("个人活动不存在或无权限删除");
-        }
+        if (deleted == 0) throw new CityException("个人活动不存在或无权限删除");
+        afterCommit(() -> pineconeIndexService.deleteBestEffort(activityId));
     }
 
     public List<ActivityItem> search(SourceMode sourceMode, Long userId, SlotBundle slots) {
@@ -119,17 +134,27 @@ public class ActivityService {
         return rows.stream().map(this::toActivityItem).toList();
     }
 
-    private List<String> expandBudgetUpperBound(List<String> budgets) {
-        if (budgets == null || budgets.isEmpty()) {
-            return List.of();
+    private void afterCommit(Runnable action) {
+        if (pineconeIndexService == null || action == null) return;
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
         }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
+    }
+
+    private List<String> expandBudgetUpperBound(List<String> budgets) {
+        if (budgets == null || budgets.isEmpty()) return List.of();
         int maxIndex = -1;
         for (String budget : budgets) {
             maxIndex = Math.max(maxIndex, BUDGET_ORDER.indexOf(budget));
         }
-        if (maxIndex < 0) {
-            return budgets;
-        }
+        if (maxIndex < 0) return budgets;
         return List.copyOf(BUDGET_ORDER.subList(0, maxIndex + 1));
     }
 
@@ -190,9 +215,7 @@ public class ActivityService {
     }
 
     private ActivityItem toActivityItem(ActivityItemRow row) {
-        if (row == null) {
-            return null;
-        }
+        if (row == null) return null;
         SlotBundle slots = new SlotBundle(
                 jsonService.fromJsonArray(row.getCity()),
                 jsonService.fromJsonArray(row.getLocation()),
