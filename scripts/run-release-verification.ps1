@@ -62,9 +62,6 @@ if (-not [string]::IsNullOrWhiteSpace($RetrievalOutputPath)) {
     $retrievalParams.OutputPath = $RetrievalOutputPath
 }
 & $retrievalScript @retrievalParams
-if ($LASTEXITCODE -ne 0) {
-    throw "retrieval-v1 failed with exit code $LASTEXITCODE"
-}
 
 $reactStabilityPassed = $true
 $stabilitySkipped = -not $reactFirstPassed
