@@ -3,6 +3,7 @@ param(
     [long]$UserId = 999999,
     [int]$Limit = 10,
     [switch]$PromoteBaseline,
+    [switch]$ContinueOnGateFailure,
     [string]$BaselineName = "",
     [string]$OutputPath = ""
 )
@@ -81,6 +82,10 @@ foreach ($name in $metricNames) {
 }
 
 if (-not $result.passed) {
+    if ($ContinueOnGateFailure) {
+        Write-Warning "react-v1 did not pass the release/regression gate. Baseline will not be promoted."
+        return
+    }
     Write-Error "react-v1 did not pass the release/regression gate. Baseline will not be promoted."
     exit 2
 }
