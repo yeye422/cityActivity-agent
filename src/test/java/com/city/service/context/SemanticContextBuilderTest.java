@@ -4,6 +4,9 @@ import com.city.enums.SourceMode;
 import com.city.model.SessionState;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
+import com.city.model.WeatherRecommendationContext;
+import com.city.model.context.HardConstraints;
+import com.city.model.context.VerifiedRequestContext;
 import com.city.model.context.SemanticContext;
 import org.junit.jupiter.api.Test;
 
@@ -54,12 +57,23 @@ class SemanticContextBuilderTest {
 
         SemanticContext context = builder.build(state);
 
-        assertEquals(List.of("上海"), context.hardConstraints().cities());
-        assertEquals(List.of("浦东"), context.hardConstraints().locations());
-        assertEquals(List.of("200元内"), context.hardConstraints().budgets());
-        assertEquals(List.of("手作"), context.hardConstraints().activityTypes());
-        assertEquals(List.of("1-2小时"), context.hardConstraints().durations());
-        assertEquals(List.of("室内"), context.hardConstraints().features());
+        VerifiedRequestContext verified = VerifiedRequestContext.from(
+                state, "trace-1", context, WeatherRecommendationContext.inactive());
+
+        // 全部九维正向条件只存在于可信上下文的 effectiveSlots 中。
+        assertEquals(slots, verified.effectiveSlots());
+        assertEquals(List.of("上海"), verified.effectiveSlots().city());
+        assertEquals(List.of("浦东"), verified.effectiveSlots().location());
+        assertEquals(List.of("放松", "新鲜"), verified.effectiveSlots().experienceGoal());
+        assertEquals(List.of("情侣"), verified.effectiveSlots().companion());
+        assertEquals(List.of("200元内"), verified.effectiveSlots().budget());
+        assertEquals(List.of("手作"), verified.effectiveSlots().activityType());
+        assertEquals(List.of("安静"), verified.effectiveSlots().style());
+        assertEquals(List.of("1-2小时"), verified.effectiveSlots().duration());
+        assertEquals(List.of("室内"), verified.effectiveSlots().feature());
+
+        // HardConstraints 仅保留时间、排除槽位与排除活动 ID。
+        assertEquals(3, HardConstraints.class.getRecordComponents().length);
         assertEquals(time, context.hardConstraints().timeConstraint());
         assertEquals(List.of("展览"), context.hardConstraints().excludedSlots().activityType());
         assertTrue(context.hardConstraints().excludedActivityIds().containsAll(List.of(101L, 102L)));
@@ -79,7 +93,8 @@ class SemanticContextBuilderTest {
         SemanticContext context = builder.build(null);
 
         assertTrue(context.userGoal().isEmpty());
-        assertTrue(context.hardConstraints().cities().isEmpty());
+        assertEquals(TimeConstraint.empty(), context.hardConstraints().timeConstraint());
+        assertEquals(SlotBundle.empty(), context.hardConstraints().excludedSlots());
         assertTrue(context.hardConstraints().excludedActivityIds().isEmpty());
     }
 }

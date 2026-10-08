@@ -16,7 +16,8 @@ import java.util.Set;
  * 把已经由 Orchestrator / Workflow 应用完本轮 Patch 的 SessionState 投影为决策语义上下文。
  *
  * <p>该服务不解析自然语言、不修改 SessionState，也不重新解释 IntentAgent 的输出。
- * 已标准化的九维标签通过 VerifiedRequestContext.effectiveSlots 进入 MySQL，
+ * 已标准化的完整九维正向标签仅通过 VerifiedRequestContext.effectiveSlots 进入 MySQL，
+ * HardConstraints 只携带时间、排除槽位与排除活动 ID，
  * UserGoal 只读取独立存储的非字典开放目标。</p>
  *
  * <p>第一阶段故意保持保守：feature 仍沿用旧系统的确定性筛选语义，避免本次重构改变线上行为；
@@ -30,17 +31,10 @@ public class SemanticContextBuilder {
             return SemanticContext.empty();
         }
 
-        SlotBundle slots = state.slots() == null ? SlotBundle.empty() : state.slots();
         SlotBundle excludedSlots = state.excludedSlots() == null ? SlotBundle.empty() : state.excludedSlots();
         TimeConstraint time = state.timeConstraint() == null ? TimeConstraint.empty() : state.timeConstraint();
 
         HardConstraints hardConstraints = new HardConstraints(
-                slots.city(),
-                slots.location(),
-                slots.budget(),
-                slots.activityType(),
-                slots.duration(),
-                slots.feature(),
                 time,
                 excludedSlots,
                 historyExclusions(state.lastRecommendedActivityIds())
