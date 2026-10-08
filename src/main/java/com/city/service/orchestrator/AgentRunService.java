@@ -138,6 +138,12 @@ public class AgentRunService {
             return new PreparedRun(state, intent, publicFallbackUsed, terminal);
         }
 
+        if (isActivityFlow(intent.intent()) && intent.userGoalPatch() != null) {
+            state = state.withUserGoals(intent.userGoalPatch().apply(state.userGoals()));
+            traceService.recordEvent("USER_GOAL_PATCH_APPLIED", "CONTEXT",
+                    intent.userGoalPatch(), state.userGoals());
+        }
+
         persistMemoryProposals(userId, intent.memoryProposals());
 
         TimeResolutionResult timeResolution = timeResolutionService.resolve(

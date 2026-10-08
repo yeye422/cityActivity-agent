@@ -47,11 +47,21 @@ public class ActivityPlanService {
                                                 SlotBundle excludedSlots,
                                                 PlanningHorizon horizon,
                                                 WeatherRecommendationContext weather) {
+        return discoverHorizon(sourceMode, userId, baseSlots, excludedSlots, horizon, weather, "");
+    }
+
+    public List<CandidateBatch> discoverHorizon(SourceMode sourceMode,
+                                                Long userId,
+                                                SlotBundle baseSlots,
+                                                SlotBundle excludedSlots,
+                                                PlanningHorizon horizon,
+                                                WeatherRecommendationContext weather,
+                                                String retrievalIntent) {
         if (horizon == null || horizon.isEmpty()) return List.of();
         return horizon.ranges().stream()
                 .map(range -> discoverRange(
                         sourceMode, userId, baseSlots, excludedSlots,
-                        range, weather, "", List.of()))
+                        range, weather, retrievalIntent, List.of()))
                 .toList();
     }
 

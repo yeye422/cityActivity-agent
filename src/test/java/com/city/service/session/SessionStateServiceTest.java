@@ -77,6 +77,7 @@ class SessionStateServiceTest {
                 .withIntent(Intent.ACTIVITY_PLAN)
                 .withPhase(SessionPhase.CLARIFY)
                 .withSlots(slots)
+                .withUserGoals(List.of("有新鲜感", "两个人共同解决问题"))
                 .withPendingClarifyField(ClarifyField.DATE);
         service.save(state);
 
@@ -90,6 +91,8 @@ class SessionStateServiceTest {
         assertEquals("近地铁", persisted.path("feature").get(1).asText());
         assertEquals("解压", persisted.path("experienceGoal").get(0).asText());
         assertEquals("独处", persisted.path("companion").get(0).asText());
+        assertEquals("有新鲜感", persisted.path("userGoals").get(0).asText());
+        assertEquals("两个人共同解决问题", persisted.path("userGoals").get(1).asText());
     }
 
     @Test
@@ -122,5 +125,6 @@ class SessionStateServiceTest {
         assertEquals(Intent.ACTIVITY_PLAN, state.currentIntent());
         assertEquals(ClarifyField.DATE, state.pendingClarifyField());
         assertEquals(List.of("西安"), state.slots().city());
+        assertEquals(List.of(), state.userGoals());
     }
 }

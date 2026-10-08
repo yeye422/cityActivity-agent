@@ -22,6 +22,8 @@ public class IntentResult {
     private List<ConstraintOperation> operations;
     private TemporalMutation temporal;
     private List<MemoryMutationProposal> memoryProposals;
+    /** 非九维字典目标的增删改清 Patch。 */
+    private UserGoalPatch userGoalPatch;
     private boolean fallback;
 
     public IntentResult(Intent intent,
@@ -30,12 +32,23 @@ public class IntentResult {
                         TemporalMutation temporal,
                         List<MemoryMutationProposal> memoryProposals,
                         boolean fallback) {
+        this(intent, confidence, operations, temporal, memoryProposals, fallback, null);
+    }
+
+    public IntentResult(Intent intent,
+                        double confidence,
+                        List<ConstraintOperation> operations,
+                        TemporalMutation temporal,
+                        List<MemoryMutationProposal> memoryProposals,
+                        boolean fallback,
+                        UserGoalPatch userGoalPatch) {
         this.intent = intent;
         this.confidence = confidence;
         this.operations = operations == null ? List.of() : List.copyOf(operations);
         this.temporal = temporal == null ? TemporalMutation.keep() : temporal;
         this.memoryProposals = memoryProposals == null ? List.of() : List.copyOf(memoryProposals);
         this.fallback = fallback;
+        this.userGoalPatch = userGoalPatch;
     }
 
     public IntentResult(Intent intent, double confidence) {

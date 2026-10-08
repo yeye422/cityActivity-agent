@@ -26,7 +26,7 @@ public final class ContextWorker {
                              SessionState state,
                              List<ConversationTurn> history) {
         IntentResult raw = intentAgentService.recognize(
-                sessionId, userId, userInput, state.slots(), state.timeConstraint(), history);
+                sessionId, userId, userInput, state.slots(), state.timeConstraint(), history, state.userGoals());
         return new Result(raw, intentReviseService.revise(state, raw, userInput));
     }
 

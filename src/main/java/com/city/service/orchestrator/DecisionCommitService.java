@@ -135,7 +135,7 @@ public class DecisionCommitService {
                 : String.valueOf(time.dateStart()) + "|" + time.dateEnd()
                 + "|" + time.startTime() + "|" + time.endTime();
         return String.valueOf(state.sourceMode()) + "|" + state.slots() + "|" + state.excludedSlots()
-                + "|" + unconstrained + "|" + timeKey;
+                + "|" + unconstrained + "|" + timeKey + "|" + state.userGoals();
     }
 
     private ResponseResult applyOutputRiskGuard(String userInput, Intent intent, ResponseResult response) {

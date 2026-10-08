@@ -46,6 +46,26 @@ public class SessionState {
     private RelaxationContext pendingRelaxationContext;
     /** 本会话已推荐过的活动 ID（累积），用于“换一批”时排除重复。 */
     private List<Long> lastRecommendedActivityIds;
+    /** 本会话持续累积的非字典开放语义目标，不能用于九维 MySQL 过滤。 */
+    private List<String> userGoals;
+
+    /** 原有 13 字段构造入口，默认不携带开放语义目标。 */
+    public SessionState(String sessionId, Long userId, SessionPhase phase, SourceMode sourceMode,
+                        Intent currentIntent, SlotBundle slots, SlotBundle excludedSlots,
+                        Set<String> unconstrainedSlots, TimeConstraint timeConstraint,
+                        ClarifyField pendingClarifyField, String recommendationQueryKey,
+                        RelaxationContext pendingRelaxationContext, List<Long> lastRecommendedActivityIds) {
+        this(sessionId, userId, phase, sourceMode, currentIntent, slots, excludedSlots,
+                unconstrainedSlots, timeConstraint, pendingClarifyField, recommendationQueryKey,
+                pendingRelaxationContext, lastRecommendedActivityIds, List.of());
+    }
+
+    public SessionState withUserGoals(List<String> goals) {
+        return new SessionState(sessionId, userId, phase, sourceMode, currentIntent,
+                slots, excludedSlots, unconstrainedSlots, timeConstraint, pendingClarifyField,
+                recommendationQueryKey, pendingRelaxationContext, lastRecommendedActivityIds,
+                goals == null ? List.of() : List.copyOf(goals));
+    }
 
     /**
      * 创建一个新的空状态。
@@ -182,7 +202,8 @@ public class SessionState {
                 newPendingClarifyField,
                 newRecommendationQueryKey,
                 newPendingRelaxationContext,
-                newLastRecommendedActivityIds
+                newLastRecommendedActivityIds,
+                userGoals == null ? List.of() : userGoals
         );
     }
 

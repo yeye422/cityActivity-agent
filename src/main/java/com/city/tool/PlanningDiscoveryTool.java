@@ -48,7 +48,8 @@ public class PlanningDiscoveryTool {
                 verified.effectiveSlots(),
                 verified.hardConstraints().excludedSlots(),
                 planningContext.horizon(),
-                verified.weather()
+                verified.weather(),
+                verified.userGoal().semanticQuery(verified.effectiveSlots())
         );
         planningContext.evidenceRegistry().record(batches);
         planningContext.notebook().recordDiscovery(planningContext.evidenceRegistry().searchedRanges());

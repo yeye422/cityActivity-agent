@@ -148,7 +148,8 @@ public class IntentReviseService {
                 result.operations() == null ? List.of() : result.operations(),
                 result.temporal() == null ? TemporalMutation.keep() : result.temporal(),
                 result.memoryProposals() == null ? List.of() : result.memoryProposals(),
-                result.fallback()
+                result.fallback(),
+                result.userGoalPatch()
         );
     }
 }

@@ -16,8 +16,8 @@ import java.util.Set;
  * 把已经由 Orchestrator / Workflow 应用完本轮 Patch 的 SessionState 投影为决策语义上下文。
  *
  * <p>该服务不解析自然语言、不修改 SessionState，也不重新解释 IntentAgent 的输出。
- * 它只做确定性的字段分层：现有检索层已经当作硬筛选的字段进入 HardConstraints，
- * 体验目标、同行关系和风格进入 UserGoal。</p>
+ * 已标准化的九维标签通过 VerifiedRequestContext.effectiveSlots 进入 MySQL，
+ * UserGoal 只读取独立存储的非字典开放目标。</p>
  *
  * <p>第一阶段故意保持保守：feature 仍沿用旧系统的确定性筛选语义，避免本次重构改变线上行为；
  * 后续如果 IntentAgent 引入显式约束强度，再把“最好近地铁”等偏好从硬条件迁移到 UserGoal。</p>
@@ -46,11 +46,7 @@ public class SemanticContextBuilder {
                 historyExclusions(state.lastRecommendedActivityIds())
         );
 
-        UserGoal userGoal = new UserGoal(
-                slots.experienceGoal(),
-                slots.companion(),
-                slots.style()
-        );
+        UserGoal userGoal = UserGoal.open(state.userGoals());
 
         return new SemanticContext(hardConstraints, userGoal);
     }

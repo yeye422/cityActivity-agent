@@ -49,6 +49,7 @@ class SemanticContextBuilderTest {
                 .withSlots(slots)
                 .withExcludedSlots(excluded)
                 .withTimeConstraint(time)
+                .withUserGoals(List.of("希望剧情有反转", "想要新鲜感"))
                 .withLastRecommendations(List.of(101L, 102L));
 
         SemanticContext context = builder.build(state);
@@ -63,9 +64,10 @@ class SemanticContextBuilderTest {
         assertEquals(List.of("展览"), context.hardConstraints().excludedSlots().activityType());
         assertTrue(context.hardConstraints().excludedActivityIds().containsAll(List.of(101L, 102L)));
 
-        assertEquals(List.of("放松", "新鲜"), context.userGoal().experienceGoals());
-        assertEquals(List.of("情侣"), context.userGoal().companions());
-        assertEquals(List.of("安静"), context.userGoal().styles());
+        assertEquals(List.of("希望剧情有反转", "想要新鲜感"), context.userGoal().goals());
+        assertTrue(context.userGoal().experienceGoals().isEmpty());
+        assertTrue(context.userGoal().companions().isEmpty());
+        assertTrue(context.userGoal().styles().isEmpty());
 
         // Builder 只能读取状态，不能反向修改九维槽位。
         assertEquals(List.of("放松", "新鲜"), state.slots().experienceGoal());

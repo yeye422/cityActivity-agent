@@ -24,6 +24,27 @@ import static org.mockito.Mockito.*;
 class ActivityPlanServiceTest {
 
     @Test
+    void initialDiscoveryShouldPassOpenGoalToRetrievalPipeline() {
+        RetrievalPipeline pipeline = mock(RetrievalPipeline.class);
+        ActivitySessionService sessionService = mock(ActivitySessionService.class);
+        ActivityPlanService service = new ActivityPlanService(pipeline, sessionService);
+        when(pipeline.retrieve(any())).thenReturn(emptyResult());
+
+        var range = new PlanningHorizon.Range(
+                LocalDateTime.of(2026, 9, 27, 8, 0),
+                LocalDateTime.of(2026, 9, 27, 23, 0));
+        service.discoverHorizon(com.city.enums.SourceMode.PUBLIC, 1L,
+                SlotBundle.empty(), SlotBundle.empty(),
+                new PlanningHorizon(List.of(range)),
+                com.city.model.WeatherRecommendationContext.inactive(),
+                "想要新鲜感和剧情反转");
+
+        org.mockito.ArgumentCaptor<RetrievalRequest> captured = org.mockito.ArgumentCaptor.forClass(RetrievalRequest.class);
+        verify(pipeline).retrieve(captured.capture());
+        assertEquals("想要新鲜感和剧情反转", captured.getValue().queryText());
+    }
+
+    @Test
     void shouldPreserveExactRequestedRangeInRetrieval() {
         RetrievalPipeline pipeline = mock(RetrievalPipeline.class);
         ActivitySessionService sessionService = mock(ActivitySessionService.class);

@@ -386,10 +386,8 @@ public final class RecommendationWorker {
             VerifiedRequestContext context
     ) {
         String safeInput = userInput == null ? "" : userInput.trim();
-        if (!context.userGoal().isEmpty()) {
-            return context.userGoal().toString();
-        }
-        return safeInput;
+        String semantic = context.userGoal().semanticQuery(context.effectiveSlots());
+        return semantic.isBlank() ? safeInput : semantic;
     }
 
     private static final class InvalidRecommendationResponseException
