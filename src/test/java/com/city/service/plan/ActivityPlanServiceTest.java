@@ -2,180 +2,151 @@ package com.city.service.plan;
 
 import com.city.enums.SourceMode;
 import com.city.model.ActivityItem;
-import com.city.model.ActivityRankRequest;
-import com.city.model.ActivityRankResult;
-import com.city.model.ActivitySearchRequest;
 import com.city.model.ActivitySessionResponse;
 import com.city.model.SlotBundle;
-import com.city.model.TimeConstraint;
 import com.city.model.WeatherRecommendationContext;
-import com.city.service.activity.ActivityRankService;
-import com.city.service.activity.ActivitySearchService;
+import com.city.model.context.PlanningHorizon;
+import com.city.model.retrieval.RetrievalRequest;
+import com.city.model.retrieval.RetrievalResult;
 import com.city.service.activity.ActivitySessionService;
+import com.city.service.retrieval.RetrievalPipeline;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.same;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 class ActivityPlanServiceTest {
 
     @Test
-    void shouldResolveAfternoonToEveningAsFinePlanWindows() {
-        ActivityPlanService service = new ActivityPlanService(
-                mock(ActivitySearchService.class),
-                mock(ActivityRankService.class),
-                mock(ActivitySessionService.class));
-        TimeConstraint timeConstraint = new TimeConstraint(
-                "下午到晚上",
-                null,
-                null,
-                LocalTime.of(12, 0),
-                LocalTime.of(23, 0),
-                null
-        );
-
-        assertEquals(
-                List.of(
-                        "周六 12:00-14:00",
-                        "周六 14:00-16:00",
-                        "周六 16:00-18:00",
-                        "周六 18:00-20:00",
-                        "周六 20:00-23:00"),
-                service.resolveActivityTimes(SlotBundle.empty(), timeConstraint)
-        );
-    }
-
-    @Test
-    void shouldPreserveWeekendPrefixForFineWindows() {
-        ActivityPlanService service = new ActivityPlanService(
-                mock(ActivitySearchService.class),
-                mock(ActivityRankService.class),
-                mock(ActivitySessionService.class));
-        LocalDate saturday = LocalDate.of(2026, 9, 5);
-        TimeConstraint timeConstraint = new TimeConstraint(
-                "周六下午到晚上",
-                saturday,
-                saturday,
-                LocalTime.of(12, 0),
-                LocalTime.of(23, 0),
-                null
-        );
-
-        assertEquals(
-                List.of(
-                        "周六 12:00-14:00",
-                        "周六 14:00-16:00",
-                        "周六 16:00-18:00",
-                        "周六 18:00-20:00",
-                        "周六 20:00-23:00"),
-                service.resolveActivityTimes(SlotBundle.empty(), timeConstraint)
-        );
-    }
-
-    @Test
-    void planSearchShouldPreserveNineDimensionsAndReuseWeatherRanking() {
-        ActivitySearchService searchService = mock(ActivitySearchService.class);
-        ActivityRankService rankService = mock(ActivityRankService.class);
-        ActivityPlanService service = new ActivityPlanService(searchService, rankService, mock(ActivitySessionService.class));
-
-        SlotBundle querySlots = new SlotBundle(
-                List.of("上海"), List.of("徐汇"), List.of("放松"), List.of("独处"),
-                List.of(), List.of("电影"), List.of("安静"), List.of("1-2小时"), List.of("室内"));
-        SlotBundle excludedSlots = new SlotBundle(
-                List.of(), List.of(), List.of(), List.of(),
-                List.of(), List.of("展览"), List.of(), List.of(), List.of("户外"));
-        WeatherRecommendationContext weather = WeatherRecommendationContext.indoorPriority("暴雨，优先室内");
-        ActivityItem activity = new ActivityItem(
-                1L,
-                SourceMode.PUBLIC,
-                null,
-                "室内电影",
-                querySlots,
-                null,
-                null,
-                LocalTime.of(9, 0),
-                LocalTime.of(11, 0),
-                120,
-                1.0
-        );
-
-        when(searchService.search(any(ActivitySearchRequest.class))).thenReturn(List.of(activity));
-        when(rankService.rank(any(ActivityRankRequest.class), same(weather)))
-                .thenReturn(new ActivityRankResult(List.of(activity), List.of()));
-
-        List<ActivityPlanService.PlannedActivity> result = service.planActivities(
-                SourceMode.PUBLIC,
-                1L,
-                querySlots,
-                excludedSlots,
-                List.of("周六 08:00-10:00"),
-                TimeConstraint.empty(),
-                weather
-        );
-
-        ArgumentCaptor<ActivitySearchRequest> searchCaptor = ArgumentCaptor.forClass(ActivitySearchRequest.class);
-        verify(searchService).search(searchCaptor.capture());
-        assertEquals(excludedSlots, searchCaptor.getValue().excludedSlots());
-        assertEquals(List.of("室内"), searchCaptor.getValue().slots().feature());
-        verify(rankService).rank(any(ActivityRankRequest.class), same(weather));
-        assertEquals(1L, result.getFirst().activity().id());
-    }
-
-    @Test
-    void exactDateShouldAttachAvailableSessionsToPlanCandidate() {
-        ActivitySearchService searchService = mock(ActivitySearchService.class);
-        ActivityRankService rankService = mock(ActivityRankService.class);
+    void initialDiscoveryShouldPassOpenGoalToRetrievalPipeline() {
+        RetrievalPipeline pipeline = mock(RetrievalPipeline.class);
         ActivitySessionService sessionService = mock(ActivitySessionService.class);
-        ActivityPlanService service = new ActivityPlanService(searchService, rankService, sessionService);
+        ActivityPlanService service = new ActivityPlanService(pipeline, sessionService);
+        when(pipeline.retrieve(any())).thenReturn(emptyResult());
 
-        LocalDate saturday = LocalDate.of(2026, 9, 5);
-        ActivityItem activity = new ActivityItem(
-                21L,
-                SourceMode.PUBLIC,
-                null,
-                "具体场次演出",
-                new SlotBundle(
-                        List.of("西安"), List.of("高新"), List.of("社交"), List.of("朋友"),
-                        List.of("200元内"), List.of("演出"), List.of("热闹"), List.of("1-2小时"), List.of("室内")),
-                saturday,
-                saturday,
-                LocalTime.of(14, 0),
-                LocalTime.of(18, 0),
-                120,
-                0.95
-        );
-        ActivitySessionResponse session = new ActivitySessionResponse(
-                901L, 21L, 301L, "高新剧场", "剧场", "西安", "高新", null,
-                LocalDateTime.of(2026, 9, 5, 14, 30),
-                LocalDateTime.of(2026, 9, 5, 16, 0),
-                null, 8, "OPEN", null, null
-        );
+        var range = new PlanningHorizon.Range(
+                LocalDateTime.of(2026, 9, 27, 8, 0),
+                LocalDateTime.of(2026, 9, 27, 23, 0));
+        service.discoverHorizon(com.city.enums.SourceMode.PUBLIC, 1L,
+                SlotBundle.empty(), SlotBundle.empty(),
+                new PlanningHorizon(List.of(range)),
+                com.city.model.WeatherRecommendationContext.inactive(),
+                "想要新鲜感和剧情反转");
 
-        when(searchService.search(any(ActivitySearchRequest.class))).thenReturn(List.of(activity));
-        when(rankService.rank(any(ActivityRankRequest.class), any(WeatherRecommendationContext.class)))
-                .thenReturn(new ActivityRankResult(List.of(activity), List.of()));
-        when(sessionService.findAvailable(21L, saturday)).thenReturn(List.of(session));
+        org.mockito.ArgumentCaptor<RetrievalRequest> captured = org.mockito.ArgumentCaptor.forClass(RetrievalRequest.class);
+        verify(pipeline).retrieve(captured.capture());
+        assertEquals("想要新鲜感和剧情反转", captured.getValue().queryText());
+    }
 
-        TimeConstraint time = new TimeConstraint(
-                "周六下午", saturday, saturday, LocalTime.of(14, 0), LocalTime.of(16, 0), null);
-        List<ActivityPlanService.PlannedActivity> result = service.planActivities(
+    @Test
+    void shouldPreserveExactRequestedRangeInRetrieval() {
+        RetrievalPipeline pipeline = mock(RetrievalPipeline.class);
+        ActivitySessionService sessionService = mock(ActivitySessionService.class);
+        ActivityPlanService service = new ActivityPlanService(pipeline, sessionService);
+        when(pipeline.retrieve(any())).thenReturn(emptyResult());
+
+        PlanningHorizon.Range range = new PlanningHorizon.Range(
+                LocalDateTime.of(2026, 9, 27, 15, 0),
+                LocalDateTime.of(2026, 9, 27, 17, 0));
+
+        SlotBundle planningSlots = new SlotBundle(
+                List.of("西安"), List.of(), List.of("轻松"), List.of("情侣"),
+                List.of(), List.of(), List.of(), List.of("半天"), List.of());
+        service.discoverRange(
+                SourceMode.PUBLIC, 1L, planningSlots, SlotBundle.empty(),
+                range, WeatherRecommendationContext.inactive(), "轻松约会", List.of());
+
+        ArgumentCaptor<RetrievalRequest> captor = ArgumentCaptor.forClass(RetrievalRequest.class);
+        verify(pipeline).retrieve(captor.capture());
+        var time = captor.getValue().searchRequest().timeConstraint();
+        assertEquals(LocalDate.of(2026, 9, 27), time.dateStart());
+        assertEquals(15, time.startTime().getHour());
+        assertEquals(17, time.endTime().getHour());
+        assertTrue(captor.getValue().searchRequest().slots().duration().isEmpty());
+    }
+
+    @Test
+    void shouldExposeOnlySessionsFullyInsideRequestedRange() {
+        RetrievalPipeline pipeline = mock(RetrievalPipeline.class);
+        ActivitySessionService sessionService = mock(ActivitySessionService.class);
+        ActivityPlanService service = new ActivityPlanService(pipeline, sessionService);
+
+        ActivityItem activity = activity(21L, "具体场次演出");
+        when(pipeline.retrieve(any())).thenReturn(new RetrievalResult(
+                List.of(activity), List.of(activity), List.of(activity), List.of(), List.of()));
+
+        ActivitySessionResponse outside = session(
+                900L, 21L,
+                LocalDateTime.of(2026, 9, 27, 14, 30),
+                LocalDateTime.of(2026, 9, 27, 16, 0));
+        ActivitySessionResponse inside = session(
+                901L, 21L,
+                LocalDateTime.of(2026, 9, 27, 15, 30),
+                LocalDateTime.of(2026, 9, 27, 16, 30));
+        when(sessionService.findAvailable(21L, LocalDate.of(2026, 9, 27)))
+                .thenReturn(List.of(outside, inside));
+
+        PlanningHorizon.Range range = new PlanningHorizon.Range(
+                LocalDateTime.of(2026, 9, 27, 15, 0),
+                LocalDateTime.of(2026, 9, 27, 17, 0));
+        ActivityPlanService.CandidateBatch result = service.discoverRange(
                 SourceMode.PUBLIC, 1L, activity.slots(), SlotBundle.empty(),
-                List.of("周六 14:00-16:00"), time, WeatherRecommendationContext.inactive());
+                range, WeatherRecommendationContext.inactive(), "", List.of());
 
-        assertEquals(1, result.size());
-        assertTrue(result.getFirst().sessionsByActivityId().containsKey(21L));
-        assertEquals(901L, result.getFirst().sessionsByActivityId().get(21L).getFirst().sessionId());
-        assertEquals(901L, result.getFirst().selectedSession().sessionId());
+        assertEquals(List.of(901L), result.sessionsByActivityId().get(21L)
+                .stream().map(ActivitySessionResponse::sessionId).toList());
+    }
+
+    @Test
+    void shouldDropSessionBackedActivityWhenNoSessionFitsRequestedRange() {
+        RetrievalPipeline pipeline = mock(RetrievalPipeline.class);
+        ActivitySessionService sessionService = mock(ActivitySessionService.class);
+        ActivityPlanService service = new ActivityPlanService(pipeline, sessionService);
+
+        ActivityItem activity = activity(31L, "晚间演出");
+        when(pipeline.retrieve(any())).thenReturn(new RetrievalResult(
+                List.of(activity), List.of(activity), List.of(activity), List.of(), List.of()));
+        when(sessionService.findAvailable(31L, LocalDate.of(2026, 9, 27)))
+                .thenReturn(List.of(session(
+                        910L, 31L,
+                        LocalDateTime.of(2026, 9, 27, 19, 0),
+                        LocalDateTime.of(2026, 9, 27, 21, 0))));
+
+        PlanningHorizon.Range afternoon = new PlanningHorizon.Range(
+                LocalDateTime.of(2026, 9, 27, 14, 0),
+                LocalDateTime.of(2026, 9, 27, 18, 0));
+        ActivityPlanService.CandidateBatch result = service.discoverRange(
+                SourceMode.PUBLIC, 1L, activity.slots(), SlotBundle.empty(),
+                afternoon, WeatherRecommendationContext.inactive(), "", List.of());
+
+        assertTrue(result.candidates().isEmpty());
+        assertTrue(result.sessionsByActivityId().isEmpty());
+    }
+
+    private RetrievalResult emptyResult() {
+        return new RetrievalResult(List.of(), List.of(), List.of(), List.of(), List.of());
+    }
+
+    private ActivityItem activity(Long id, String name) {
+        return new ActivityItem(
+                id, SourceMode.PUBLIC, null, name,
+                new SlotBundle(List.of("西安"), List.of(), List.of(), List.of(),
+                        List.of(), List.of(), List.of(), List.of(), List.of()),
+                null, null, null, null, 90, 0.9);
+    }
+
+    private ActivitySessionResponse session(Long sessionId,
+                                            Long activityId,
+                                            LocalDateTime start,
+                                            LocalDateTime end) {
+        return new ActivitySessionResponse(
+                sessionId, activityId, 301L, "剧场", "INDOOR", "西安", "高新", "地址",
+                start, end, null, 8, "OPEN", null, null);
     }
 }

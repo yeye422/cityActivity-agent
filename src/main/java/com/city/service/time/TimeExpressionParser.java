@@ -71,6 +71,21 @@ public class TimeExpressionParser {
         if (clockRange.find()) {
             startTime = clockTime(clockRange.group(1), clockRange.group(2));
             endTime = clockTime(clockRange.group(3), clockRange.group(4));
+        } else if (containsRangeExpression(text, "上午", "晚上")
+                || containsRangeExpression(text, "早上", "晚上")
+                || containsRangeExpression(text, "早晨", "晚上")) {
+            startTime = LocalTime.of(8, 0); endTime = LocalTime.of(23, 0);
+        } else if (containsRangeExpression(text, "上午", "下午")
+                || containsRangeExpression(text, "早上", "下午")
+                || containsRangeExpression(text, "早晨", "下午")) {
+            startTime = LocalTime.of(8, 0); endTime = LocalTime.of(18, 0);
+        } else if (containsRangeExpression(text, "下午", "晚上")
+                || containsRangeExpression(text, "午后", "晚上")
+                || containsRangeExpression(text, "中午", "晚上")) {
+            startTime = LocalTime.of(12, 0); endTime = LocalTime.of(23, 0);
+        } else if (containsRangeExpression(text, "傍晚", "晚上")
+                || containsRangeExpression(text, "黄昏", "晚上")) {
+            startTime = LocalTime.of(17, 0); endTime = LocalTime.of(23, 0);
         } else if (text.contains("上午") || text.contains("早上") || text.contains("早晨") || text.contains("今早")) {
             startTime = LocalTime.of(8, 0); endTime = LocalTime.of(12, 0);
         } else if (text.contains("下午") || text.contains("中午") || text.contains("午后")) {
@@ -140,6 +155,13 @@ public class TimeExpressionParser {
         int m = minute == null || minute.isBlank() ? 0 : Integer.parseInt(minute);
         if (h < 0 || h > 23 || m < 0 || m > 59) return null;
         return LocalTime.of(h, m);
+    }
+
+    private boolean containsRangeExpression(String text, String from, String to) {
+        if (text == null || from == null || to == null) return false;
+        int fromIndex = text.indexOf(from);
+        int toIndex = text.indexOf(to);
+        return fromIndex >= 0 && toIndex > fromIndex;
     }
 
     private boolean containsAny(String text, String... keywords) {

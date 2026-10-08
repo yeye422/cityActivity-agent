@@ -51,7 +51,11 @@ class IntentAgentServicePromptTest {
         assertTrue(prompt.contains("历史已生效值不要重复写入 operations"));
         assertTrue(prompt.contains("普通正向新增使用 ADD"));
         assertTrue(prompt.contains("CLEAR 的 values 必须为 []"));
-        assertTrue(prompt.contains("纯“换一批”必须是 ACTIVITY_ADJUST + operations=[] + temporal KEEP/KEEP"));
+        assertTrue(prompt.contains("纯“换一批”必须是 ACTIVITY_ADJUST + operations=[] + userGoalPatch=null + temporal KEEP/KEEP"));
+        assertTrue(prompt.contains("无法准确映射到九维标准字典的开放体验目标写 userGoalPatch"));
+        assertTrue(prompt.contains("当前已生效开放语义目标"));
+        assertTrue(prompt.contains("memoryProposals 只用于用户明确表达长期偏好/长期排除"));
+        assertTrue(prompt.contains("本次预算、日期、地点、同行人、活动时长等一次性上下文绝不能写 memoryProposals"));
         assertFalse(prompt.contains("CLARIFY_NEEDED"));
         assertFalse(prompt.contains("HEALTH_RISK"));
         assertFalse(prompt.contains("顶层只能包含 intent、slots"));

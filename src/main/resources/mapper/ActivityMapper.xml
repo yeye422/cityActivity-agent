@@ -9,6 +9,7 @@
         <result property="sourceType" column="source_type"/>
         <result property="ownerUserId" column="owner_user_id"/>
         <result property="name" column="name"/>
+        <result property="description" column="description"/>
         <result property="city" column="city"/>
         <result property="location" column="location"/>
         <result property="experienceGoal" column="experience_goal"/>
@@ -32,6 +33,7 @@
         source_type,
         owner_user_id,
         name,
+        description,
         city,
         location,
         experience_goal,
@@ -55,12 +57,12 @@
             useGeneratedKeys="true"
             keyProperty="id">
         INSERT INTO activity_item (
-        source_type, owner_user_id, name,
+        source_type, owner_user_id, name, description,
         city, location, experience_goal, companion, budget, activity_type, style, duration, feature, duration_minutes,
         valid_from, valid_to, valid_start_time, valid_end_time,
         created_at, updated_at
         ) VALUES (
-        #{sourceType}, #{ownerUserId}, #{name},
+        #{sourceType}, #{ownerUserId}, #{name}, #{description},
         #{city}, #{location}, #{experienceGoal}, #{companion}, #{budget}, #{activityType}, #{style}, #{duration}, #{feature}, #{durationMinutes},
         #{validFrom}, #{validTo}, #{validStartTime}, #{validEndTime},
         NOW(), NOW()
@@ -70,6 +72,7 @@
     <update id="updatePersonal" parameterType="com.city.model.ActivityItemRow">
         UPDATE activity_item
         SET name = #{name},
+        description = #{description},
         city = #{city},
         location = #{location},
         experience_goal = #{experienceGoal},
@@ -119,6 +122,13 @@
         WHERE source_type = 'PUBLIC'
         AND owner_user_id IS NULL
         ORDER BY updated_at DESC
+    </select>
+
+    <select id="findAllActiveActivities" resultMap="ActivityItemRowMap">
+        SELECT <include refid="ActivityColumns"/>
+        FROM activity_item
+        WHERE active = 1
+        ORDER BY id ASC
     </select>
 
     <select id="countPersonalActivities" resultType="int">

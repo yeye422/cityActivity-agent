@@ -17,6 +17,19 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class IntentReviseServiceTest {
+    @Test
+    void revisedIntentShouldKeepOpenGoalPatch() {
+        com.city.model.UserGoalPatch patch = new com.city.model.UserGoalPatch(
+                com.city.enums.ConstraintOperationType.ADD, List.of("希望有剧情反转"));
+        IntentResult raw = new IntentResult(Intent.ACTIVITY_ADJUST, 0.9, List.of(),
+                com.city.model.TemporalMutation.keep(), List.of(), false, patch);
+        IntentResult revised = service.revise(
+                SessionState.fresh("s", 1L, SourceMode.PUBLIC), raw, "换成有剧情反转的");
+        assertEquals(Intent.ACTIVITY_RECOMMENDATION, revised.intent());
+        assertEquals(patch, revised.userGoalPatch());
+    }
+
+
 
     private final IntentReviseService service = new IntentReviseService();
 

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.city.mapper.AgentUiEventMapper">
+
+    <resultMap id="AgentUiEventRowMap" type="com.city.model.AgentUiEventRow">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="sessionId" column="session_id"/>
+        <result property="traceId" column="trace_id"/>
+        <result property="eventSeq" column="event_seq"/>
+        <result property="eventJson" column="event_json"/>
+        <result property="occurredAt" column="occurred_at"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <insert id="insertIgnore" parameterType="com.city.model.AgentUiEventRow">
+        INSERT IGNORE INTO agent_ui_event (
+            user_id, session_id, trace_id, event_seq, event_json, occurred_at, created_at
+        ) VALUES (
+            #{userId}, #{sessionId}, #{traceId}, #{eventSeq}, #{eventJson}, #{occurredAt}, NOW(3)
+        )
+    </insert>
+
+    <select id="findCursorId" resultType="java.lang.Long">
+        SELECT id
+        FROM agent_ui_event
+        WHERE user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND trace_id = #{traceId}
+          AND event_seq = #{eventSeq}
+        LIMIT 1
+    </select>
+
+    <select id="findAfterId" resultMap="AgentUiEventRowMap">
+        SELECT id, user_id, session_id, trace_id, event_seq, event_json, occurred_at, created_at
+        FROM agent_ui_event
+        WHERE user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND id &gt; #{afterId}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="findRecent" resultMap="AgentUiEventRowMap">
+        SELECT id, user_id, session_id, trace_id, event_seq, event_json, occurred_at, created_at
+        FROM agent_ui_event
+        WHERE user_id = #{userId}
+          AND session_id = #{sessionId}
+        ORDER BY id DESC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

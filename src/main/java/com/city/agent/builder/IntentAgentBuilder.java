@@ -2,7 +2,6 @@ package com.city.agent.builder;
 
 import com.city.agent.loader.PromptLoader;
 import io.agentscope.core.ReActAgent;
-import io.agentscope.core.memory.InMemoryMemory;
 import io.agentscope.core.model.Model;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
@@ -25,13 +24,12 @@ public class IntentAgentBuilder {
         this.promptLoader = promptLoader;
     }
 
-    /** 构建一个新的 ReActAgent 实例，实例内部记忆只作为临时容器使用。 */
+    /** 构建一个新的请求级 ReActAgent 实例。 */
     public ReActAgent build() {
         return ReActAgent.builder()
                 .name("city_intent_agent")
                 .model(mainModel)
                 .sysPrompt(promptLoader.load("city-prompts/intent.txt"))
-                .memory(new InMemoryMemory())
                 .build();
     }
 }

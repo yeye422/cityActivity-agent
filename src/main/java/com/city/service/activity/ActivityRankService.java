@@ -1,5 +1,6 @@
 package com.city.service.activity;
 
+import com.city.enums.PreferencePolarity;
 import com.city.model.ActivityItem;
 import com.city.model.ActivityRankRequest;
 import com.city.model.ActivityRankResult;
@@ -8,7 +9,6 @@ import com.city.model.PreferenceFact;
 import com.city.model.SlotBundle;
 import com.city.model.TimeConstraint;
 import com.city.model.WeatherRecommendationContext;
-import com.city.enums.PreferencePolarity;
 import com.city.service.memory.PreferenceMemoryService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,30 +16,26 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalTime;
-import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
 /**
- * 活动重排服务（Orchestrator 推荐流水线第二层）。
- * Search 已负责九维正负约束等硬条件过滤；这里不再重复计算槽位匹配分，
- * 只处理历史推荐 ID 排除、时间窗口适配和天气上下文调整。
+ * 业务重排层。
+ *
+ * <p>词面与语义相关性已在 Pinecone 双通道完成并经 RRF 合并；
+ * 本层只消费 hybrid retrieval prior，再叠加时间、天气和长期偏好。</p>
  */
 @Service
 public class ActivityRankService {
     private static final Logger log = LoggerFactory.getLogger(ActivityRankService.class);
     private static final int MAX_RANKED_CANDIDATES = 10;
-    private static final double BM25_K1 = 1.2;
-    private static final double BM25_B = 0.75;
+    private static final double RETRIEVAL_WEIGHT = 0.12;
+
     private final PreferenceMemoryService preferenceMemoryService;
 
-    /** 仅供无 Spring 的纯排序单测使用。 */
     public ActivityRankService() {
         this.preferenceMemoryService = null;
     }
@@ -53,20 +49,36 @@ public class ActivityRankService {
         return rank(request, WeatherRecommendationContext.inactive());
     }
 
-    /** 天气只影响排序，不会把活动从结果集中剔除。 */
     public ActivityRankResult rank(ActivityRankRequest request, WeatherRecommendationContext weather) {
+        return rankInternal(request, weather, Map.of());
+    }
+
+    public ActivityRankResult rankWithRetrievalPrior(ActivityRankRequest request,
+                                                     WeatherRecommendationContext weather,
+                                                     Map<Long, Double> hybridScores) {
+        return rankInternal(request, weather, hybridScores == null ? Map.of() : hybridScores);
+    }
+
+    private ActivityRankResult rankInternal(ActivityRankRequest request,
+                                            WeatherRecommendationContext weather,
+                                            Map<Long, Double> hybridScores) {
         if (request == null || request.candidates() == null || request.candidates().isEmpty()) {
             return new ActivityRankResult(List.of(), List.of());
         }
+
         Set<Long> excludeIds = new HashSet<>(
                 request.excludeActivityIds() == null ? List.of() : request.excludeActivityIds());
-        Map<Long, Double> lexicalScores = bm25Scores(request.candidates(), request.queryText());
         List<PreferenceFact> preferences = loadPreferences(request.userId());
 
         List<ScoredActivity> scored = request.candidates().stream()
                 .filter(item -> item != null && !excludeIds.contains(item.id()))
-                .map(item -> score(item, request.slots(), request.timeConstraint(), weather,
-                        lexicalScores.getOrDefault(item.id(), 0.0), preferences))
+                .map(item -> score(
+                        item,
+                        request.slots(),
+                        request.timeConstraint(),
+                        weather,
+                        hybridScores.getOrDefault(item.id(), 0.0),
+                        preferences))
                 .sorted(Comparator
                         .comparingDouble(ScoredActivity::sortScore).reversed()
                         .thenComparing(item -> item.activity().id(), Comparator.nullsLast(Long::compareTo)))
@@ -82,28 +94,28 @@ public class ActivityRankService {
                                  SlotBundle explicitSlots,
                                  TimeConstraint timeConstraint,
                                  WeatherRecommendationContext weather,
-                                 double lexicalScore,
+                                 double hybridScore,
                                  List<PreferenceFact> preferences) {
         Double timeScore = timeScore(item, timeConstraint);
-        // Search 已保证候选满足九维硬约束；没有具体时段时所有候选使用相同中性基准分。
         double baseScore = timeScore == null ? 1.0 : clamp(timeScore);
         double weatherAdjusted = weatherScore(baseScore, item.slots(), weather);
         double weatherAdjustment = weatherAdjusted - baseScore;
-        double lexicalAdjustment = lexicalScore * 0.12;
+        double lexicalAdjustment = 0.0;
+        double hybridRetrievalAdjustment = hybridScore * RETRIEVAL_WEIGHT;
         double preferenceAdjustment = preferenceAdjustment(item.slots(), explicitSlots, preferences);
-        double sortScore = weatherAdjusted + lexicalAdjustment + preferenceAdjustment;
+        double sortScore = weatherAdjusted + hybridRetrievalAdjustment + preferenceAdjustment;
         double finalScore = clamp(sortScore);
 
         ActivityItem rankedItem = new ActivityItem(
-                item.id(), item.sourceType(), item.ownerUserId(), item.name(), item.slots(),
+                item.id(), item.sourceType(), item.ownerUserId(), item.name(), item.description(), item.slots(),
                 item.validFrom(), item.validTo(), item.validStartTime(), item.validEndTime(),
-                item.durationMinutes(), finalScore);
+                item.durationMinutes(), finalScore, sortScore);
         WeatherRecommendationContext.Status weatherStatus = weather == null || weather.status() == null
                 ? WeatherRecommendationContext.Status.NOT_REQUESTED
                 : weather.status();
         ActivityRankScore breakdown = new ActivityRankScore(
                 item.id(), timeScore, weatherAdjustment, lexicalAdjustment,
-                preferenceAdjustment, finalScore, weatherStatus);
+                hybridRetrievalAdjustment, preferenceAdjustment, finalScore, weatherStatus);
         return new ScoredActivity(rankedItem, breakdown, sortScore);
     }
 
@@ -112,7 +124,6 @@ public class ActivityRankService {
         try {
             return preferenceMemoryService.findActive(userId);
         } catch (RuntimeException error) {
-            // 偏好是软信号；迁移未执行或存储短暂不可用时不阻断核心推荐。
             log.warn("Failed to load preference memory for userId={}", userId, error);
             return List.of();
         }
@@ -127,7 +138,6 @@ public class ActivityRankService {
             if (fact == null || !Boolean.TRUE.equals(fact.getActive())) continue;
             List<String> candidateValues = slotValues(candidate, fact.getSlotName());
             if (!candidateValues.contains(fact.getSlotValue())) continue;
-            // 本轮显式选择覆盖长期黑名单，避免历史记忆改变用户当前意图。
             boolean explicitlyRequested = slotValues(explicitSlots, fact.getSlotName())
                     .contains(fact.getSlotValue());
             if (fact.getPolarity() == PreferencePolarity.AVOID && explicitlyRequested) continue;
@@ -152,87 +162,6 @@ public class ActivityRankService {
         };
     }
 
-    /** 在数据库硬过滤后的候选集上计算轻量 BM25，补足活动名称与原始表达的文本相关性。 */
-    private Map<Long, Double> bm25Scores(List<ActivityItem> candidates, String queryText) {
-        List<String> queryTokens = tokens(queryText);
-        if (queryTokens.isEmpty() || candidates == null || candidates.isEmpty()) return Map.of();
-
-        Map<Long, List<String>> documents = new LinkedHashMap<>();
-        Map<String, Integer> documentFrequency = new HashMap<>();
-        double totalLength = 0;
-        for (ActivityItem item : candidates) {
-            if (item == null || item.id() == null) continue;
-            List<String> document = tokens(activityText(item));
-            documents.put(item.id(), document);
-            totalLength += document.size();
-            new HashSet<>(document).forEach(token -> documentFrequency.merge(token, 1, Integer::sum));
-        }
-        if (documents.isEmpty()) return Map.of();
-        double averageLength = Math.max(1.0, totalLength / documents.size());
-        Map<Long, Double> raw = new HashMap<>();
-        double max = 0.0;
-        for (Map.Entry<Long, List<String>> entry : documents.entrySet()) {
-            Map<String, Integer> termFrequency = new HashMap<>();
-            entry.getValue().forEach(token -> termFrequency.merge(token, 1, Integer::sum));
-            double score = 0.0;
-            for (String token : new HashSet<>(queryTokens)) {
-                int frequency = termFrequency.getOrDefault(token, 0);
-                if (frequency == 0) continue;
-                int df = documentFrequency.getOrDefault(token, 0);
-                double idf = Math.log(1.0 + (documents.size() - df + 0.5) / (df + 0.5));
-                double denominator = frequency + BM25_K1 *
-                        (1.0 - BM25_B + BM25_B * entry.getValue().size() / averageLength);
-                score += idf * frequency * (BM25_K1 + 1.0) / denominator;
-            }
-            raw.put(entry.getKey(), score);
-            max = Math.max(max, score);
-        }
-        if (max <= 0) return raw;
-        double scale = max;
-        raw.replaceAll((ignored, value) -> value / scale);
-        return raw;
-    }
-
-    private String activityText(ActivityItem item) {
-        List<String> values = new ArrayList<>();
-        values.add(item.name());
-        SlotBundle slots = item.slots();
-        if (slots != null) {
-            values.addAll(slots.city());
-            values.addAll(slots.location());
-            values.addAll(slots.experienceGoal());
-            values.addAll(slots.companion());
-            values.addAll(slots.budget());
-            values.addAll(slots.activityType());
-            values.addAll(slots.style());
-            values.addAll(slots.duration());
-            values.addAll(slots.feature());
-        }
-        return String.join(" ", values.stream().filter(value -> value != null).toList());
-    }
-
-    private List<String> tokens(String text) {
-        if (text == null || text.isBlank()) return List.of();
-        String normalized = text.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]+", " ").trim();
-        if (normalized.isEmpty()) return List.of();
-        List<String> result = new ArrayList<>();
-        for (String part : normalized.split("\\s+")) {
-            result.add(part);
-            if (part.codePointCount(0, part.length()) > 1) {
-                int[] points = part.codePoints().toArray();
-                for (int index = 0; index < points.length - 1; index++) {
-                    result.add(new String(points, index, 2));
-                }
-            }
-        }
-        return result;
-    }
-
-    /**
-     * 用户指定时段时，计算活动有效/可参加时间窗口与用户时间窗的覆盖程度。
-     * validStartTime~validEndTime 表示可安排时间或具体场次窗口，不等同于活动实际耗时；
-     * 实际/预计耗时由 durationMinutes 单独提供给 Plan 层。
-     */
     private Double timeScore(ActivityItem item, TimeConstraint timeConstraint) {
         if (timeConstraint == null || !timeConstraint.hasTime()) return null;
         if (item.validStartTime() == null || item.validEndTime() == null) return 0.0;
@@ -272,12 +201,8 @@ public class ActivityRankService {
     private double weatherScore(double baseScore, SlotBundle item, WeatherRecommendationContext weather) {
         if (weather == null || !weather.active() || item == null) return baseScore;
         Set<String> features = Set.copyOf(item.feature() == null ? List.of() : item.feature());
-        if (features.contains("室内")) {
-            return clamp(baseScore * 0.88 + 0.12);
-        }
-        if (features.contains("户外") || features.contains("室外")) {
-            return clamp(baseScore * 0.82);
-        }
+        if (features.contains("室内")) return clamp(baseScore * 0.88 + 0.12);
+        if (features.contains("户外") || features.contains("室外")) return clamp(baseScore * 0.82);
         return baseScore;
     }
 

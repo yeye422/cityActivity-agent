@@ -1,0 +1,12 @@
+{
+  "name": "city-activity-agent-ui-tests",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:real": "playwright test --config=playwright.real.config.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

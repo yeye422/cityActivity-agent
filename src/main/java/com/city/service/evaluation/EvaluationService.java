@@ -234,6 +234,8 @@ public class EvaluationService {
         detail.put("expectedSlots", row.getExpectedSlots());
         // 人工标注的期望澄清动作。
         detail.put("expectedClarifyAction", row.getExpectedClarifyAction());
+        // 固定评测集会把 caseId 写入 labelNote；保留到逐 trace 报告，便于 Release artifact 精确定位失败用例。
+        detail.put("caseId", expectedMeta(row.getLabelNote()).path("caseId").asText("unknown"));
         detail.put("predictedMissingSlots", snapshot.missingSlots());
         detail.put("expectedMissingSlots", expectedMeta(row.getLabelNote()).path("expectedMissingSlots"));
         // 当前 session 关联到的反馈数量。
@@ -340,7 +342,7 @@ public class EvaluationService {
                     operations = operationKeys(output.path("operations"));
                 // SLOT_MUTATION_APPLIED 是 operations 执行后的最终九维状态。
                 } else if ("SLOT_MUTATION_APPLIED".equals(eventType)) {
-                    slots = slots(output.path("resultSlots"));
+                    slots = slots(output.path("included"));
                 // CLARIFY_DECISION 记录澄清节点 ASK/READY 的结构化结果。
                 } else if ("CLARIFY_DECISION".equals(eventType)) {
                     // 提取 clarify action，用于和 expected_clarify_action 比较。

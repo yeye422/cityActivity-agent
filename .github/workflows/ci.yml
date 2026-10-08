@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - chore/initial-secure-import
+      - refactor/agentscope-react
   pull_request:
     branches:
       - main
@@ -18,7 +19,7 @@ jobs:
   build-and-test:
     name: Build and Test
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -36,5 +37,68 @@ jobs:
           java -version
           mvn -version
 
+      - name: Check frontend JavaScript syntax and runtime contracts
+        run: |
+          node --check src/main/resources/static/assets/js/api.js
+          node --check src/main/resources/static/assets/js/app.js
+          node scripts/test-frontend-runtime.mjs
+
+      - name: Check release PowerShell scripts
+        shell: pwsh
+        run: |
+          $files = @(
+            "scripts/run-release-verification.ps1",
+            "scripts/run-react-regression.ps1",
+            "scripts/run-retrieval-baseline.ps1"
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $file,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              Write-Error "PowerShell syntax errors in $file"
+              $errors | ForEach-Object { Write-Error $_.Message }
+              exit 1
+            }
+          }
+
       - name: Build and run tests
         run: mvn -B -ntp clean verify
+
+
+  frontend-e2e:
+    name: Frontend E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install frontend test dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser E2E
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore

@@ -27,6 +27,11 @@ public interface SessionMapper {
             @Param("userId") Long userId,
             @Param("limit") int limit
     );
+
+    List<SessionRow> listRecentRecommendationSessions(
+            @Param("userId") Long userId,
+            @Param("limit") int limit
+    );
 }
 
 

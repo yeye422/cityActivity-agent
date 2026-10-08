@@ -78,4 +78,21 @@
         LIMIT #{limit}
     </select>
 
+    <select id="listRecentRecommendationSessions" resultMap="SessionRowMap">
+        SELECT id,
+        user_id,
+        phase,
+        slots,
+        last_recommendations,
+        created_at,
+        updated_at
+        FROM city_sessions
+        WHERE user_id = #{userId}
+          AND last_recommendations IS NOT NULL
+          AND last_recommendations != ''
+          AND last_recommendations != '[]'
+        ORDER BY updated_at DESC
+        LIMIT #{limit}
+    </select>
+
 </mapper>

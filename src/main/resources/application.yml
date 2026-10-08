@@ -33,9 +33,22 @@ city:
   rule:
     version: v11
   llm:
-    main-model: qwen-max
-    light-model: qwen-turbo
-    response-model: qwen-turbo
+    main-model: qwen3.8-max
+    light-model: qwen3.8-max
+    response-model: qwen3.8-max
+  embedding:
+    enabled: ${CITY_EMBEDDING_ENABLED:true}
+    base-url: ${DASHSCOPE_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    model: ${DASHSCOPE_EMBEDDING_MODEL:text-embedding-v4}
+    dimensions: ${DASHSCOPE_EMBEDDING_DIMENSIONS:256}
+  pinecone:
+    enabled: ${PINECONE_ENABLED:false}
+    api-key: ${PINECONE_API_KEY:}
+    index-host: ${PINECONE_INDEX_HOST:}
+    namespace: ${PINECONE_NAMESPACE:activities}
+    body-field: ${PINECONE_BODY_FIELD:body}
+    vector-field: ${PINECONE_VECTOR_FIELD:embedding}
+    api-version: ${PINECONE_API_VERSION:2026-07}
   session:
     max-history-turns: 10
     max-history-chars: 1200

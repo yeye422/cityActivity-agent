@@ -7,28 +7,30 @@ import com.city.model.IntentResult;
 import com.city.model.SessionState;
 import com.city.model.SlotBundle;
 import com.city.model.SlotMutation;
+import com.city.model.context.SemanticContext;
 import com.city.service.clarify.ClarifyRuleService;
+import com.city.service.context.SemanticContextBuilder;
+import com.city.model.context.PlanningHorizon;
+import com.city.service.plan.PlanningHorizonResolver;
 import com.city.service.slot.SlotMutationService;
-import com.city.service.worker.PlanningWorker;
+import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Objects;
 
-/**
- * 多时段规划 Workflow 的确定性准备阶段。
- * 负责 Patch、规划必需条件澄清、规划状态和时间窗口解析，不负责检索、Solver 响应生成或状态持久化。
- */
+/** 多时段规划 Workflow 的确定性准备阶段，不负责检索、Solver、响应生成或状态持久化。 */
+@Service
 public final class PlanningWorkflow {
     private final SlotMutationService slotMutationService;
     private final ClarifyRuleService clarifyRuleService;
-    private final PlanningWorker planningWorker;
+    private final PlanningHorizonResolver planningHorizonResolver;
 
     public PlanningWorkflow(SlotMutationService slotMutationService,
                             ClarifyRuleService clarifyRuleService,
-                            PlanningWorker planningWorker) {
+                            PlanningHorizonResolver planningHorizonResolver) {
         this.slotMutationService = Objects.requireNonNull(slotMutationService, "slotMutationService");
         this.clarifyRuleService = Objects.requireNonNull(clarifyRuleService, "clarifyRuleService");
-        this.planningWorker = Objects.requireNonNull(planningWorker, "planningWorker");
+        this.planningHorizonResolver = Objects.requireNonNull(planningHorizonResolver, "planningHorizonResolver");
     }
 
     public Preparation prepare(SessionState state, IntentResult intent) {
@@ -42,7 +44,7 @@ public final class PlanningWorkflow {
                 .withUnconstrainedSlots(mutation.unconstrained());
         ClarifyField missing = firstMissing(workingState);
         if (missing != null) {
-            return new Preparation(workingState, mutation, missing, List.of());
+            return new Preparation(workingState, mutation, missing, PlanningHorizon.empty());
         }
 
         SlotBundle merged = mutation.included();
@@ -52,8 +54,8 @@ public final class PlanningWorkflow {
         workingState = workingState.withSlots(planSlots)
                 .withPendingClarifyField(null)
                 .withPhase(SessionPhase.PLAN);
-        List<String> windows = planningWorker.resolveWindows(planSlots, workingState.timeConstraint());
-        return new Preparation(workingState, mutation, null, windows);
+        PlanningHorizon horizon = planningHorizonResolver.resolve(workingState.timeConstraint());
+        return new Preparation(workingState, mutation, null, horizon);
     }
 
     private ClarifyField firstMissing(SessionState state) {
@@ -62,14 +64,13 @@ public final class PlanningWorkflow {
         return missing.isEmpty() ? null : missing.getFirst();
     }
 
-    public record Preparation(
-            SessionState state,
-            SlotMutation mutation,
-            ClarifyField missingField,
-            List<String> windows
-    ) {
+    public record Preparation(SessionState state, SlotMutation mutation, ClarifyField missingField, PlanningHorizon horizon) {
         public Preparation {
-            windows = windows == null ? List.of() : List.copyOf(windows);
+            horizon = horizon == null ? PlanningHorizon.empty() : horizon;
+        }
+
+        public SemanticContext semanticContext() {
+            return new SemanticContextBuilder().build(state);
         }
     }
 }

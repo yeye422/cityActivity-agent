@@ -170,7 +170,8 @@ public class SessionStateService {
                     pendingClarifyField,
                     recommendationQueryKey,
                     pendingRelaxationContext,
-                    parseLongList(row.getLastRecommendedActivityIds())
+                    parseLongList(row.getLastRecommendedActivityIds()),
+                    readStringList(root, "userGoals")
             );
         } catch (Exception e) {
             throw new CityException("会话状态解析失败", e);
@@ -204,6 +205,8 @@ public class SessionStateService {
         root.set("style", objectMapper.valueToTree(state.slots().style()));
         root.set("duration", objectMapper.valueToTree(state.slots().duration()));
         root.set("feature", objectMapper.valueToTree(state.slots().feature()));
+        root.set("userGoals", objectMapper.valueToTree(
+                state.userGoals() == null ? List.of() : state.userGoals()));
         root.set("excludedSlots", objectMapper.valueToTree(
                 state.excludedSlots() == null ? SlotBundle.empty() : state.excludedSlots()));
         root.set("unconstrainedSlots", objectMapper.valueToTree(

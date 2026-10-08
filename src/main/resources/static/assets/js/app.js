@@ -101,6 +101,12 @@
             locating: false,
             weather: null,
             weatherLoading: false,
+            activeRun: null,
+            eventStream: null,
+            reconnectTimer: null,
+            reconnectAttempts: 0,
+            pendingRequest: null,
+            lastCompletedTraceId: "",
             messages: [
                 {
                     role: "assistant",
@@ -164,6 +170,327 @@
             return String(value);
         }
     }
+    const RUN_STORAGE_PREFIX = "city.agent.run.";
+    const CHAT_SESSION_STORAGE_PREFIX = "city.chat.session.";
+    const RUN_RECONNECT_DELAYS = [500, 1000, 2000, 5000];
+
+    function runStorageKey(sessionId) {
+        return `${RUN_STORAGE_PREFIX}${CityApi.getUserId()}.${sessionId}`;
+    }
+
+    function chatSessionStorageKey() {
+        return `${CHAT_SESSION_STORAGE_PREFIX}${CityApi.getUserId()}`;
+    }
+
+    function persistChatSessionId() {
+        if (!state.chat.sessionId) return;
+        try {
+            sessionStorage.setItem(chatSessionStorageKey(), JSON.stringify({
+                sessionId: state.chat.sessionId,
+                sourceMode: state.chat.sourceMode,
+                city: state.chat.city || "",
+                location: state.chat.location || ""
+            }));
+        } catch (_) { /* noop */ }
+    }
+
+    function clearPersistedChatSession() {
+        try { sessionStorage.removeItem(chatSessionStorageKey()); } catch (_) { /* noop */ }
+    }
+
+    function persistActiveRun() {
+        const run = state.chat.activeRun;
+        if (!state.chat.sessionId || !run) return;
+        try {
+            sessionStorage.setItem(runStorageKey(state.chat.sessionId), JSON.stringify({
+                sessionId: state.chat.sessionId,
+                status: run.status,
+                traceId: run.traceId || "",
+                lastEventId: run.lastEventId || "",
+                steps: run.steps || [],
+                startedAt: run.startedAt || Date.now(),
+                pendingRequest: state.chat.pendingRequest || null
+            }));
+        } catch (_) { /* storage must not interrupt chat */ }
+    }
+
+    function clearPersistedRun(sessionId) {
+        if (!sessionId) return;
+        try { sessionStorage.removeItem(runStorageKey(sessionId)); } catch (_) { /* noop */ }
+    }
+
+    function stepDescriptor(event) {
+        const name = String(event?.data?.eventName || "").toUpperCase();
+        const phase = String(event?.data?.phase || "").toUpperCase();
+        if (name.includes("PLAN_VALIDATION") || name.includes("VALIDATE_PLAN")) {
+            return { key: "validate-plan", label: "校验活动安排" };
+        }
+        if (name.includes("PLAN_REPAIR") || name.includes("REPAIR")) {
+            return { key: "repair-plan", label: "调整计划冲突" };
+        }
+        if (name.includes("PLANNING") || phase.includes("PLAN")) {
+            return { key: "planning", label: "生成活动计划" };
+        }
+        if (name.includes("RETRIEVAL") || name.includes("RECOMMENDATION") || phase.includes("SEARCH")) {
+            return { key: "retrieval", label: "检索并筛选活动" };
+        }
+        if (name.includes("INTENT") || name.includes("CONTEXT") || phase.includes("INTENT")) {
+            return { key: "intent", label: "理解你的需求" };
+        }
+        if (name.includes("TIME_") || phase.includes("TIME")) {
+            return { key: "time", label: "解析时间条件" };
+        }
+        if (name.includes("RISK") || phase.includes("GUARD")) {
+            return { key: "guard", label: "检查请求约束" };
+        }
+        if (name.includes("RESPONSE") || name.includes("DECIDED")) {
+            return { key: "response", label: "整理最终结果" };
+        }
+        if (phase.includes("AGENT")) {
+            return { key: "agent", label: "Agent 正在处理" };
+        }
+        return { key: `step-${name || phase || "work"}`, label: "处理当前步骤" };
+    }
+
+    function upsertRunStep(event) {
+        if (!state.chat.activeRun) return;
+        const descriptor = stepDescriptor(event);
+        const steps = state.chat.activeRun.steps || [];
+        let step = steps.find((item) => item.key === descriptor.key);
+        if (!step) {
+            step = { key: descriptor.key, label: descriptor.label, status: "RUNNING" };
+            steps.push(step);
+        }
+        step.label = descriptor.label;
+        const eventName = String(event?.data?.eventName || "").toUpperCase();
+        const isStarted = event.event === "STEP_STARTED"
+            || eventName.endsWith("_STARTED")
+            || eventName.endsWith("_CALLED");
+        step.status = isStarted ? "RUNNING" : "COMPLETED";
+        state.chat.activeRun.steps = steps.slice(-6);
+    }
+
+    function handleAgentEvent(event) {
+        if (!event) return;
+        const payload = event.data && typeof event.data === "object" ? event.data : {};
+        if (event.event === "connected") {
+            state.chat.reconnectAttempts = 0;
+            if (state.chat.activeRun && state.chat.activeRun.status === "RECONNECTING") {
+                state.chat.activeRun.status = "RUNNING";
+                persistActiveRun();
+                if (currentRoute() === "/city/chat") renderChat();
+            }
+            return;
+        }
+
+        if (!state.chat.activeRun) {
+            if (payload.traceId && payload.traceId === state.chat.lastCompletedTraceId) {
+                return;
+            }
+            if (!state.chat.pendingRequest && event.event !== "RUN_STARTED") {
+                return;
+            }
+            state.chat.activeRun = {
+                idempotencyKey: state.chat.pendingRequest?.idempotencyKey || "",
+                traceId: payload.traceId || "",
+                status: "RUNNING",
+                lastEventId: "",
+                steps: [],
+                startedAt: Date.now(),
+                error: ""
+            };
+        }
+        const run = state.chat.activeRun;
+        if (event.id) run.lastEventId = event.id;
+        if (payload.traceId) run.traceId = payload.traceId;
+
+        if (event.event === "RUN_STARTED") {
+            run.status = "RUNNING";
+        } else if (event.event === "STEP_STARTED" || event.event === "STEP_COMPLETED") {
+            if (run.status !== "FAILED") run.status = "RUNNING";
+            upsertRunStep(event);
+        } else if (event.event === "MESSAGE_COMPLETE") {
+            run.status = "COMPLETED";
+        } else if (event.event === "ERROR") {
+            run.status = "FAILED";
+            run.error = payload?.payload?.message || "处理过程中出现错误";
+        } else if (event.event === "RUN_FINISHED") {
+            if (run.status !== "FAILED") run.status = "COMPLETED";
+            if (run.restored && state.chat.pendingRequest && !state.chat.sending) {
+                window.setTimeout(() => retryPendingChat(), 0);
+            }
+        }
+
+        persistActiveRun();
+        if (currentRoute() === "/city/chat") renderChat();
+    }
+
+    function stopAgentEventStream() {
+        if (state.chat.reconnectTimer) {
+            window.clearTimeout(state.chat.reconnectTimer);
+            state.chat.reconnectTimer = null;
+        }
+        if (state.chat.eventStream) {
+            state.chat.eventStream.abort();
+            state.chat.eventStream = null;
+        }
+        state.chat.reconnectAttempts = 0;
+    }
+
+    function scheduleAgentStreamReconnect(sessionId) {
+        if (!sessionId || state.chat.reconnectTimer || state.chat.sessionId !== sessionId) return;
+        if (!state.chat.activeRun) return;
+        const attempt = state.chat.reconnectAttempts;
+        if (attempt >= RUN_RECONNECT_DELAYS.length) {
+            if (state.chat.activeRun && state.chat.activeRun.status !== "COMPLETED") {
+                state.chat.activeRun.status = "FAILED";
+                state.chat.activeRun.error = "实时状态连接已中断，但任务可能仍在执行。";
+                persistActiveRun();
+                if (currentRoute() === "/city/chat") renderChat();
+            }
+            return;
+        }
+        if (state.chat.activeRun && state.chat.activeRun.status !== "COMPLETED") {
+            state.chat.activeRun.status = "RECONNECTING";
+            persistActiveRun();
+            if (currentRoute() === "/city/chat") renderChat();
+        }
+        const delay = RUN_RECONNECT_DELAYS[attempt];
+        state.chat.reconnectAttempts += 1;
+        state.chat.reconnectTimer = window.setTimeout(async () => {
+            state.chat.reconnectTimer = null;
+            try {
+                await ensureAgentEventStream(sessionId, true);
+            } catch (_) {
+                scheduleAgentStreamReconnect(sessionId);
+            }
+        }, delay);
+    }
+
+    async function ensureAgentEventStream(sessionId, reconnecting) {
+        if (!sessionId) return null;
+        if (state.chat.eventStream && !reconnecting) return state.chat.eventStream;
+        if (reconnecting && state.chat.eventStream) {
+            state.chat.eventStream.abort();
+            state.chat.eventStream = null;
+        }
+        const lastEventId = state.chat.activeRun?.lastEventId || "";
+        const stream = await CityApi.subscribeAgentEvents(sessionId, {
+            lastEventId,
+            onEvent: handleAgentEvent,
+            onError: () => {
+                state.chat.eventStream = null;
+                scheduleAgentStreamReconnect(sessionId);
+            }
+        });
+        state.chat.eventStream = stream;
+        stream.done.finally(() => {
+            const wasCurrent = state.chat.eventStream === stream;
+            if (wasCurrent) state.chat.eventStream = null;
+            if (wasCurrent && state.chat.sessionId === sessionId && state.chat.activeRun) {
+                scheduleAgentStreamReconnect(sessionId);
+            }
+        }).catch(() => {});
+        return stream;
+    }
+
+    function renderAgentRunProgress() {
+        const run = state.chat.activeRun;
+        if (!run) return "";
+        const statusLabel = {
+            CONNECTING: "正在连接实时状态",
+            RUNNING: "正在处理",
+            RECONNECTING: "实时状态连接中断，正在恢复",
+            COMPLETED: "处理完成",
+            FAILED: "处理未完成"
+        }[run.status] || "正在处理";
+        const steps = run.steps || [];
+        const completed = steps.filter((step) => step.status === "COMPLETED").length;
+        const items = steps.map((step) => `
+            <li class="run-step ${step.status === "COMPLETED" ? "is-complete" : "is-running"}">
+                <span class="run-step-mark" aria-hidden="true">${step.status === "COMPLETED" ? "✓" : "●"}</span>
+                <span>${escapeHtml(step.label)}</span>
+            </li>
+        `).join("");
+        const retry = run.status === "FAILED" && state.chat.pendingRequest
+            ? '<button class="btn soft run-retry" type="button" data-action="retry-chat">重试本次请求</button>'
+            : "";
+        return `
+            <div class="agent-run-card" aria-live="polite">
+                <div class="agent-run-head">
+                    <strong>${escapeHtml(statusLabel)}</strong>
+                    <span>${completed}/${steps.length || 1}</span>
+                </div>
+                ${items ? `<ul class="run-steps">${items}</ul>` : '<p class="muted">正在等待 Agent 开始执行…</p>'}
+                ${run.error ? `<p class="run-error">${escapeHtml(run.error)}</p>` : ""}
+                ${retry}
+            </div>
+        `;
+    }
+
+    function restoreChatRuntime() {
+        let storedSession = null;
+        try {
+            const rawSession = sessionStorage.getItem(chatSessionStorageKey());
+            if (rawSession) {
+                try {
+                    storedSession = JSON.parse(rawSession);
+                } catch (_) {
+                    storedSession = { sessionId: rawSession };
+                }
+            }
+        } catch (_) { /* noop */ }
+        const sessionId = storedSession?.sessionId || "";
+        if (!sessionId) return;
+
+        state.chat.sessionId = sessionId;
+        if (storedSession.sourceMode === "PERSONAL" || storedSession.sourceMode === "PUBLIC") {
+            state.chat.sourceMode = storedSession.sourceMode;
+        }
+        state.chat.city = storedSession.city || "";
+        state.chat.location = storedSession.location || "";
+        let saved = null;
+        try {
+            const raw = sessionStorage.getItem(runStorageKey(sessionId));
+            saved = raw ? JSON.parse(raw) : null;
+        } catch (_) {
+            saved = null;
+        }
+        if (!saved) return;
+
+        state.chat.activeRun = {
+            idempotencyKey: saved.pendingRequest?.idempotencyKey || "",
+            traceId: saved.traceId || "",
+            status: saved.status || "RECONNECTING",
+            lastEventId: saved.lastEventId || "",
+            steps: Array.isArray(saved.steps) ? saved.steps : [],
+            startedAt: saved.startedAt || Date.now(),
+            error: "",
+            restored: true
+        };
+        state.chat.pendingRequest = saved.pendingRequest || null;
+
+        if (state.chat.pendingRequest?.payload?.message) {
+            state.chat.messages.push({
+                role: "user",
+                text: state.chat.pendingRequest.payload.message
+            });
+        }
+
+        window.setTimeout(async () => {
+            try {
+                await ensureAgentEventStream(sessionId, true);
+                if (state.chat.activeRun?.status === "COMPLETED"
+                    && state.chat.pendingRequest
+                    && !state.chat.sending) {
+                    await retryPendingChat();
+                }
+            } catch (_) {
+                scheduleAgentStreamReconnect(sessionId);
+            }
+        }, 0);
+    }
+
     function showToast(message, type) {
         toast.textContent = message;
         toast.className = `toast show ${type === "error" ? "error" : ""}`;
@@ -362,7 +689,7 @@
                         <span class="location-hint">${state.chat.city ? `当前：${escapeHtml(state.chat.city)}${state.chat.location ? ` · ${escapeHtml(state.chat.location)}` : ""}` : "城市将用于筛选推荐"}</span>
                         ${renderWeatherSummary(weather, state.chat.city, state.chat.weatherLoading)}
                     </div>
-                    <div id="messages" class="messages ${hasConversation ? "" : "messages-intro"}">${state.chat.messages.map(renderMessage).join("")}</div>
+                    <div id="messages" class="messages ${hasConversation ? "" : "messages-intro"}">${state.chat.messages.map(renderMessage).join("")}${renderAgentRunProgress()}</div>
                     <form id="chatForm" class="composer">
                         <textarea name="message" placeholder="例如：和朋友在西安，预算 200 元内，不想太累" required></textarea>
                         <button class="btn primary cta" type="submit">${state.chat.sending ? "发送中..." : "发送"}</button>
@@ -499,35 +826,76 @@
         await sendChatMessage(message);
     }
     async function sendChatMessage(message) {
-        if (!message || state.chat.sending) {
-            return;
-        }
-        state.chat.messages.push({ role: "user", text: message });
-        state.chat.sending = true;
+        if (!message || state.chat.sending) return;
 
-        // 添加打字指示器
-        state.chat.messages.push({ role: "assistant", text: "", typing: true });
+        if (!state.chat.sessionId) {
+            const session = await CityApi.createSession();
+            state.chat.sessionId = session.sessionId;
+            persistChatSessionId();
+        }
+
+        state.chat.activeRun = {
+            idempotencyKey: "",
+            traceId: "",
+            status: "CONNECTING",
+            lastEventId: "",
+            steps: [],
+            startedAt: Date.now(),
+            error: ""
+        };
         renderChat();
 
         try {
-            if (!state.chat.sessionId) {
-                const session = await CityApi.createSession();
-                state.chat.sessionId = session.sessionId;
+            await ensureAgentEventStream(state.chat.sessionId);
+        } catch (error) {
+            state.chat.activeRun.status = "FAILED";
+            state.chat.activeRun.error = error.message || "无法建立实时状态连接";
+            renderChat();
+            return;
+        }
+
+        const payload = {
+            sessionId: state.chat.sessionId,
+            message,
+            sourceMode: state.chat.sourceMode,
+            context: {
+                city: state.chat.city,
+                location: state.chat.location
             }
-            const response = await CityApi.chat({
-                sessionId: state.chat.sessionId,
-                message,
-                sourceMode: state.chat.sourceMode,
-                context: {
-                    city: state.chat.city,
-                    location: state.chat.location
-                }
+        };
+        const pending = {
+            payload,
+            idempotencyKey: CityApi.createIdempotencyKey()
+        };
+        state.chat.pendingRequest = pending;
+        state.chat.activeRun.idempotencyKey = pending.idempotencyKey;
+        state.chat.activeRun.status = "RUNNING";
+        state.chat.messages.push({ role: "user", text: message });
+        state.chat.sending = true;
+        persistActiveRun();
+        renderChat();
+
+        await executePendingChat(false);
+    }
+
+    async function executePendingChat(isRetry) {
+        const pending = state.chat.pendingRequest;
+        if (!pending) return;
+        state.chat.sending = true;
+        if (state.chat.activeRun) {
+            state.chat.activeRun.status = "RUNNING";
+            state.chat.activeRun.error = "";
+        }
+        persistActiveRun();
+        if (currentRoute() === "/city/chat") renderChat();
+
+        try {
+            await ensureAgentEventStream(pending.payload.sessionId);
+            const response = await CityApi.chat(pending.payload, {
+                idempotencyKey: pending.idempotencyKey
             });
             state.chat.sessionId = response.sessionId || state.chat.sessionId;
-
-            // 移除打字指示器
-            state.chat.messages.pop();
-
+            persistChatSessionId();
             state.chat.messages.push({
                 role: "assistant",
                 text: response.clarifyQuestion || response.speechText || "我已经处理完这轮请求。",
@@ -541,18 +909,47 @@
                 excludedSlots: response.excludedSlots,
                 timeConstraint: response.timeConstraint
             });
+            if (state.chat.activeRun) {
+                state.chat.activeRun.traceId = response.traceId || state.chat.activeRun.traceId;
+                state.chat.activeRun.status = "COMPLETED";
+            }
+            state.chat.lastCompletedTraceId = response.traceId || state.chat.activeRun?.traceId || "";
+            state.chat.pendingRequest = null;
+            clearPersistedRun(state.chat.sessionId);
+            state.chat.activeRun = null;
         } catch (error) {
-            // 移除打字指示器
-            state.chat.messages.pop();
-            showToast(error.message || "聊天请求失败", "error");
-            state.chat.messages.push({ role: "assistant", text: "这轮请求失败了，请稍后重试。" });
+            if (state.chat.activeRun) {
+                state.chat.activeRun.status = "FAILED";
+                state.chat.activeRun.error = error.message || "这轮请求没有完成。";
+            }
+            persistActiveRun();
+            showToast(
+                isRetry
+                    ? (error.message || "重试仍未完成")
+                    : "网络或处理链路出现问题，可安全重试本轮请求。",
+                "error"
+            );
         } finally {
             state.chat.sending = false;
             renderChat();
         }
     }
+
+    async function retryPendingChat() {
+        if (state.chat.sending || !state.chat.pendingRequest) return;
+        await executePendingChat(true);
+    }
+
     function resetChat() {
+        const previousSessionId = state.chat.sessionId;
+        stopAgentEventStream();
+        clearPersistedRun(previousSessionId);
+        clearPersistedChatSession();
         state.chat.sessionId = null;
+        state.chat.activeRun = null;
+        state.chat.pendingRequest = null;
+        state.chat.lastCompletedTraceId = "";
+        state.chat.sending = false;
         state.chat.messages = [
             {
                 role: "assistant",
@@ -599,6 +996,7 @@
         }
         state.chat.city = nextCity;
         state.chat.location = nextLocation;
+        persistChatSessionId();
         state.chat.weather = null;
         resetChat();
         showToast(nextCity ? `已切换到${nextCity}` : "已清除城市筛选");
@@ -1651,6 +2049,8 @@
             resetChat();
         } else if (action === "new-session") {
             resetChat();
+        } else if (action === "retry-chat") {
+            retryPendingChat();
         } else if (action === "locate-city") {
             locateCity();
         } else if (action === "toggle-sessions") {
@@ -1735,7 +2135,11 @@
     function initUserField() {
         userIdInput.value = CityApi.setUserId(CityApi.getUserId());
         userIdInput.addEventListener("change", () => {
-            CityApi.setUserId(userIdInput.value);
+            const nextUserId = userIdInput.value;
+            // 先按旧 userId 清理当前 tab 的 session/run，再切换身份。
+            resetChat();
+            CityApi.setUserId(nextUserId);
+            userIdInput.value = CityApi.getUserId();
 
             // 清除缓存
             cache.clear();
@@ -1745,7 +2149,6 @@
             state.publicActivities = [];
             state.traces.rows = [];
             state.traces.selected = null;
-            resetChat();
             showToast("用户 ID 已切换");
             render();
         });
@@ -1754,6 +2157,7 @@
     app.addEventListener("click", handleClick);
     app.addEventListener("submit", handleSubmit);
     initUserField();
+    restoreChatRuntime();
     if (!location.hash) {
         navigate("/city");
     } else {

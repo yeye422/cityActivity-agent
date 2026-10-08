@@ -2,6 +2,7 @@ package com.city.service.intent;
 
 import com.city.enums.ConstraintOperationType;
 import com.city.model.ConstraintOperation;
+import com.city.model.UserGoalPatch;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -18,6 +19,17 @@ class IntentAgentServiceOperationTest {
     private final IntentAgentService service = new IntentAgentService(
             null, null, null, null, "qwen-max");
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Test
+    void openGoalPatchShouldRejectStandardDictionaryTags() throws Exception {
+        JsonNode patch = objectMapper.readTree("""
+                {"op":"ADD","values":["有剧情反转","室内","两个人共同解决问题"]}
+                """);
+        UserGoalPatch parsed = ReflectionTestUtils.invokeMethod(service, "parseUserGoalPatch", patch,
+                Map.of("feature", List.of("室内")));
+        assertEquals(ConstraintOperationType.ADD, parsed.op());
+        assertEquals(List.of("有剧情反转", "两个人共同解决问题"), parsed.values());
+    }
 
     @Test
     void invalidNonClearOperationShouldBeDroppedAfterDictionarySanitization() throws Exception {

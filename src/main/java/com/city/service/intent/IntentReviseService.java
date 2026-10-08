@@ -132,6 +132,7 @@ public class IntentReviseService {
                 Math.max(result.confidence(), BATCH_REFRESH_CONFIDENCE),
                 List.of(),
                 TemporalMutation.keep(),
+                List.of(),
                 result.fallback()
         );
     }
@@ -146,7 +147,9 @@ public class IntentReviseService {
                 result.confidence(),
                 result.operations() == null ? List.of() : result.operations(),
                 result.temporal() == null ? TemporalMutation.keep() : result.temporal(),
-                result.fallback()
+                result.memoryProposals() == null ? List.of() : result.memoryProposals(),
+                result.fallback(),
+                result.userGoalPatch()
         );
     }
 }

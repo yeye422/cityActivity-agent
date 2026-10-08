@@ -118,7 +118,7 @@ class ActivityRankServiceTest {
     }
 
     @Test
-    void explicitQueryTextShouldContributeBm25Relevance() {
+    void queryTextShouldNotBeScoredInsideBusinessRanker() {
         SlotBundle query = slots(List.of("西安"), List.of(), List.of(), List.of(), List.of());
         ActivityItem exhibition = activity(1L, "丝路艺术展览", query,
                 LocalTime.of(15, 0), LocalTime.of(17, 0));
@@ -128,8 +128,9 @@ class ActivityRankServiceTest {
         ActivityRankResult result = service.rank(new ActivityRankRequest(
                 List.of(sport, exhibition), query, TimeConstraint.empty(), List.of(), 1L, "想看艺术展览"));
 
+        // 词面相关性已经迁移到 Pinecone FTS；Java Rank 只消费融合后的 retrieval prior。
         assertEquals(List.of(1L, 2L), result.ranked().stream().map(ActivityItem::id).toList());
-        assertEquals(0.12, result.scores().getFirst().lexicalAdjustment(), 0.0001);
+        assertEquals(0.0, result.scores().getFirst().lexicalAdjustment(), 0.0001);
     }
 
     @Test

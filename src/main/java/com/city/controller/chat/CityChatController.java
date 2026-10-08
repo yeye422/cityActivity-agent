@@ -4,7 +4,9 @@ import com.city.constants.CityConstants;
 import com.city.model.ChatRequest;
 import com.city.model.ChatResponse;
 import com.city.model.RelaxationRequest;
+import com.city.service.idempotency.ChatRequestIdempotencyService;
 import com.city.service.orchestrator.CityAgentSupervisor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -13,33 +15,51 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 城市活动推荐对话 HTTP 入口。
- * 本层只做参数透传，完整状态机由 {@link CityAgentSupervisor#chat} 驱动。
+ * 本层只负责 HTTP 边界、可选请求幂等和参数透传，完整状态机仍由 {@link CityAgentSupervisor#chat} 驱动。
  */
 @RestController
 @RequestMapping("/api/v1/city")
 public class CityChatController {
 
-    /** 多 Agent 编排服务，注入后用于处理每轮对话。 */
     private final CityAgentSupervisor supervisor;
+    private final ChatRequestIdempotencyService idempotencyService;
 
-    /** Spring 构造器注入 Orchestrator。 */
+    /** 保留现有纯单测构造入口。 */
     public CityChatController(CityAgentSupervisor supervisor) {
+        this(supervisor, null);
+    }
+
+    @Autowired
+    public CityChatController(CityAgentSupervisor supervisor,
+                              ChatRequestIdempotencyService idempotencyService) {
         this.supervisor = supervisor;
+        this.idempotencyService = idempotencyService;
     }
 
     /**
      * POST /api/v1/city/chat — 同步对话接口。
-     * 接收用户消息，返回澄清追问或推荐结果（含活动卡片）。
+     * Idempotency-Key 可选；缺省时保持原语义，有值时相同请求只执行一次。
      */
     @PostMapping("/chat")
     public ChatResponse chat(
-            // 从请求头 X-User-Id 读取用户 ID，缺省为 1 便于本地调试
             @RequestHeader(value = CityConstants.USER_ID, defaultValue = "1") Long userId,
-            // 从请求体反序列化 ChatRequest（sessionId、message、sourceMode）
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody ChatRequest request
     ) {
-        // 委托 Orchestrator 执行完整状态机，直接返回 ChatResponse
-        return supervisor.chat(userId, request);
+        if (idempotencyService == null) {
+            return supervisor.chat(userId, request);
+        }
+        return idempotencyService.execute(
+                userId,
+                idempotencyKey,
+                request,
+                () -> supervisor.chat(userId, request)
+        );
+    }
+
+    /** 兼容已有直接方法调用/纯单测，不暴露第二个 HTTP Mapping。 */
+    public ChatResponse chat(Long userId, ChatRequest request) {
+        return chat(userId, null, request);
     }
 
     @PostMapping("/chat/relax")

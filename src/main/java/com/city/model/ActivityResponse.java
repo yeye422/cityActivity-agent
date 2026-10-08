@@ -21,6 +21,7 @@ public class ActivityResponse {
     private Long id;
     private SourceMode sourceType;
     private String name;
+    private String description;
     private List<String> city;
     private List<String> location;
     private List<String> experienceGoal;
@@ -37,12 +38,37 @@ public class ActivityResponse {
     private LocalTime validEndTime;
     private double matchScore;
 
+    /** 兼容引入 description 前的构造方式。 */
+    public ActivityResponse(Long id,
+                            SourceMode sourceType,
+                            String name,
+                            List<String> city,
+                            List<String> location,
+                            List<String> experienceGoal,
+                            List<String> companion,
+                            List<String> budget,
+                            List<String> activityType,
+                            List<String> style,
+                            List<String> duration,
+                            List<String> feature,
+                            Integer durationMinutes,
+                            LocalDate validFrom,
+                            LocalDate validTo,
+                            LocalTime validStartTime,
+                            LocalTime validEndTime,
+                            double matchScore) {
+        this(id, sourceType, name, null, city, location, experienceGoal, companion, budget,
+                activityType, style, duration, feature, durationMinutes,
+                validFrom, validTo, validStartTime, validEndTime, matchScore);
+    }
+
     public static ActivityResponse from(ActivityItem item) {
         SlotBundle slots = item.slots();
         return new ActivityResponse(
                 item.id(),
                 item.sourceType(),
                 item.name(),
+                item.description(),
                 slots.city(),
                 slots.location(),
                 slots.experienceGoal(),

@@ -1,0 +1,81 @@
+{
+  "version": "react-v1",
+  "description": "AgentScope ReAct 专项回归集；重点覆盖软目标权衡、二次检索、多时段规划、Solver 校验与多轮上下文。运行时应配合 react-eval profile 开启 Recommendation/Planning ReAct 主链。",
+  "cases": [
+    {
+      "id": "react_recommend_interaction_01",
+      "message": "周六在西安和朋友出去玩，想要互动性强、有参与感的活动，预算200元内",
+      "expectedIntent": "ACTIVITY_RECOMMENDATION",
+      "expectedSlots": {"city":["西安"],"companion":["朋友"],"budget":["200元内"]},
+      "expectedTime": "周六"
+    },
+    {
+      "id": "react_recommend_date_01",
+      "message": "周日在西安约会，想找比较有新鲜感、适合两个人一起体验的活动",
+      "expectedIntent": "ACTIVITY_RECOMMENDATION",
+      "expectedSlots": {"city":["西安"],"companion":["情侣"]},
+      "expectedTime": "周日"
+    },
+    {
+      "id": "react_recommend_relaxed_01",
+      "message": "西安周末想自己放松一下，安静一点但不要太无聊",
+      "expectedIntent": "ACTIVITY_RECOMMENDATION",
+      "expectedSlots": {"city":["西安"],"companion":["独处"],"experienceGoal":["放松"],"style":["安静"]},
+      "expectedTime": "周末"
+    },
+    {
+      "id": "react_recommend_tradeoff_01",
+      "message": "周六西安和朋友活动，最好有点刺激但也别安排得太累，预算200元内",
+      "expectedIntent": "ACTIVITY_RECOMMENDATION",
+      "expectedSlots": {"city":["西安"],"companion":["朋友"],"budget":["200元内"]},
+      "expectedTime": "周六"
+    },
+    {
+      "id": "react_plan_day_01",
+      "message": "帮我安排周六在西安从下午到晚上的活动，和朋友一起，想有互动也想留一点休息时间",
+      "expectedIntent": "ACTIVITY_PLAN",
+      "expectedSlots": {"city":["西安"],"companion":["朋友"]},
+      "expectedTime": "周六从下午到晚上"
+    },
+    {
+      "id": "react_plan_date_01",
+      "message": "周日在西安安排一个情侣半天行程，希望前后活动不要太赶",
+      "expectedIntent": "ACTIVITY_PLAN",
+      "expectedSlots": {"city":["西安"],"companion":["情侣"],"duration":["半天"]},
+      "expectedTime": "周日"
+    },
+    {
+      "id": "react_multi_adjust_01",
+      "messages": [
+        {"message":"周六在西安和朋友找点有参与感的活动，预算200元内","sourceMode":"PUBLIC"},
+        {"message":"再安静一点，但预算不变","sourceMode":"PUBLIC"}
+      ],
+      "expectedIntent": "ACTIVITY_ADJUST",
+      "expectedOperations": [{"field":"style","op":"SET","values":["安静"]}]
+    },
+    {
+      "id": "react_multi_novelty_01",
+      "messages": [
+        {"message":"周末在西安和朋友玩，预算200元内","sourceMode":"PUBLIC"},
+        {"message":"这批感觉太普通了，换一批更有新鲜感的","sourceMode":"PUBLIC"}
+      ],
+      "expectedIntent": "ACTIVITY_ADJUST"
+    },
+    {
+      "id": "react_plan_multi_01",
+      "messages": [
+        {"message":"周六在西安和朋友玩一天，预算300元内","sourceMode":"PUBLIC"},
+        {"message":"帮我直接规划成下午到晚上的行程，别排太满","sourceMode":"PUBLIC"}
+      ],
+      "expectedIntent": "ACTIVITY_PLAN",
+      "expectedTime": "下午到晚上"
+    },
+    {
+      "id": "react_clarify_guard_01",
+      "message": "周末想安排一个有参与感的半天行程",
+      "expectedIntent": "ACTIVITY_PLAN",
+      "expectedClarifyAction": "ASK",
+      "expectedMissingSlots": ["city"]
+    }
+  ]
+}

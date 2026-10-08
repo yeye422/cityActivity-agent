@@ -1,0 +1,170 @@
+package com.city.service.evaluation;
+
+import com.city.model.RequestTraceRow;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+
+class AgentRuntimeMetricsExtractorTest {
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final AgentRuntimeMetricsExtractor extractor = new AgentRuntimeMetricsExtractor(objectMapper);
+
+    @Test
+    void shouldExtractRecommendationReretrievalAndSuccess() {
+        RequestTraceRow trace = trace("""
+                {
+                  "events": [
+                    {"eventType":"RECOMMENDATION_REACT_ROUTE_SELECTED"},
+                    {"eventType":"RETRIEVAL_TOOL_CALLED"},
+                    {"eventType":"RETRIEVAL_TOOL_COMPLETED"},
+                    {"eventType":"RETRIEVAL_TOOL_CALLED"},
+                    {"eventType":"RETRIEVAL_TOOL_COMPLETED"},
+                    {"eventType":"RECOMMENDATION_DECIDED","outputPayload":"{\\\"decision\\\":{\\\"selectedActivityIds\\\":[1,2],\\\"assessments\\\":[{\\\"activityId\\\":1,\\\"goalFit\\\":\\\"HIGH\\\"},{\\\"activityId\\\":2,\\\"goalFit\\\":\\\"MEDIUM\\\"}]}}"},
+                    {"eventType":"RECOMMENDATION_REACT_COMPLETED"}
+                  ]
+                }
+                """);
+
+        Map<String, Double> metrics = extractor.aggregate(List.of(trace));
+
+        assertEquals(1.0, metrics.get("reactRouteCoverage"));
+        assertEquals(1.0, metrics.get("recommendationReactSuccessRate"));
+        assertEquals(1.0, metrics.get("reRetrievalRate"));
+        assertEquals(2.0, metrics.get("retrievalToolCallCount"));
+        assertEquals(2.0, metrics.get("reactToolCallCount"));
+        assertEquals(0.0, metrics.get("reactDegradationRate"));
+        assertEquals(0.0, metrics.get("evidenceViolationRate"));
+        assertEquals(0.75, metrics.get("userGoalCoverage"));
+        assertEquals(0.0, metrics.get("candidateOutOfSetRate"));
+    }
+
+    @Test
+    void shouldExtractPlanningRepairSuccess() {
+        RequestTraceRow trace = trace("""
+                {
+                  "events": [
+                    {"eventType":"PLANNING_REACT_ROUTE_SELECTED"},
+                    {"eventType":"PLANNING_DISCOVERY_TOOL_CALLED"},
+                    {"eventType":"TRAVEL_TIME_TOOL_CALLED"},
+                    {"eventType":"PLAN_VALIDATION_TOOL_CALLED"},
+                    {"eventType":"PLAN_VALIDATION_FAILED","outputPayload":"{\\\"violations\\\":[{\\\"code\\\":\\\"SESSION_NOT_EXPOSED\\\"}]}"},
+                    {"eventType":"PLAN_VALIDATION_TOOL_CALLED"},
+                    {"eventType":"PLAN_VALIDATION_PASSED"},
+                    {"eventType":"PLANNING_REACT_COMPLETED"}
+                  ]
+                }
+                """);
+
+        Map<String, Double> metrics = extractor.aggregate(List.of(trace));
+
+        assertEquals(1.0, metrics.get("reactRouteCoverage"));
+        assertEquals(1.0, metrics.get("planningReactSuccessRate"));
+        assertEquals(1.0, metrics.get("planValidationFailureRate"));
+        assertEquals(1.0, metrics.get("planRepairSuccessRate"));
+        assertEquals(2.0, metrics.get("planValidationCallCount"));
+        assertEquals(1.0, metrics.get("travelToolCallCount"));
+        assertEquals(4.0, metrics.get("reactToolCallCount"));
+        assertEquals(1.0, metrics.get("planValidRate"));
+        assertEquals(0.0, metrics.get("evidenceViolationRate"));
+        assertEquals(1.0, metrics.get("sessionHallucinationRate"));
+    }
+
+    @Test
+    void shouldCountTerminalPlanningEvidenceFailureAfterInvalidProposal() {
+        RequestTraceRow trace = trace("""
+                {
+                  "events": [
+                    {"eventType":"PLANNING_REACT_ROUTE_SELECTED"},
+                    {"eventType":"PLAN_VALIDATION_TOOL_CALLED"},
+                    {"eventType":"PLAN_VALIDATION_FAILED","outputPayload":"{\\\"violations\\\":[{\\\"code\\\":\\\"SESSION_NOT_EXPOSED\\\"}]}"},
+                    {"eventType":"PLANNING_AGENT_FAILED","errorMessage":"IllegalStateException: PlanningAgent 最终方案补验失败: SESSION_NOT_EXPOSED"},
+                    {"eventType":"PLANNING_REACT_FAILED","errorMessage":"IllegalStateException: PlanningAgent 最终方案补验失败: SESSION_NOT_EXPOSED"},
+                    {"eventType":"PLANNING_DEGRADED","errorMessage":"IllegalStateException: PlanningAgent 最终方案补验失败: SESSION_NOT_EXPOSED"}
+                  ]
+                }
+                """);
+
+        Map<String, Double> metrics = extractor.aggregate(List.of(trace));
+
+        assertEquals(0.0, metrics.get("planningReactSuccessRate"));
+        assertEquals(1.0, metrics.get("reactDegradationRate"));
+        assertEquals(1.0, metrics.get("evidenceViolationRate"));
+        assertEquals(1.0, metrics.get("sessionHallucinationRate"));
+    }
+
+    @Test
+    void shouldMarkEvidenceViolationAndDegradation() {
+        RequestTraceRow trace = trace("""
+                {
+                  "events": [
+                    {"eventType":"RECOMMENDATION_REACT_ROUTE_SELECTED"},
+                    {"eventType":"RECOMMENDATION_AGENT_FAILED","errorMessage":"IllegalStateException: 推荐结果引用当前 Run 未登记 Activity Evidence: [999]"},
+                    {"eventType":"RECOMMENDATION_DEGRADED"}
+                  ]
+                }
+                """);
+
+        Map<String, Double> metrics = extractor.aggregate(List.of(trace));
+
+        assertEquals(1.0, metrics.get("reactRouteCoverage"));
+        assertEquals(0.0, metrics.get("recommendationReactSuccessRate"));
+        assertEquals(1.0, metrics.get("reactDegradationRate"));
+        assertEquals(1.0, metrics.get("evidenceViolationRate"));
+        assertEquals(1.0, metrics.get("candidateOutOfSetRate"));
+    }
+
+    @Test
+    void shouldNotTreatLegacyTraceAsZeroReactSuccess() {
+        RequestTraceRow trace = trace("""
+                {"events":[{"eventType":"ACTIVITY_RANKED"}]}
+                """);
+
+        Map<String, Double> metrics = extractor.aggregate(List.of(trace));
+
+        assertEquals(0.0, metrics.get("reactRouteCoverage"));
+        assertFalse(metrics.containsKey("recommendationReactSuccessRate"));
+        assertFalse(metrics.containsKey("planningReactSuccessRate"));
+        assertFalse(metrics.containsKey("reactDegradationRate"));
+    }
+
+    @Test
+    void shouldAverageRouteCoverageAcrossAllTraces() {
+        RequestTraceRow react = trace("""
+                {"events":[{"eventType":"RECOMMENDATION_REACT_ROUTE_SELECTED"}]}
+                """);
+        RequestTraceRow clarify = trace("""
+                {"events":[{"eventType":"CLARIFY_DECISION"}]}
+                """);
+
+        Map<String, Double> metrics = extractor.aggregate(List.of(react, clarify));
+
+        assertEquals(0.5, metrics.get("reactRouteCoverage"));
+    }
+
+    @Test
+    void shouldCalculateLatencyPercentilesAndToolErrorRate() {
+        RequestTraceRow first = trace("{\"events\":[{\"eventType\":\"RECOMMENDATION_REACT_ROUTE_SELECTED\"},{\"eventType\":\"RETRIEVAL_TOOL_CALLED\"},{\"eventType\":\"AGENT_TOOL_GUARD_BLOCKED\"}]}");
+        first.setDurationMs(100L);
+        RequestTraceRow second = trace("{\"events\":[{\"eventType\":\"RECOMMENDATION_REACT_ROUTE_SELECTED\"}]}");
+        second.setDurationMs(300L);
+
+        Map<String, Double> metrics = extractor.aggregate(List.of(first, second));
+
+        assertEquals(200.0, metrics.get("latencyP50Ms"));
+        assertEquals(290.0, metrics.get("latencyP95Ms"));
+        assertEquals(1.0, extractor.perTrace(first).get("toolErrorRate"));
+    }
+
+    private RequestTraceRow trace(String traceJson) {
+        RequestTraceRow row = new RequestTraceRow();
+        row.setTraceId("trace_test");
+        row.setTraceJson(traceJson);
+        return row;
+    }
+}

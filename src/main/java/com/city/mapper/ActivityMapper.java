@@ -23,6 +23,8 @@ public interface ActivityMapper {
 
     List<ActivityItemRow> findPublicActivities();
 
+    List<ActivityItemRow> findAllActiveActivities();
+
     int countPersonalActivities(Long userId);
 
     List<ActivityItemRow> search(

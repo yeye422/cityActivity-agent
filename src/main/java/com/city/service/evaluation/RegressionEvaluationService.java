@@ -14,8 +14,10 @@ import com.city.model.PromoteBaselineRequest;
 import com.city.model.PromoteEvaluationCaseRequest;
 import com.city.model.RegressionEvaluationReport;
 import com.city.model.RegressionEvaluationRequest;
+import com.city.model.RequestTraceRow;
 import com.city.model.SlotBundle;
 import com.city.model.TraceLabelRequest;
+import com.city.model.TraceEvaluationResult;
 import com.city.service.orchestrator.CityAgentSupervisor;
 import com.city.service.trace.AgentTraceService;
 import com.city.service.trace.BuildVersionService;
@@ -36,7 +38,8 @@ import java.util.UUID;
 /** 执行固定对话集并将最终轮 Trace 送入离线评估，形成可追溯的回归闭环。 */
 @Service
 public class RegressionEvaluationService {
-    private static final String EVAL_SET_RESOURCE = "evaluation/city-dialogue-eval-set.json";
+    private static final String DEFAULT_EVAL_SET_RESOURCE = "evaluation/city-dialogue-eval-set.json";
+    private static final String REACT_EVAL_SET_RESOURCE = "evaluation/city-react-eval-set.json";
 
     private final ObjectMapper objectMapper;
     private final CityAgentSupervisor supervisor;
@@ -58,7 +61,7 @@ public class RegressionEvaluationService {
                                        BuildVersionService buildVersionService,
                                        @Value("${city.prompt.version:v1}") String promptVersion,
                                        @Value("${city.rule.version:v1}") String ruleVersion,
-                                       @Value("${city.llm.main-model:qwen-max}") String modelVersion) {
+                                       @Value("${city.llm.main-model:qwen3.8-max}") String modelVersion) {
         this.objectMapper = objectMapper;
         this.supervisor = supervisor;
         this.traceService = traceService;
@@ -74,10 +77,11 @@ public class RegressionEvaluationService {
     public synchronized RegressionEvaluationReport run(Long ownerUserId, RegressionEvaluationRequest request) {
         boolean judge = request != null && Boolean.TRUE.equals(request.getIncludeLlmJudge());
         int limit = request == null || request.getLimit() == null ? 50 : Math.max(1, Math.min(100, request.getLimit()));
+        String evalSetResource = resolveEvalSetResource(request == null ? null : request.getSuite());
         List<String> traceIds = new ArrayList<>();
         String evalSetVersion = "v1";
         String evalSetHash;
-        try (InputStream input = new ClassPathResource(EVAL_SET_RESOURCE).getInputStream()) {
+        try (InputStream input = new ClassPathResource(evalSetResource).getInputStream()) {
             JsonNode root = objectMapper.readTree(input);
             evalSetVersion = root.path("version").asText("v1");
             JsonNode cases = root.path("cases");
@@ -117,15 +121,26 @@ public class RegressionEvaluationService {
         } catch (CityException error) {
             throw error;
         } catch (Exception error) {
-            throw new CityException("固定评测集执行失败", error);
+            throw new CityException("固定评测集执行失败: " + evalSetResource, error);
         }
 
         EvaluationReport report = evaluationService.evaluateTraceIds(ownerUserId, traceIds, judge);
+        report = enrichRuntimeMetrics(report, traceService.findByTraceIds(ownerUserId, traceIds));
+
+        ReactReleaseGate.Result absoluteReactGate = null;
+        if (isReactSuite(evalSetVersion)) {
+            absoluteReactGate = ReactReleaseGate.evaluate(report.metricAverages());
+            report = withReactReleaseGateMetrics(report, absoluteReactGate);
+        }
+
         String runId = "eval_" + UUID.randomUUID().toString().replace("-", "");
         String gitCommit = buildVersionService.gitCommit();
         EvaluationRunRow baseline = evaluationRunMapper.findBaseline(ownerUserId, evalSetVersion, evalSetHash);
         RegressionEvaluationReport result = compare(
                 report, runId, evalSetVersion, evalSetHash, gitCommit, baseline);
+        if (absoluteReactGate != null && !absoluteReactGate.passed() && result.passed()) {
+            result = withPassed(result, false);
+        }
 
         EvaluationRunRow current = new EvaluationRunRow();
         current.setRunId(runId);
@@ -190,8 +205,40 @@ public class RegressionEvaluationService {
         return evaluationRunMapper.findByRunId(userId, target.getRunId());
     }
 
+    static String resolveEvalSetResource(String suite) {
+        if (suite == null || suite.isBlank() || "default".equalsIgnoreCase(suite.trim())) {
+            return DEFAULT_EVAL_SET_RESOURCE;
+        }
+        if ("react".equalsIgnoreCase(suite.trim())) {
+            return REACT_EVAL_SET_RESOURCE;
+        }
+        throw new CityException("未知评测 suite，仅支持 default / react");
+    }
+
+    private boolean isReactSuite(String evalSetVersion) {
+        return evalSetVersion != null && evalSetVersion.toLowerCase().startsWith("react-");
+    }
+
+    private EvaluationReport withReactReleaseGateMetrics(EvaluationReport report,
+                                                         ReactReleaseGate.Result gate) {
+        Map<String, Double> metrics = new LinkedHashMap<>();
+        if (report.metricAverages() != null) metrics.putAll(report.metricAverages());
+        metrics.put("reactReleaseGatePass", gate.passed() ? 1.0 : 0.0);
+        metrics.put("reactReleaseGateFailureCount", (double) gate.failures().size());
+        return new EvaluationReport(
+                report.startAt(), report.endAt(), report.totalTraces(), report.labeledTraces(),
+                report.avgScore(), Map.copyOf(metrics), report.traceResults());
+    }
+
+    private RegressionEvaluationReport withPassed(RegressionEvaluationReport report, boolean passed) {
+        return new RegressionEvaluationReport(
+                report.runId(), report.evalSetVersion(), report.evalSetHash(), report.gitCommit(),
+                report.promptVersion(), report.ruleVersion(), report.modelVersion(), report.report(),
+                report.baselineRunId(), report.baselineScore(), report.scoreDelta(), report.metricDeltas(), passed);
+    }
+
     private String currentEvalSetVersion() {
-        try (InputStream input = new ClassPathResource(EVAL_SET_RESOURCE).getInputStream()) {
+        try (InputStream input = new ClassPathResource(DEFAULT_EVAL_SET_RESOURCE).getInputStream()) {
             JsonNode root = objectMapper.readTree(input);
             return root.path("version").asText("v1");
         } catch (Exception error) {
@@ -223,6 +270,62 @@ public class RegressionEvaluationService {
                 runId, version, evalSetHash, gitCommit, promptVersion, ruleVersion, modelVersion,
                 report, baseline.getRunId(), baseline.getAvgScore(),
                 gate.scoreDelta(), gate.metricDeltas(), gate.passed());
+    }
+
+    private EvaluationReport enrichRuntimeMetrics(EvaluationReport report,
+                                                  List<RequestTraceRow> traces) {
+        if (report == null) return null;
+
+        AgentRuntimeMetricsExtractor extractor = new AgentRuntimeMetricsExtractor(objectMapper);
+        Map<String, Double> merged = new LinkedHashMap<>();
+        if (report.metricAverages() != null) {
+            merged.putAll(report.metricAverages());
+        }
+        merged.putAll(extractor.aggregate(traces));
+
+        Map<String, Map<String, Double>> runtimeByTraceId = new LinkedHashMap<>();
+        if (traces != null) {
+            for (RequestTraceRow trace : traces) {
+                if (trace == null || trace.getTraceId() == null || trace.getTraceId().isBlank()) continue;
+                runtimeByTraceId.put(trace.getTraceId(), extractor.perTrace(trace));
+            }
+        }
+
+        List<TraceEvaluationResult> enrichedTraceResults = report.traceResults() == null
+                ? List.of()
+                : report.traceResults().stream()
+                        .map(result -> {
+                            Map<String, Double> metrics = new LinkedHashMap<>();
+                            if (result.metrics() != null) metrics.putAll(result.metrics());
+                            Map<String, Double> runtime = runtimeByTraceId.get(result.traceId());
+                            if (runtime != null) {
+                                runtime.forEach((name, value) -> {
+                                    if (value != null) metrics.put(name, value);
+                                });
+                            }
+                            return new TraceEvaluationResult(
+                                    result.traceId(),
+                                    result.sessionId(),
+                                    result.createdAt(),
+                                    result.score(),
+                                    result.ruleScore(),
+                                    result.llmJudgeScore(),
+                                    result.userFeedbackScore(),
+                                    metrics,
+                                    result.detail()
+                            );
+                        })
+                        .toList();
+
+        return new EvaluationReport(
+                report.startAt(),
+                report.endAt(),
+                report.totalTraces(),
+                report.labeledTraces(),
+                report.avgScore(),
+                Map.copyOf(merged),
+                enrichedTraceResults
+        );
     }
 
     private String normalizeBaselineName(String requestedName, EvaluationRunRow target) {

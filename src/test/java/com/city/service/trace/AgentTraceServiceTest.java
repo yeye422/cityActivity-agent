@@ -2,6 +2,7 @@ package com.city.service.trace;
 
 import com.city.mapper.AgentTraceMapper;
 import com.city.model.RequestTraceRow;
+import com.city.model.AgentUiEventType;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -13,6 +14,58 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentTraceServiceTest {
+
+    @Test
+    void shouldTreatRecoverablePlanValidationFailureAsStepInsteadOfRunError() {
+        assertEquals(
+                AgentUiEventType.STEP_COMPLETED,
+                AgentTraceService.toUiEventType("PLAN_VALIDATION_FAILED", null)
+        );
+        assertEquals(
+                AgentUiEventType.ERROR,
+                AgentTraceService.toUiEventType("PLANNING_AGENT_FAILED", null)
+        );
+        assertEquals(
+                AgentUiEventType.ERROR,
+                AgentTraceService.toUiEventType("PLAN_VALIDATION_FAILED", "solver crashed")
+        );
+    }
+
+    @Test
+    void shouldRecordExplicitTraceEventFromAgentScopeWorkerThread() throws Exception {
+        AgentTraceMapper mapper = mock(AgentTraceMapper.class);
+        BuildVersionService buildVersionService = mock(BuildVersionService.class);
+        when(buildVersionService.gitCommit()).thenReturn("abc1234");
+        ObjectMapper objectMapper = new ObjectMapper();
+
+        AgentTraceService service = new AgentTraceService(
+                mapper,
+                objectMapper,
+                buildVersionService,
+                "v2",
+                "v2"
+        );
+
+        try (AgentTraceService.TraceScope ignored = service.openTrace("trace_async", "sess_test", 1L)) {
+            Thread worker = new Thread(() -> service.recordEventForTrace(
+                    "trace_async",
+                    "PLAN_VALIDATION_TOOL_CALLED",
+                    "TOOL",
+                    java.util.Map.of("validationCall", 1),
+                    null
+            ));
+            worker.start();
+            worker.join();
+        }
+
+        ArgumentCaptor<RequestTraceRow> captor = ArgumentCaptor.forClass(RequestTraceRow.class);
+        verify(mapper).insert(captor.capture());
+        JsonNode trace = objectMapper.readTree(captor.getValue().getTraceJson());
+
+        assertEquals(1, trace.path("events").size());
+        assertEquals("PLAN_VALIDATION_TOOL_CALLED",
+                trace.path("events").get(0).path("eventType").asText());
+    }
 
     @Test
     void shouldPersistSemanticVersionsAndGitCommit() throws Exception {

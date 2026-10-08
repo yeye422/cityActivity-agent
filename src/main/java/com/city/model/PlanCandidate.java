@@ -1,11 +1,11 @@
 package com.city.model;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * 经过 Java PlanningSolver 校验后的可执行规划候选。
- * Response Agent 只能从此类候选中选择和解释，不能自行创建活动或场次。
+ * 对 PlanningAgent 提交的精确 activity/session/time 引用完成 Java 硬约束校验后形成的可执行计划。
  */
 public record PlanCandidate(
         List<Item> items,
@@ -21,13 +21,17 @@ public record PlanCandidate(
     }
 
     public record Item(
-            String period,
             ActivityItem activity,
-            ActivitySessionResponse session
+            ActivitySessionResponse session,
+            LocalDateTime startAt,
+            LocalDateTime endAt
     ) {
         public Item {
             if (activity == null || activity.id() == null) {
                 throw new IllegalArgumentException("PlanCandidate activity 不能为空");
+            }
+            if (startAt == null || endAt == null || !startAt.isBefore(endAt)) {
+                throw new IllegalArgumentException("PlanCandidate 时间范围无效");
             }
         }
     }

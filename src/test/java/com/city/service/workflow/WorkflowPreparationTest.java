@@ -9,11 +9,12 @@ import com.city.model.SessionState;
 import com.city.model.SlotBundle;
 import com.city.model.SlotMutation;
 import com.city.service.clarify.ClarifyRuleService;
-import com.city.service.plan.ActivityPlanService;
+import com.city.model.context.PlanningHorizon;
+import com.city.service.plan.PlanningHorizonResolver;
 import com.city.service.slot.SlotMutationService;
-import com.city.service.worker.PlanningWorker;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
 
@@ -64,41 +65,42 @@ class WorkflowPreparationTest {
     }
 
     @Test
-    void planningShouldResolveWindowsOnlyAfterClarificationPasses() {
+    void planningShouldResolveHorizonOnlyAfterClarificationPasses() {
         SlotMutationService mutationService = mock(SlotMutationService.class);
         ClarifyRuleService clarify = mock(ClarifyRuleService.class);
-        ActivityPlanService planService = mock(ActivityPlanService.class);
-        PlanningWorker planningWorker = new PlanningWorker(planService);
+        PlanningHorizonResolver horizonResolver = mock(PlanningHorizonResolver.class);
         SlotBundle slots = slots("西安", "展览");
         when(mutationService.apply(any(), any(), any(), any()))
                 .thenReturn(new SlotMutation(slots, SlotBundle.empty(), Set.of()));
         when(clarify.missingRequiredFields(eq(Intent.ACTIVITY_PLAN), any(), any()))
                 .thenReturn(List.of());
-        when(planService.resolveActivityTimes(any(), any())).thenReturn(List.of("14:00-16:00", "18:00-20:00"));
+        PlanningHorizon horizon = new PlanningHorizon(List.of(new PlanningHorizon.Range(
+                LocalDateTime.of(2026, 9, 27, 14, 0),
+                LocalDateTime.of(2026, 9, 27, 20, 0))));
+        when(horizonResolver.resolve(any())).thenReturn(horizon);
 
-        PlanningWorkflow.Preparation result = new PlanningWorkflow(mutationService, clarify, planningWorker)
+        PlanningWorkflow.Preparation result = new PlanningWorkflow(mutationService, clarify, horizonResolver)
                 .prepare(state(), new IntentResult(Intent.ACTIVITY_PLAN, 1.0));
 
         assertEquals(SessionPhase.PLAN, result.state().phase());
-        assertEquals(List.of("14:00-16:00", "18:00-20:00"), result.windows());
+        assertEquals(horizon, result.horizon());
     }
 
     @Test
-    void planningShouldNotResolveWindowsWhenClarificationIsRequired() {
+    void planningShouldNotResolveHorizonWhenClarificationIsRequired() {
         SlotMutationService mutationService = mock(SlotMutationService.class);
         ClarifyRuleService clarify = mock(ClarifyRuleService.class);
-        ActivityPlanService planService = mock(ActivityPlanService.class);
-        PlanningWorker planningWorker = new PlanningWorker(planService);
+        PlanningHorizonResolver horizonResolver = mock(PlanningHorizonResolver.class);
         when(mutationService.apply(any(), any(), any(), any())).thenReturn(SlotMutation.empty());
         when(clarify.missingRequiredFields(eq(Intent.ACTIVITY_PLAN), any(), any()))
                 .thenReturn(List.of(ClarifyField.CITY));
 
-        PlanningWorkflow.Preparation result = new PlanningWorkflow(mutationService, clarify, planningWorker)
+        PlanningWorkflow.Preparation result = new PlanningWorkflow(mutationService, clarify, horizonResolver)
                 .prepare(state(), new IntentResult(Intent.ACTIVITY_PLAN, 1.0));
 
         assertEquals(ClarifyField.CITY, result.missingField());
-        assertTrue(result.windows().isEmpty());
-        verify(planService, never()).resolveActivityTimes(any(), any());
+        assertTrue(result.horizon().isEmpty());
+        verify(horizonResolver, never()).resolve(any());
     }
 
     private SessionState state() {
